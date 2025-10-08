@@ -27,18 +27,47 @@
 
     \subsection{Existing Technologies}
 
-
+    There are several existing technologies which address parts of the problem but do not yet offer a comprehensive solution. These include:
+        \begin{itemize}
+            \item \textbf{Static and Web-Based Documentation Systems:}
+                Different Platforms like GitBook, ReadTheDocs and Markdown-based tools offer well-structured and accessible documentation but lack interactivity and visualization capabilities. Information is conveyed effectively through text and images
+                but remains static and fails to envision the dynamic nature of modern software systems.
+            \item \textbf{AI Assistants:}
+                In the last few years, the rise of AI-powered assistants like ChatGPT and Gemini have been transformative. These tools can understand and interpret technical text, summarize content and answer user queries. Yet, these
+                assistants operate in isolation from the documentation itself, requiring users to switch contexts and manually input queries, disconnecting them from visual elements and offering limited support for the understanding of
+                system architecture and interactions.
+            \item \textbf{Augmented Reality Applications:}
+                Industrial AR tools, such as PTC Vuforia, Microsoft Dynamics 365 Guides and Scope AR, have been used to overlay digital information onto real-world objects. These solutions enhance spatial understanding and are particularly useful in maintenance
+                and training contexts. However, they typically rely on specific and expensive hardware, such as the HoloLens, or complex 3D models, thus limiting their accessibility for general users.
+        \end{itemize}
 
     \subsection{Gaps in Current Solutions}
 
+        Despite the advancements in AR and AI technologies, the current solutions exhibit several limitations:
+        \begin{itemize}
+            \item \textbf{Lack of Integration between AR and AI:}
+                Visualization (AR) and comprehension (AI) are treated as separate domains. There is limited integration or implementation that combines the strengths of both to deliver a seamless user experience.
+            \item \textbf{Limited Visual Comprehension:}
+                Text and 2D diagrams are insufficient for conveying complex interactions and dynamic processes. Current documentation formats do not effectively utilize visual aids to enhance understanding.
+            \item \textbf{Hardware and Platform Barriers:}
+                Most AR implementations are dependent on specialized hardware, such as the HoloLens or AR glasses, which are costly or not widely available. This restricts the accessibility of AR-enhanced documentation to a broader audience.
+        \end{itemize}
+
     \subsection{Problem Definition}
+
+    Given the limitations of existing documentation systems and the potential of emerging technologies, there is a need for an innovative solution which can be easily accessible, interactive and capable of enhancing
+    the understanding of technical documentation. In order to address this need, the project aims to develop an AI-powered mobile application that uses AR technology to augment technical documentation. The proposed system must 
+    allow users to point their mobile devices at a technical diagram and view interactive AR overlays that explain components, relationships and interactions. At the same time, an integrated AI assistant, IBM Watson/Granite,
+    will be available to answer user queries and provide additional context.  
+
+        Therefore, this project aims to bridge the gap between visual comprehension and intelligent interaction in technical documentation, ultimately demonstrating how static documents can become interactive, explainable and user-friendly.
 
 
 \section{Project Overview}
 
     \subsection{Purpose}
     Many developers face challenges while reading and understanding technical documentation. This project aims to create an AI-powered mobile application which, supported by AR technology, will enhance the user experience
-    by providing interactive and immersive documentation. Powered by IBM Watson/Grantie, the app will offer several features to assist developers in navigating and comprehending complex technical documents, including text recognition,
+    by providing interactive and immersive documentation. Powered by IBM Watson/Granite, the app will offer several features to assist developers in navigating and comprehending complex technical documents, including text recognition,
     interactive AR overlays, chatbot assistance and more.
 
     \subsection{Objectives within the scope}
@@ -51,10 +80,10 @@
         \end{itemize}
         \item Integrate an AI assistant
         \begin{itemize}
-            \item Employ IBM Watson/Granite to interpret the scanned documentation text and answer user queries.
-            \item Support natural lanugage questions such as "What is the purpose of this diagram?" or "Explain this concept in simpler terms.".
+            	\item Employ IBM Watson/Granite to interpret the scanned documentation text and answer user queries.
+            	\item Support natural language questions such as "What is the purpose of this diagram?" or "Explain this concept in simpler terms.".
         \end{itemize}
-        \item Preserve accessability and compliance
+    \item Preserve accessibility and compliance
         \begin{itemize}
             \item Keep the core document unchanged and externalize enhancements through AR overlays to comply with accessibility and legal requirements.
         \end{itemize}
@@ -123,7 +152,9 @@ Provide a high-level overview of the system architecture. Include diagrams where
     \subsection{Methodology}
     Describe the development methodology (e.g., Agile, Waterfall) that will be followed during the project lifecycle.
 
-    The project will follow the Scrum Agile methodology.
+    Given the dynamic nature of the project and the need for iterative development, the Scrum framework within the Agile methodologies will be adopted. The approach will allow for flexibility, continuous feedback
+    and incremental delivery of features. Weekly stand-up meetings will be held to discuss progress and address any challenges. The work will be organized into sprints, each lasting approximately one to two weeks,
+    with clearly defined goals. At the end of each sprint, a review session will be held with the assessors to demonstrate progress and gather feedback.
 
     \subsection{Time Management and Milestones}
     Detail the project timeline with key milestones and deliverables.
