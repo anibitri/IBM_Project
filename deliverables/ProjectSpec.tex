@@ -5,6 +5,11 @@
 \usepackage{lipsum} % for placeholder text, remove if not needed
 \usepackage[a4paper, portrait, margin=1.5cm]{geometry}
 \usepackage{graphicx}
+\usepackage{fancyhdr}
+\usepackage{float}
+\usepackage{color}
+\definecolor{orange}{rgb}{1,0.5,0}
+
 
 \title{IBM AI AR techdoc}
 \author{Ani Bitri}
@@ -29,7 +34,7 @@
 
     There are several existing technologies which address parts of the problem but do not yet offer a comprehensive solution. These include:
         \begin{itemize}
-            \item \textbf{Static and Web-Based Documentation Systems:}
+            \item \textbf{Static and Web-Based Documentation:}
                 Different Platforms like GitBook, ReadTheDocs and Markdown-based tools offer well-structured and accessible documentation but lack interactivity and visualization capabilities. Information is conveyed effectively through text and images
                 but remains static and fails to envision the dynamic nature of modern software systems.
             \item \textbf{AI Assistants:}
@@ -135,10 +140,18 @@ R1C refers to the first customer requirement, while R2D refers to the second dev
 \section{System Architecture}
 Provide a high-level overview of the system architecture. Include diagrams where appropriate to illustrate the system components and their interactions.
 
-    \subsection{Component Diagram}
-    \begin{center}
-    % Insert component diagram here
-    \end{center}
+    \subsection{Design Pattern}
+
+    The design pattern which will be adopted for this project is the Model-View-ViewModel (MVVM) pattern. This pattern is well-suited for applications that require a clear separation
+    of concerns between the user interface and logic, making it easier to manage and test the application. Furthermore, the MVVM pattern facilitates a more modular and maintainable
+    codebase, which is essential for the iterative development process planned for this project. The image below illustrates the MVVM architecture which will be used in the project.
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=\textwidth]{Pattern.png}
+        \caption{MVVM Architecture Pattern}
+        \label{fig:Pattern}
+    \end{figure}
 
     \subsection{Frontend Design}
 
@@ -156,13 +169,67 @@ Provide a high-level overview of the system architecture. Include diagrams where
     with clearly defined goals. At the end of each sprint, a review session will be held with the assessors to demonstrate progress and gather feedback.
 
     \subsection{Time Management and Milestones}
-    Detail the project timeline with key milestones and deliverables.
+        The Gantt chart below outlines the planned work schedule, including key milestones and deadlines. Weekly meetings with the assessors will also be scheduled to ensure alignment and address any issues promptly.
+
+        \begin{figure}[H]
+        \centering
+        \includegraphics[width=\textwidth]{GanttChart.png}
+        \caption{Gantt Chart of Planned Work Schedule}
+        \label{fig:GanttChart}
+        \end{figure}
 
     \subsection{Resource Management}
     Outline the resources (e.g., personnel, equipment) required for the project and how they will be allocated.
 
     \subsection{Risk Management}
-    Identify potential risks and outline strategies for mitigating them.
+    The following risks have been identified for the project, along with their descriptions, risk levels, likelihoods and mitigation strategies.
+        \subsubsection{Technology Limitations}
+        \begin{itemize}
+            \item Risk description: There is unfamiliarity with some tools, libraries, or frameworks, which may cause delays or reduced performance. 
+            \item Risk Level: \textcolor{green}{Tolerable}
+            \item Risk Likelihood: \textcolor{orange}{Moderate}
+            \item Mitigation Strategy: Conduct thorough research and allocate time for learning and experimentation with new technologies.
+        \end{itemize}
+
+        \subsubsection{Rollback Challenges}
+        \begin{itemize}
+            \item Risk description: Lack of a version control system could prevent from rolling back to the software's last stable state in case of errors
+            \item Risk Level: \textcolor{red}{Catastrophic}
+            \item Risk Likelihood: \textcolor{green}{Low}
+            \item Mitigation Strategy: Utilise github to always maintain a stable version of the software and updating it when being sure that the changes will not affect its usability. 
+        \end{itemize}
+
+        \subsubsection{Testing Risks}
+        \begin{itemize}
+            \item Risk description: Insufficient testing may reduce confidence in the software
+            \item Risk Level: \textcolor{orange}{Serious}
+            \item Risk Likelihood: \textcolor{orange}{Moderate}
+            \item Mitigation Strategy: Unit tests will be designed to test the software to make sure that it is working properly and user testing will be conducted to gather feedback and identify any issues.
+        \end{itemize}
+
+        \subsubsection{Time Management}
+        \begin{itemize}
+            \item Risk description: Underestimating  task duration or improper prioritization might result in delayed work.
+            \item Risk Level: \textcolor{orange}{Serious}
+            \item Risk Likelihood: \textcolor{green}{Low}
+            \item Mitigation Strategy: Meetings with the assessors will be held weekly to ensure that the project is on track and any issues are addressed promptly.
+        \end{itemize}
+
+        \subsubsection{Requirement Misalignment}
+        \begin{itemize}
+            \item Risk description: During the development of the software, the end product might not be the same as the one described in the deliverables due to unforeseen circumstances.
+            \item Risk Level: \textcolor{red}{Catastrophic}
+            \item Risk Likelihood: \textcolor{green}{Low}
+            \item Mitigation Strategy: Regular meetings with the assessors will be held to ensure that the project is on track and any issues are addressed promptly.
+        \end{itemize}
+
+        \subsubsection{Underestimating Sprint Workload}
+        \begin{itemize}
+            \item Risk description: Tasks may take longer than expected due to AI and AR complexities, which may lead to incomplete sprints and delays.
+            \item Risk Level: \textcolor{orange}{Serious}
+            \item Risk Likelihood: \textcolor{orange}{Moderate}
+            \item Mitigation Strategy: Buffer time will be allocated in each sprint to accommodate unforeseen challenges, and tasks will be prioritized to ensure critical features are completed first.
+        \end{itemize}
 
 \section{Conclusion}
 Summarize the key points of the specification document and outline next steps.
