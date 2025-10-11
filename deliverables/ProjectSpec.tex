@@ -155,6 +155,31 @@ Provide a high-level overview of the system architecture. Include diagrams where
 
     \subsection{Frontend Design}
 
+    \subsubsection{User Interface and User Experience}
+
+        The application will feature a user-friendly interface that allows users to easily navigate through the app and access its features. The UI will be designed to be intuitive and responsive, ensuring a seamless user experience. When the user open the app, they will be presented with
+        a simple home screen with options to scan a document, upload a document or access the history of previously scanned documents. Besides the home screen, the app will also include a tab for the chatbot, where users can interact with the AI assistant, and a settings tab for configuring
+        app preferences. The image below illustrates the proposed UI design for the application:
+
+        % UI image here
+
+        Upon selecting the scan option, the user will be directed to the camera interface, where they can capture pictures of the technical documentation. Alternatively, the user can choose to upload the document from their device's storage and access the same features. After scanning or uploading
+        a document, the app will process the text, images and diagrams, and give the user the option to view the AR overlays or interact with the AI assistant. The AR overlays will provide interactive elements that explain components, relationships and interactions within the diagrams based on the user's
+        input and the information extracted from the document. The image below illustrates a flow chart of the app's user interface and navigation:
+
+        % Flowchart image here
+    \subsubsection{Error Handling and Feedback}
+
+        To ensure a smooth user experience, the application will include robust error handling mechanisms. Internal errors will be handled gracefully and automatically, with appropriate messages displayed to the user upon interruptions. For example, if the app fails to recognize a diagram or if the AI assistant
+        cannot process a query, the user will be informed of the issue and provided with suggestions for resolution. External errors will be handled by providing informative error messages to guide users in case of issues such as failed scans or uploads, network connectivity problems or AR tracking errors. Furthermore,
+        error prevention strategies will be implemented to minimize their occurrence and impact on the user experience. Such strategies include input validation, network status checks and AR tracking optimizations. This approach will ensure that users can effectively utilize the app's features without being hindered by technical issues.
+
+
+
+    \subsubsection{Integration with Backend and Data Flow}
+
+        
+
     \subsection{Backend Design}
 
     \subsection{Technology Stack}
@@ -179,7 +204,7 @@ Provide a high-level overview of the system architecture. Include diagrams where
         \end{figure}
 
     \subsection{Resource Management}
-    
+
     The project will be primarily developed by a single developer, with support and guidance from the assessors. The developer will be responsible for all aspects of the project, including design, implementation, testing and documentation.
     Access to the essential software tools and platforms, such as IBM Granite and IBM Cloud, will be provided by IBM. Other resources, such as hardware for testing, necessary software and other materials, will be handled by the developer. Except for the
     resources provided by IBM, the developer will be responsible for acquiring any additional resources needed for the successful completion of the project. In the case of any type of resource unavailability, such as laptop malfunction or equipment failure, the
