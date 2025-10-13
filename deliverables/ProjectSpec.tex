@@ -8,13 +8,16 @@
 \usepackage{fancyhdr}
 \usepackage{float}
 \usepackage{color}
+\usepackage{subcaption}
 \definecolor{orange}{rgb}{1,0.5,0}
 
 
 \title{IBM AI AR techdoc}
 \author{Ani Bitri}
 
+
 \begin{document}
+% \supervisor{Dr. Paris Giampouras, John McNamara}
 
 \maketitle
 
@@ -65,7 +68,7 @@
     allow users to point their mobile devices at a technical diagram and view interactive AR overlays that explain components, relationships and interactions. At the same time, an integrated AI assistant, IBM Watson/Granite,
     will be available to answer user queries and provide additional context.  
 
-        Therefore, this project aims to bridge the gap between visual comprehension and intelligent interaction in technical documentation, ultimately demonstrating how static documents can become interactive, explainable and user-friendly.
+    Therefore, this project aims to bridge the gap between visual comprehension and intelligent interaction in technical documentation, ultimately demonstrating how static documents can become interactive, explainable and user-friendly.
 
 
 \section{Project Overview}
@@ -148,7 +151,7 @@ Provide a high-level overview of the system architecture. Include diagrams where
 
     \begin{figure}[H]
         \centering
-        \includegraphics[width=\textwidth]{Pattern.png}
+        \includegraphics[width=\textwidth]{img/Pattern.png}
         \caption{MVVM Architecture Pattern}
         \label{fig:Pattern}
     \end{figure}
@@ -161,9 +164,30 @@ Provide a high-level overview of the system architecture. Include diagrams where
         a simple home screen with options to scan a document, upload a document or access the history of previously scanned documents. Besides the home screen, the app will also include a tab for the chatbot, where users can interact with the AI assistant, and a settings tab for configuring
         app preferences. The image below illustrates the proposed UI design for the application:
 
-        % UI image here
+        \begin{figure}
+            \centering
+            \begin{subfigure}{0.3\textwidth}
+                \includegraphics[width=\textwidth]{img/FrontendHomeTab.png}
+                \caption{Home Screen}
+                \label{fig:HomeScreen}
+            \end{subfigure}
+            \hfill
+            \begin{subfigure}{0.3\textwidth}
+                \includegraphics[width=\textwidth]{img/FrontendChatTab.png}
+                \caption{Chatbot Tab}
+                \label{fig:ChatbotTab}
+            \end{subfigure}
+            \hfill
+            \begin{subfigure}{0.3\textwidth}
+                \includegraphics[width=\textwidth]{img/FrontendSettingsTab.png}
+                \caption{Settings Tab}
+                \label{fig:SettingsTab}
+            \end{subfigure}
+            \caption{Proposed UI Design for the Application}
+            \label{fig:UIDesign}
+        \end{figure}
 
-        Upon selecting the scan option, the user will be directed to the camera interface, where they can capture pictures of the technical documentation. Alternatively, the user can choose to upload the document from their device's storage and access the same features. After scanning or uploading
+    Upon selecting the scan option, the user will be directed to the camera interface, where they can capture pictures of the technical documentation. Alternatively, the user can choose to upload the document from their device's storage and access the same features. After scanning or uploading
         a document, the app will process the text, images and diagrams, and give the user the option to view the AR overlays or interact with the AI assistant. The AR overlays will provide interactive elements that explain components, relationships and interactions within the diagrams based on the user's
         input and the information extracted from the document. The image below illustrates a flow chart of the app's user interface and navigation:
 
@@ -217,7 +241,7 @@ Provide a high-level overview of the system architecture. Include diagrams where
 
         \begin{figure}[H]
         \centering
-        \includegraphics[width=\textwidth]{GanttChart.png}
+        \includegraphics[width=\textwidth]{img/GanttChart.png}
         \caption{Gantt Chart of Planned Work Schedule}
         \label{fig:GanttChart}
         \end{figure}
