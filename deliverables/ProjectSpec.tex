@@ -178,12 +178,31 @@ Provide a high-level overview of the system architecture. Include diagrams where
 
     \subsubsection{Integration with Backend and Data Flow}
 
+        The frontend of the application will communicate with the backend services to process the scanned or uploaded documents and retrieve relevant information. The data flows as follows:
+        \begin{enumerate}
+            \item The user scans or uploads a document using the app's interface.
+            \item The frontend validates the input and sends the document data to the backend for processing.
+            \item The validated data is sent to the backend services for text recognition, diagram analysis and AI processing.
+            \item The backend processes the data and generates AR overlays and AI responses based on the document content.
+            \item The generated AR overlays and AI responses are sent back to the frontend for display to the user.
+            \item The user interacts with the AR overlays and AI assistant, and any further queries or actions are sent back to the backend for processing.
+        \end{enumerate}
         
-
     \subsection{Backend Design}
 
+        \subsubsection{}
+
+        \subsubsection{}
+
+        \subsubsection{}
+
     \subsection{Technology Stack}
-    List the technologies, programming languages, frameworks, and tools that will be used in the project.
+        The project will utilize the following technologies:
+        \begin{itemize}
+            \item \textbf{Frontend:} React Native for cross-platform mobile development, ARCore/ARKit/ViroReact for augmented reality functionalities.
+            \item \textbf{Backend:} Node.js with Express for server-side logic, IBM Granite 4.0 for AI capabilities, IBM Granite Vision for image recognition, and MongoDB for data storage.
+            \item \textbf{Development Tools:} Visual Studio Code for code editing, Git for version control, REST APIs for communication between frontend and backend.
+        \end{itemize}
 
 \section{Development Plan and Project Philosophy}
 
