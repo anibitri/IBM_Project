@@ -9,6 +9,7 @@
 \usepackage{float}
 \usepackage{color}
 \usepackage{subcaption}
+\usepackage{parskip}
 \definecolor{orange}{rgb}{1,0.5,0}
 
 
@@ -18,7 +19,20 @@
 
 \begin{document}
 % \supervisor{Dr. Paris Giampouras, John McNamara}
-
+\begin{figure}
+    \centering
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[height=4cm]{img/WarwickCrest.png}
+        \label{fig:WarwickCrest}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.45\textwidth}
+        \centering
+        \includegraphics[height=4cm]{img/IBM_Logo.png}
+        \label{fig:IBM_Logo}
+    \end{subfigure}
+\end{figure}
 \maketitle
 
 \tableofcontents
@@ -66,15 +80,13 @@
     Given the limitations of existing documentation systems and the potential of emerging technologies, there is a need for an innovative solution which can be easily accessible, interactive and capable of enhancing
     the understanding of technical documentation. In order to address this need, the project aims to develop an AI-powered mobile application that uses AR technology to augment technical documentation. The proposed system must 
     allow users to point their mobile devices at a technical diagram and view interactive AR overlays that explain components, relationships and interactions. At the same time, an integrated AI assistant, IBM Watson/Granite,
-    will be available to answer user queries and provide additional context.  
-
-    Therefore, this project aims to bridge the gap between visual comprehension and intelligent interaction in technical documentation, ultimately demonstrating how static documents can become interactive, explainable and user-friendly.
+    will be available to answer user queries and provide additional context. Therefore, this project aims to bridge the gap between visual comprehension and intelligent interaction in technical documentation, ultimately demonstrating how static documents can become interactive, explainable and user-friendly.
 
 
 \section{Project Overview}
 
     \subsection{Purpose}
-    Many developers face challenges while reading and understanding technical documentation. This project aims to create an AI-powered mobile application which, supported by AR technology, will enhance the user experience
+    This project aims to create an AI-powered mobile application which, supported by AR technology, will enhance the user experience
     by providing interactive and immersive documentation. Powered by IBM Watson/Granite, the app will offer several features to assist developers in navigating and comprehending complex technical documents, including text recognition,
     interactive AR overlays, chatbot assistance and more.
 
@@ -130,15 +142,18 @@
 
 \section{Development Plan and Project Philosophy}
 
-    \subsection{Methodology}
+    \subsection{Methods and Methodologies}
 
     Given the dynamic nature of the project and the need for iterative development, the Scrum framework within the Agile methodologies will be adopted. The approach will allow for flexibility, continuous feedback
     and incremental delivery of features. Weekly stand-up meetings will be held to discuss progress and address any challenges. The work will be organized into sprints, each lasting approximately one to two weeks,
     with clearly defined goals. At the end of each sprint, a review session will be held with the assessors to demonstrate progress and gather feedback.
+    
+    Version control will be managed using Git and GitHub, ensuring all changes are tracked and documented. Regular commits will be made to maintain a history of the development process. This
+    approach supports the Scrum framework by ensuring transparency, traceability and code integrity throughout the project lifecycle.
 
+    Requirements will be gathered and refined through continuous engagement with the assessors, ensuring the project remains aligned with the initial objectives. Any changes to the requirements will be documented and communicated promptly. 
     \subsection{Time Management and Milestones}
-        The Gantt chart below outlines the planned work schedule, including key milestones and deadlines. Weekly meetings with the assessors will also be scheduled to ensure alignment and address any issues promptly.
-
+        The Gantt chart below outlines the planned work schedule, including key milestones and deadlines. Weekly meetings with the assessors will also be scheduled to ensure alignment and address any issues promptly. 
         \begin{figure}[H]
         \centering
         \includegraphics[width=\textwidth]{img/GanttChart.png}
@@ -148,62 +163,80 @@
 
     \subsection{Resource Management}
 
-    The project will be primarily developed by a single developer, with support and guidance from the assessors. The developer will be responsible for all aspects of the project, including design, implementation, testing and documentation.
-    Access to the essential software tools and platforms, such as IBM Granite and IBM Cloud, will be provided by IBM. Other resources, such as hardware for testing, necessary software and other materials, will be handled by the developer. Except for the
-    resources provided by IBM, the developer will be responsible for acquiring any additional resources needed for the successful completion of the project. In the case of any type of resource unavailability, such as laptop malfunction or equipment failure, the
+    The project is primarily developed by a single developer, with support and guidance from the assessors. The developer is responsible for all aspects of the project, including design, implementation, testing and documentation.
+    Access to the essential software tools and platforms, such as IBM Granite and IBM Cloud, are provided by IBM. Other resources, such as hardware for testing, necessary software and other materials, are handled by the developer. Except for the
+    resources provided by IBM, the developer is responsible for acquiring any additional resources needed for the successful completion of the project. In the case of any type of resource unavailability, such as laptop malfunction or equipment failure, the
     developer will rely on the university's resources provided to students.
 
 
     \subsection{Risk Management}
     The following risks have been identified for the project, along with their descriptions, risk levels, likelihoods and mitigation strategies.
-        \subsubsection{Technology Limitations}
+        \begin{enumerate}
+             
+       
+        \item{Technology Limitations}
         \begin{itemize}
             \item Risk description: There is unfamiliarity with some tools, libraries, or frameworks, which may cause delays or reduced performance. 
-            \item Risk Level: \textcolor{green}{Tolerable}
-            \item Risk Likelihood: \textcolor{orange}{Moderate}
+            \item Risk Level: Tolerable
+            \item Risk Likelihood: Moderate
             \item Mitigation Strategy: Conduct thorough research and allocate time for learning and experimentation with new technologies.
         \end{itemize}
 
-        \subsubsection{Rollback Challenges}
+        \item{Rollback Challenges}
         \begin{itemize}
             \item Risk description: Lack of a version control system could prevent from rolling back to the software's last stable state in case of errors
-            \item Risk Level: \textcolor{red}{Catastrophic}
-            \item Risk Likelihood: \textcolor{green}{Low}
-            \item Mitigation Strategy: Utilise github to always maintain a stable version of the software and updating it when being sure that the changes will not affect its usability. 
+            \item Risk Level: Catastrophic
+            \item Risk Likelihood: Low
+            \item Mitigation Strategy: Utilise GitHub to always maintain a stable version of the software and updating it when being sure that the changes will not affect its usability. 
         \end{itemize}
 
-        \subsubsection{Testing Risks}
+        \item{Testing Risks}
         \begin{itemize}
             \item Risk description: Insufficient testing may reduce confidence in the software
-            \item Risk Level: \textcolor{orange}{Serious}
-            \item Risk Likelihood: \textcolor{orange}{Moderate}
+            \item Risk Level: Serious
+            \item Risk Likelihood: Moderate
             \item Mitigation Strategy: Unit tests will be designed to test the software to make sure that it is working properly and user testing will be conducted to gather feedback and identify any issues.
         \end{itemize}
 
-        \subsubsection{Time Management}
+        \item{Time Management}
         \begin{itemize}
             \item Risk description: Underestimating  task duration or improper prioritization might result in delayed work.
-            \item Risk Level: \textcolor{orange}{Serious}
-            \item Risk Likelihood: \textcolor{green}{Low}
+            \item Risk Level: Serious
+            \item Risk Likelihood: Low
             \item Mitigation Strategy: Meetings with the assessors will be held weekly to ensure that the project is on track and any issues are addressed promptly.
         \end{itemize}
 
-        \subsubsection{Requirement Misalignment}
+        \item{Requirement Misalignment}
         \begin{itemize}
             \item Risk description: During the development of the software, the end product might not be the same as the one described in the deliverables due to unforeseen circumstances.
-            \item Risk Level: \textcolor{red}{Catastrophic}
-            \item Risk Likelihood: \textcolor{green}{Low}
+            \item Risk Level: Catastrophic
+            \item Risk Likelihood: Low
             \item Mitigation Strategy: Regular meetings with the assessors will be held to ensure that the project is on track and any issues are addressed promptly.
         \end{itemize}
 
-        \subsubsection{Underestimating Sprint Workload}
+        \item{Underestimating Sprint Workload}
         \begin{itemize}
             \item Risk description: Tasks may take longer than expected due to AI and AR complexities, which may lead to incomplete sprints and delays.
-            \item Risk Level: \textcolor{orange}{Serious}
-            \item Risk Likelihood: \textcolor{orange}{Moderate}
+            \item Risk Level: Serious
+            \item Risk Likelihood: Moderate
             \item Mitigation Strategy: Buffer time will be allocated in each sprint to accommodate unforeseen challenges, and tasks will be prioritized to ensure critical features are completed first.
         \end{itemize}
 
+        \end{enumerate}
+        
+
+\section{Legal, Social, Ethical and Professional Issues and Considerations}
+
+    \subsection{Legal Issues}
+        The project will comply with all relevant legal requirements, including data protection laws (e.g. UK GDPR), intellectual property rights and software licensing agreements. The application
+        will not store any personal data without user consent, and all third-party libraries and tools used will be properly licensed and attributed. The developer will ensure that the application does not infringe on any patents or copyrights.
+
+    \subsection{Social and Ethical Issues}
+        As of now, there are no identified social or ethical issues related to the project. However, the developer will remain vigilant and address any concerns that may arise during the development process.
+
+    \subsection{Professional Issues}
+        The project will adhere to professional standards and best practices in software development, including code quality, documentation and testing. The developer will also ensure that the application is accessible to users with disabilities, following guidelines such as the Web Content Accessibility Guidelines (WCAG).
+        
 \section{Conclusion}
 Summarize the key points of the specification document and outline next steps.
 
