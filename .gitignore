@@ -1,8 +1,13 @@
-*.gz
 *.aux
 *.log
 *.out
 *.toc
+*.fls
+*.fdb_latexmk
+*.synctex.gz
 
 DS_Store
 .vscode/
+
+.env
+
