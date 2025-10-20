@@ -65,18 +65,42 @@
 \newpage
 
 \section{Requirements}
-Each requirement will be described in the format R{n}C/D, where n is the requirement number and C or D indicates whether the requirement is customer (C) or developer (D) oriented. For example,
-R1C refers to the first customer requirement, while R2D refers to the second developer requirement. Each requirement will be detailed with its description, priority, verification method and traceability.
-
     \subsection{Functional Requirements}
-    List the key functionalities the software system must support. Provide clear and concise descriptions of features and interactions.
-
+=
     \begin{enumerate}
-        \item \textbf{Augmented Reality System}
+        \item \textbf{Augmented Reality System:}
+            \begin{itemize}
+                \item FR-1: The system shall allow users to open the camera interface within the mobile application to scan technical documents.
+                \item FR-2: The system shall allow the user to upload technical documents from their device storage.
+                \item FR-3: The system shall recognize diagrams, images, flowcharts, and schematics within the scanned or uploaded documents using image recognition techniques.    
+                \item FR-4: The backend shall extract diagram elements and textual information from the recognized diagrams using IBM Granite Vision.
+                \item FR-5: The system shall generate interactive AR overlays that provide explanations of components, relationships, and interactions within the diagrams.
+                \item FR-6: The system shall allow users to interact with the AR overlays to explore additional information about the diagram components and their relationships.
+                \item FR-7: The system shall provide visual cues to confirm successful recognition and overlay placement.
+            \end{itemize}
+        \item \textbf{AI Assistant:}
+            \begin{itemize}
+                \item FR-8: The system shall allow users to input natural language queries related to the scanned or uploaded technical documents.
+                \item FR-9: The backend shall use the Granite AI model to process user queries and generate relevant responses based on the document content.
+                \item FR-10: The AI shall combine diagram data from Granite Vision with textual information from the documents to provide comprehensive answers.
+                \item FR-11: The system shall display the AI-generated responses within the mobile application
+                \item FR-12: The AI assistant shall retain context from previous interactions to provide coherent and relevant responses.
+            \end{itemize}
+        \item \textbf{Data Management and Communication:}
+            \begin{itemize}
+                \item FR-13: The app shall communicate with the backend over HTTPS with token-based authentication to ensure secure data transmission.
+                \item FR-14: The backend shall handle user requests, forward images to IBM Granite Vision, combine results with IBM Granite AI, and return structured JSON responses to the mobile app.
+                \item FR-15: The system shall implement caching mechanisms to store previously processed diagrams and AI responses for improved performance.
+                \item FR-16: The system shall log user interactions and queries for analytics and improvement purposes.
+                \item FR-17: The system shall provide error handling mechanisms to manage failures in image recognition, AI processing, or network connectivity, and inform users appropriately.
+            \end{itemize}
+        \item \textbf{User Interface and Experience:}
+            \begin{itemize}
+                \item FR-18: The mobile application shall present a home screen with navigation options to access camera view, document upload, AI assistant, and settings.
+                \item FR-19: The system shall provide an interactive chat interface for AI Q&A, showing both user queries and AI responses in a conversational format.
+                \item FR-20: Users shall be able to switch between text input, speech input and AR interaction modes seamlessly.
+            \end{itemize}
     \end{enumerate}
-
-    \subsection{Non-Functional Requirements}
-    Outline performance, usability, reliability, and other quality attributes expected from the system.
 
 \section{System Architecture}
 Provide a high-level overview of the system architecture. Include diagrams where appropriate to illustrate the system components and their interactions.
