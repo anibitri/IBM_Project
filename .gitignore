@@ -1,0 +1,8 @@
+*.gz
+*.aux
+*.log
+*.out
+*.toc
+
+DS_Store
+.vscode/
