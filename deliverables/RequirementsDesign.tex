@@ -1,4 +1,4 @@
-\documentclass[12pt]{article}
+\documentclass[10pt]{article}
 \usepackage[utf8]{inputenc}
 \usepackage[T1]{fontenc}
 \usepackage{hyperref}
@@ -9,17 +9,59 @@
 \usepackage{float}
 \usepackage{color}
 \usepackage{subcaption}
+\usepackage{parskip}
+\usepackage{setspace}
+\usepackage{amsmath}
+\definecolor{orange}{rgb}{1,0.5,0}
 
+\title{\textbf{A mobile application for augmenting technical documentation using AR and AI}}
+\author{\large Ani Bitri\\ Dr. Paris Giampouras, John McNamara\\ University of Warwick and IBM}
 
-\title{IBM AI AR techdoc}
-\author{Ani Bitri}
 
 
 \begin{document}
-% \supervisor{Dr. Paris Giampouras, John McNamara}
 
-\maketitle
-\tableofcontents
+\thispagestyle{empty}
+
+\begin{spacing}{2}
+	\begin{center}
+        \begin{figure}
+            \begin{subfigure}[b]{0.45\textwidth}
+                \centering
+                \includegraphics[height=4cm]{img/WarwickCrest.png}
+                \label{fig:WarwickCrest}
+            \end{subfigure}
+            \hfill
+            \begin{subfigure}[b]{0.45\textwidth}
+                \centering
+                \includegraphics[height=4cm]{img/IBM_Logo.png}
+                \label{fig:IBM_Logo}
+            \end{subfigure}
+        \end{figure}
+	\end{center}
+	\vspace{5mm}
+	\begin{center}
+		\textbf{\begin{LARGE}
+		A mobile application for augmenting technical documentation using AR and AI
+		\end{LARGE}}
+		\vspace{5mm}
+	\end{center}
+	\begin{center}
+		{\large CS310: Third Year Project}\\
+		\vspace{10mm}
+	\end{center}
+	\begin{center}
+		\textbf{\large Ani Bitri}
+		\vspace{10mm}
+	\end{center}
+	\begin{center}
+	     {\large Supervisors: Dr. Paris Giampouras, John McNamara}\\
+		\textbf{\large Department of Computer Science}\\
+		{\large University of Warwick and IBM}\\
+		{\large October 2025\\}
+	\end{center}
+\end{spacing}
+
 \newpage
 
 \section{Requirements}
@@ -110,12 +152,42 @@ Provide a high-level overview of the system architecture. Include diagrams where
         
     \subsection{Backend Design}
 
-        \subsubsection{}
+        \subsubsection{Overview}
 
-        \subsubsection{}
+            The backend of the application will act as the intelligence and coordination layer that connects the React Native frontend to IBM's AI services. Its primary function is to process
+            the scanned or uploaded documents and other user inputs, understand their content, and generate appropriate AR overlays and AI responses. The backend ensures that heavy computational
+            tasks are offloaded from the mobile device, providing a seamless user experience.
 
-        \subsubsection{}
+        \subsubsection{Workflow}
 
+        The backend workflow consists of several key steps:
+        \begin{enumerate}
+            \item \textbf{Request Reception:} The backend receives the scanned images or uploaded from the frontend via RESTful API calls.
+            \item \textbf{Image and Data Processing:}
+                \begin{itemize}
+                    \item If an image is recieved, it is processed using IBM Granite Vision to extract text and identify diagrams, returning structured data.
+                    \item If text data is recieved, it is analyzed to identify key components, relationships and interactions.
+                \end{itemize}
+            \item \textbf{AI Reasoning and Response Generation:} The backend composes of a prompt that combines:
+                \begin{itemize}
+                    \item Extracted diagram information from IBM Granite Vision.
+                    \item Relevant documentation snippets.
+                    \item The user's query or interaction context.
+                \end{itemize}
+
+                The composite prompt is sent to IBM Granite, which then generates a natural language response.
+            \item \textbf{Response Delivery:} The backend merges the AI-generated response with structured metadata and send a single JSON payload back to the mobile app. The fronted then
+            displays the AR overlays and AI responses to the user.
+        \end{enumerate}
+
+        \subsubsection{Data Management and Caching}
+            To improve efficiency, the backend implements:
+            \begin{itemize}
+                \item \textbf{Caching:} Previously processed diagrams are stored to reduce redundant processing using Redis or local storage.
+                \item \textbf{Error Handling:} AI or network failures return structured JSON error messages to the frontend for user notification.
+                \item \textbf{User session logs:} Stored in a database for analytics and improvement (PostgreSQL or Firebase).
+            \end{itemize}
+            
     \subsection{Technology Stack}
         The project will utilize the following technologies:
         \begin{itemize}
@@ -124,8 +196,7 @@ Provide a high-level overview of the system architecture. Include diagrams where
             \item \textbf{Development Tools:} Visual Studio Code for code editing, Git for version control, REST APIs for communication between frontend and backend.
         \end{itemize}
 
-\section{Conclusion}
-Summarize the key points of the requirements and design document. Highlight the importance of adhering to
+
 
 
 \end{document}
