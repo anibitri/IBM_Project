@@ -1,0 +1,8 @@
+{
+  "android": {
+    "package": "com.anonymous.aiartechnicaldocs"
+  },
+  "ios": {
+    "bundleIdentifier": "com.anonymous.aiartechnicaldocs"
+  }
+}
