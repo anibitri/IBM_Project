@@ -1,0 +1,8 @@
+flask
+flask-cors
+werkzeug
+transformers>=4.49
+torch
+opencv-python
+pillow
+vllm=0.6.6
