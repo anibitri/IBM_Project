@@ -11,6 +11,8 @@ import UploadScreen from './src/screens/UploadScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 
+import { HistoryProvider } from './src/context/HistoryContext';
+
 import Ionicons from 'react-native-vector-icons/Ionicons';
 
 const Stack = createStackNavigator();
@@ -45,10 +47,11 @@ function TabNavigator() {
 
 export default function App() {
   return (
+    <HistoryProvider>
     <NavigationContainer>
       <Stack.Navigator>
         <Stack.Screen
-          name="Root"
+          name="Home"
           component={TabNavigator}
           options={{ headerShown: false }}
         />
@@ -56,5 +59,6 @@ export default function App() {
         <Stack.Screen name="Upload" component={UploadScreen} />
       </Stack.Navigator>
     </NavigationContainer>
+    </HistoryProvider>
   );
 }

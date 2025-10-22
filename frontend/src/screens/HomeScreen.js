@@ -1,11 +1,20 @@
 // frontend/HomeScreen.js
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'react-native';
+import { useHistory } from '../context/HistoryContext';
 
 export default function HomeScreen({ navigation }) {
-  // Placeholder handler for Upload button
-  
 
+  const { history } = useHistory();
+
+  // Normalize history to a safe array
+  const safeListData = Array.isArray(history) ? history.filter(Boolean) : [];
+
+  // Placeholder handler for history item clicks
+  const handleHistoryPress = (item) => {
+    // TODO: Replace with navigation or other action later
+    Alert.alert('History item clicked', `${item.name} (${item.id})`);
+  };
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
@@ -13,7 +22,7 @@ export default function HomeScreen({ navigation }) {
       <Text style={styles.subtitle}>Augment and analyze technical documentation with AI</Text>
 
       <View style={styles.buttonContainer}>
-        <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('Upload')}>
+        <TouchableOpacity style={[styles.button, { marginRight: 20 }]} onPress={() => navigation.navigate('Upload')}>
           <Text style={styles.buttonText}>Upload</Text>
         </TouchableOpacity>
 
@@ -23,11 +32,26 @@ export default function HomeScreen({ navigation }) {
       </View>
 
       <View style={styles.historySection}>
-        <Text style={styles.sectionTitle}>History</Text>
-        {/* History items will go here later */}
-        <View style={styles.emptyHistory}>
-          <Text style={styles.emptyText}>No recent uploads or scans yet.</Text>
-        </View>
+        <Text style={styles.sectionTitle}>Recent analyses</Text>
+        {safeListData.length === 0 ? (
+          <View className="emptyHistory" style={styles.emptyHistory}>
+            <Text style={styles.emptyText}>No analyses yet.</Text>
+          </View>
+        ) : (
+          <View>
+            {safeListData.map((item, index) => (
+              <View key={item.id ?? index}>
+                <TouchableOpacity onPress={() => handleHistoryPress(item)}>
+                  <Text style={{ fontWeight: '600' }}>{item.name}</Text>
+                  <Text style={{ color: '#6c757d', fontSize: 12 }}>
+                    {new Date(item.createdAt).toLocaleString()}
+                  </Text>
+                </TouchableOpacity>
+                {index < safeListData.length - 1 && <View style={{ height: 12 }} />}
+              </View>
+            ))}
+          </View>
+        )}
       </View>
     </ScrollView>
   );
@@ -56,7 +80,6 @@ const styles = StyleSheet.create({
   buttonContainer: {
     flexDirection: 'row',
     marginVertical: 40,
-    gap: 20,
   },
   button: {
     backgroundColor: '#007AFF',
