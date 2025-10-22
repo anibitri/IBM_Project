@@ -4,9 +4,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert } from 'rea
 
 export default function HomeScreen({ navigation }) {
   // Placeholder handler for Upload button
-  const handleUploadPlaceholder = () => {
-    Alert.alert('Coming Soon', 'Upload functionality will be added later.');
-  };
+  
 
 
   return (
@@ -15,7 +13,7 @@ export default function HomeScreen({ navigation }) {
       <Text style={styles.subtitle}>Augment and analyze technical documentation with AI</Text>
 
       <View style={styles.buttonContainer}>
-        <TouchableOpacity style={styles.button} onPress={handleUploadPlaceholder}>
+        <TouchableOpacity style={styles.button} onPress={() => navigation.navigate('Upload')}>
           <Text style={styles.buttonText}>Upload</Text>
         </TouchableOpacity>
 
