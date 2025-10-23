@@ -85,14 +85,15 @@ const styles = StyleSheet.create({
   // New styles
   menuWrapper: {
     position: 'absolute',
-    top: 16,
-    right: 16,
+    top: 55,
+    left: 15,
   },
   historyButton: {
     backgroundColor: '#007AFF',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
     borderRadius: 8,
+
   },
   historyButtonText: {
     color: '#fff',
