@@ -35,8 +35,8 @@ export default function UploadScreen({ navigation }) {
   };
 
   const handleFileUpload = async() => {
-    //const hasPermission = await requestStoragePermission();
-    //if (!hasPermission) return;
+    const hasPermission = await requestStoragePermission();
+    if (!hasPermission) return;
 
     try {
       const res = await DocumentPicker.pick({
