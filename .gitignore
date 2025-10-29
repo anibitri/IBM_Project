@@ -6,7 +6,8 @@
 *.fdb_latexmk
 *.synctex.gz
 
-DS_Store
+.DS_Store
+frontend/.DS_Store
 .vscode/
 
 .env
@@ -17,3 +18,13 @@ node_modules/
 
 ios/
 android/
+
+static/uploads/**
+backend/__pycache__/
+backend/*.pyc
+backend/app/__pycache__/
+backend/app/services/__pycache__/
+backend/app/services/*.pyc
+backend/routes/__pycache__/
+backend/routes/*.pyc
+.DS_Store

@@ -3,6 +3,10 @@ flask-cors
 werkzeug
 transformers>=4.49
 torch
+torchvision
 opencv-python
 pillow
-vllm
+pdf2image
+huggingface-hub
+PyPDF2
+poppler-utils

@@ -1,15 +1,41 @@
 from flask import Blueprint, request, jsonify
-from services.granite_vision_service import analyze_scene
 
 ar_bp = Blueprint('ar', __name__)
 
-@ar_bp.route('/analyze', methods=['POST'])
-def analyze():
-    data = request.get_json()
-    if not data or 'scene_data' not in data:
-        return jsonify({'error': 'No scene data provided'}), 400
 
-    scene_data = data['scene_data']
-    analysis_result = analyze_scene(scene_data)
+@ar_bp.route('/elements', methods=['POST'])
+def build_ar_elements():
+    """
+    Create AR elements from a provided analysis payload.
 
-    return jsonify({'analysis': analysis_result}), 200
+    Expected JSON body:
+    - analysis: string (Granite Vision textual analysis)
+
+    Returns a simple AR element graph that the frontend can render.
+    """
+    data = request.get_json(silent=True) or {}
+    analysis_text = data.get('analysis')
+
+    if not analysis_text or not isinstance(analysis_text, str):
+        return jsonify({'status': 'error', 'error': 'Missing or invalid analysis text'}), 400
+
+    # Minimal AR element construction; can be expanded with NLP/entity parsing later
+    nodes = [
+        {
+            'id': 'summary',
+            'type': 'text',
+            'label': 'Document Summary',
+            'content': analysis_text[:500]
+        }
+    ]
+    anchors = []
+    connections = []
+
+    return jsonify({
+        'status': 'ok',
+        'ar_elements': {
+            'nodes': nodes,
+            'anchors': anchors,
+            'connections': connections
+        }
+    }), 200
