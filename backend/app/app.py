@@ -3,12 +3,30 @@ from flask_cors import CORS
 from routes.upload_route import upload_bp
 from routes.ar_routes import ar_bp
 from routes.vision_routes import vision_bp
+from routes.ai_routes import ai_bp  # added
 import os
 import logging
 from werkzeug.exceptions import HTTPException
+from transformers import pipeline
 
 app = Flask(__name__)
 CORS(app)
+
+# Remove eager loading at import time; load on server start instead.
+analyzer = None
+analyzer2 = None
+
+def load_models():
+    """Load AI and Vision models once at server start."""
+    global analyzer, analyzer2
+    app.logger.info('Loading AI and Vision models...')
+    ai_model_id = os.getenv('AI_MODEL_ID', 'ibm-granite/granite-4.0-micro')
+    vision_model_id = os.getenv('VISION_MODEL_ID', 'ibm-granite/granite-vision-3.3-2b')
+    # Adjust tasks as needed for your models
+    analyzer = pipeline('text-generation', model=ai_model_id)
+    app.logger.info(f'Loaded AI model: {ai_model_id}')
+    analyzer2 = pipeline('image-to-text', model=vision_model_id)
+    app.logger.info(f'Loaded Vision model: {vision_model_id}')
 
 def configure_logging(app: Flask):
     # Set root logging level
@@ -53,8 +71,11 @@ def handle_exception(e):
 app.register_blueprint(upload_bp, url_prefix='/api/upload')
 app.register_blueprint(ar_bp, url_prefix='/api/ar')
 app.register_blueprint(vision_bp, url_prefix='/api/vision')
+app.register_blueprint(ai_bp, url_prefix='/api/ai')  # added
 
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '4200'))
     app.logger.info(f'Starting server on 0.0.0.0:{port}')
+    # Load models on server start
+    #load_models()
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)

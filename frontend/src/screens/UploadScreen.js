@@ -19,6 +19,9 @@ export default function UploadScreen({ navigation }) {
     default: 'http://localhost:4200',
   });
 
+  // Single toggle for mock mode during development
+  const DEV_MOCK = true; // set false for actual processing
+
   const requestStoragePermission = async () => {
     try {
       if (Platform.OS === 'android') {
@@ -46,8 +49,9 @@ export default function UploadScreen({ navigation }) {
     if (!hasPermission) return;
 
     try {
+      // Allow selecting PDF or Images, ensure a usable file:// URI
       const res = await DocumentPicker.pickSingle({
-        type: [DocumentPicker.types.pdf],
+        type: [DocumentPicker.types.pdf, DocumentPicker.types.images],
         copyTo: 'cachesDirectory',
       });
       setSelectedFile(res);
@@ -78,82 +82,102 @@ export default function UploadScreen({ navigation }) {
     try {
       const formData = new FormData();
 
-      // Prefer fileCopyUri (file://) over potentially unsupported ph:// URIs
       let fileUri = selectedFile?.fileCopyUri || selectedFile?.uri;
       if (!fileUri) {
         throw new Error('No usable file URI. Please re-select the file.');
       }
-      // Ensure proper file:// scheme on iOS
       if (Platform.OS === 'ios' && !fileUri.startsWith('file://')) {
-        if (fileUri.startsWith('file:/')) {
-          fileUri = fileUri.replace(/^file:\//, 'file://');
-        } else {
-          fileUri = `file://${fileUri.replace(/^\/+/, '')}`;
-        }
+        if (fileUri.startsWith('file:/')) fileUri = fileUri.replace(/^file:\//, 'file://');
+        else fileUri = `file://${fileUri.replace(/^\/+/, '')}`;
       }
 
-      // Provide a safe filename fallback with .pdf
+      const nameFromPicker = selectedFile?.name || '';
+      const ext = (nameFromPicker.split('.').pop() || '').toLowerCase();
+      const mimeFromPicker = selectedFile?.type || '';
+      const extToMime = {
+        pdf: 'application/pdf',
+        png: 'image/png',
+        jpg: 'image/jpeg',
+        jpeg: 'image/jpeg',
+        gif: 'image/gif',
+        webp: 'image/webp',
+        bmp: 'image/bmp',
+      };
+      const mime = mimeFromPicker || extToMime[ext] || 'application/octet-stream';
       const fileName =
-        (selectedFile?.name && selectedFile.name.includes('.'))
-          ? selectedFile.name
-          : 'document.pdf';
+        nameFromPicker && nameFromPicker.includes('.')
+          ? nameFromPicker
+          : mime === 'application/pdf'
+          ? 'document.pdf'
+          : 'image.jpg';
 
       formData.append('file', {
         uri: fileUri,
-        type: selectedFile?.type || 'application/pdf',
+        type: mime,
         name: fileName,
       });
 
-      console.log('Uploading with URI:', fileUri);
-
-      // 1) Upload file
-      const uploadUrl = `${API_HOST}/api/upload/`;
-      const uploadResp = await axios.post(uploadUrl, formData, {
-        // Let axios set the multipart boundary header
-        timeout: 30000,
-      });
-
-      console.log('Upload response:', uploadResp?.status, uploadResp?.data);
-
+      // 1) Upload file (pass mock toggle via query)
+      const uploadUrl = `${API_HOST}/api/upload/?mock=${DEV_MOCK ? '1' : '0'}`;
+      const uploadResp = await axios.post(uploadUrl, formData, { timeout: 30000 });
       const uploadData = uploadResp?.data || {};
       if (uploadResp.status < 200 || uploadResp.status >= 300 || uploadData.status !== 'ok') {
         throw new Error(uploadData?.error || `Upload failed with status ${uploadResp.status}`);
       }
 
       const storedName = uploadData?.file?.stored_name;
-      if (!storedName) {
-        throw new Error('No stored_name returned from server.');
+      if (!storedName) throw new Error('No stored_name returned from server.');
+
+      // Prefer preprocess result from upload
+      let finalAnalysis = null;
+      let finalAr = [];
+      const pre = uploadData?.preprocess;
+
+      if (pre && pre.status === 'ok') {
+        // Use AI/AR from preprocess
+        // For images: pre.ai and pre.ar
+        // For PDFs: prefer ai_final, fallback to ai_initial; AR in pre.ar
+        if (pre.kind === 'image') {
+          finalAnalysis = pre.ai || pre.vision || null;
+          finalAr = Array.isArray(pre?.ar?.elements) ? pre.ar.elements : [];
+        } else if (pre.kind === 'pdf') {
+          finalAnalysis = pre.ai_final || pre.ai_initial || null;
+          finalAr = Array.isArray(pre?.ar?.elements) ? pre.ar.elements : [];
+        }
       }
 
-      // 2) Analyze via Granite Vision using stored_name
-      const analyzeUrl = `${API_HOST}/api/vision/analyze`;
-      const analyzeResp = await axios.post(analyzeUrl, {
-        stored_name: storedName,
-        mock: true, // keep true during development
-      }, { timeout: 30000 });
-
-      console.log('Analyze response:', analyzeResp?.status, analyzeResp?.data);
-
-      const analyzeData = analyzeResp?.data || {};
-      if (analyzeResp.status < 200 || analyzeResp.status >= 300 || analyzeData.status !== 'ok') {
-        throw new Error(analyzeData?.analysis?.error || 'Analysis failed');
+      // 2) Fallback to explicit analyze call if preprocess missing or errored
+      if (!finalAnalysis) {
+        const analyzeUrl = `${API_HOST}/api/vision/analyze`;
+        const analyzeResp = await axios.post(analyzeUrl, {
+          stored_name: storedName,
+          mock: DEV_MOCK,
+        }, { timeout: 30000 });
+        const analyzeData = analyzeResp?.data || {};
+        if (analyzeResp.status < 200 || analyzeResp.status >= 300 || analyzeData.status !== 'ok') {
+          throw new Error(analyzeData?.analysis?.error || 'Analysis failed');
+        }
+        finalAnalysis = analyzeData?.analysis || analyzeData?.ai || null;
+        finalAr = Array.isArray(analyzeData?.ar?.elements) ? analyzeData.ar.elements : [];
       }
 
-      // Optional: capture summary for history
-      const analysisAnswer = analyzeData?.analysis?.answer || '';
-      const arElements = Array.isArray(analyzeData?.ar?.elements) ? analyzeData.ar.elements : [];
+      const analysisAnswer =
+        (typeof finalAnalysis?.answer === 'string' && finalAnalysis.answer) ||
+        (typeof finalAnalysis?.analysis === 'string' && finalAnalysis.analysis) ||
+        '';
+
       const id = `${Date.now()}`;
       addHistoryItem({
         id,
         name: selectedFile.name,
         uri: selectedFile.fileCopyUri || selectedFile.uri,
-        type: selectedFile.type || 'application/pdf',
+        type: selectedFile.type || mime,
         status: 'processed',
         analysisSummary: analysisAnswer.slice(0, 300),
-        arElementsCount: arElements.length,
+        arElementsCount: finalAr.length,
       });
 
-      Alert.alert('Success', 'Analysis complete. AR data prepared.');
+      Alert.alert('Success', DEV_MOCK ? 'Mock analysis complete.' : 'Analysis complete.');
       navigation.navigate('Home');
     } catch (error) {
       console.error('Begin Analysis Failed', {
@@ -170,11 +194,11 @@ export default function UploadScreen({ navigation }) {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Upload Technical Document</Text>
-      <Text style={styles.subtitle}>This feature lets you upload documents for AR-AI analysis.</Text>
+      <Text style={styles.subtitle}>This feature lets you upload PDF or image files for AR-AI analysis.</Text>
 
       <View style={styles.buttonContainer}>
         <TouchableOpacity style={styles.button} onPress={handleFileUpload} disabled={analyzing}>
-          <Text style={styles.buttonText}>Select File to Upload (PDF)</Text>
+          <Text style={styles.buttonText}>Select File to Upload (PDF/Image)</Text>
         </TouchableOpacity>
 
         {selectedFile && (

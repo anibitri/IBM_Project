@@ -20,10 +20,18 @@ def allowed_file(filename: str) -> bool:
 def upload_file():
     """
     Handle file upload only. Returns stored file info.
-    Granite Vision analysis and AR extraction are handled by /api/vision/analyze
-    using the 'file.path' returned here.
+    Triggers preprocessing and returns its result under 'preprocess'.
+
+    Optional query param:
+      - mock=1|true to force mock processing regardless of environment
     """
     logger.info("Upload request received.")
+
+    # Read mock toggle from query string; fallback to env if not provided
+    mock_q = (request.args.get('mock') or '').strip().lower()
+    mock = True if mock_q in ('1', 'true', 'yes') else (os.getenv("GRANITE_MOCK") == "1")
+    logger.info(f"Preprocess mock mode: {mock}")
+
     if 'file' not in request.files:
         return jsonify({'status': 'error', 'error': 'No file uploaded'}), 400
 
@@ -40,6 +48,14 @@ def upload_file():
 
     logger.info(f"File uploaded: {file_path}")
 
+    # Kick off preprocessing orchestrator
+    try:
+        from services.preprocess_service import preprocess_document
+        preprocess_result = preprocess_document(file_path, mock=mock)
+    except Exception as e:
+        logger.exception('Preprocessing invocation failed')
+        preprocess_result = {'status': 'error', 'error': f'Preprocess call failed: {e}'}
+
     return jsonify({
         'status': 'ok',
         'message': 'File uploaded successfully',
@@ -47,7 +63,8 @@ def upload_file():
             'original_name': original_name,
             'stored_name': stored_name,
             'path': file_path
-        }
+        },
+        'preprocess': preprocess_result
     }), 200
 
 @upload_bp.route('/process', methods=['POST'])

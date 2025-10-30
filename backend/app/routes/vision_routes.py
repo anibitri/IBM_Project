@@ -1,7 +1,7 @@
 from flask import Blueprint, request, jsonify
 import os
-from services.granite_vision_service import analyze_document
 import logging
+from services.preprocess_service import preprocess_document  # use centralized extraction/analysis
 
 vision_bp = Blueprint('vision', __name__)
 
@@ -28,36 +28,32 @@ logger = logging.getLogger(__name__)
 @vision_bp.route('/analyze', methods=['POST'])
 def analyze():
 	"""
-	Run Granite Vision analysis on a previously uploaded file.
+	Run preprocessing + analysis on a previously uploaded file.
 
 	Accepts:
 	- JSON: { "file_path"?: string, "stored_name"?: string, "prompt"?: string, "mock"?: bool }
-	  Prefer "stored_name" returned by /api/upload/ to avoid absolute path issues.
+	  Prefer "stored_name" returned by /api/upload/.
 
 	Returns:
 	- {
 	    status: 'ok'|'error',
 	    file: { path },
-	    analysis: { status, answer? , error? },
-	    ar: { status, elements? , error? }
+	    analysis: { status, answer? , error? },   // compatibility
+	    ar: { status, elements? , error? },       // compatibility
+	    ai: { ... },                               // synthesized AI result
+	    preprocess: { ... }                        // full pipeline output
 	  }
 	"""
-
-	
 	payload = request.get_json(silent=True) or {}
 	file_path = payload.get('file_path')
 	stored_name = payload.get('stored_name')
-	prompt = payload.get('prompt')
 	mock = payload.get('mock')
 
-	logger.info("Analyze request received.")
-
-	# Prefer resolving from stored_name if provided (safer and avoids absolute path mismatches)
+	# Resolve stored_name to path under uploads
 	trusted_from_name = False
 	if isinstance(stored_name, str) and stored_name.strip():
 		raw_name = stored_name.strip()
 		safe_name = os.path.basename(raw_name)
-		# Reject if caller tries to sneak directories
 		if safe_name != raw_name:
 			return jsonify({'status': 'error', 'error': 'Invalid stored_name'}), 400
 		ext = os.path.splitext(safe_name)[1].lower()
@@ -70,10 +66,8 @@ def analyze():
 		logger.warning('Missing file_path or stored_name')
 		return jsonify({'status': 'error', 'error': 'file_path or stored_name is required'}), 400
 
-	# Normalize
 	file_path = os.path.realpath(file_path.strip())
 
-	# Only enforce safety check if client passed an absolute file_path
 	if not trusted_from_name and not _safe_under_uploads(file_path):
 		return jsonify({
 			'status': 'error',
@@ -84,25 +78,34 @@ def analyze():
 		logger.warning(f'File not found: {file_path}')
 		return jsonify({'status': 'error', 'error': 'File not found'}), 404
 
-	analysis = analyze_document(file_path, prompt=prompt, mock=mock)
-	status_ok = analysis.get('status') == 'ok'
-	status_code = 200 if status_ok else 500
+	# Centralized preprocessing
+	pre = preprocess_document(file_path, mock=mock)
+	ok = pre.get('status') == 'ok'
+	status_code = 200 if ok else 500
 
-	# Produce AR elements from the file regardless of analysis outcome
-	try:
-		from services.ar_service import extract_document_features
-		ar_elements = extract_document_features(file_path)
-		ar_payload = { 'status': 'ok', 'elements': ar_elements }
-	except Exception as e:
-		ar_payload = { 'status': 'error', 'error': f'AR extraction failed: {e}' }
+	# Back-compat fields
+	analysis_payload = {'status': 'error', 'error': 'No analysis available'}
+	ar_payload = {'status': 'error', 'error': 'No AR elements'}
+	ai_payload = pre.get('ai') or pre.get('ai_final') or pre.get('ai_initial') or {'status': 'error', 'error': 'No AI result'}
 
-	if not status_ok:
-		logger.error(f'Analysis error: {analysis.get("error")}')
+	kind = pre.get('kind')
+	if kind == 'image':
+		analysis_payload = pre.get('vision') or analysis_payload
+		ar_payload = pre.get('ar') or ar_payload
+	elif kind == 'pdf':
+		# Prefer final AI as analysis answer for PDFs
+		if pre.get('ai_final'):
+			analysis_payload = pre['ai_final']
+		elif pre.get('ai_initial'):
+			analysis_payload = pre['ai_initial']
+		ar_payload = pre.get('ar') or ar_payload
 
 	return jsonify({
-		'status': 'ok' if status_ok else 'error',
+		'status': 'ok' if ok else 'error',
 		'file': { 'path': file_path },
-		'analysis': analysis,
-		'ar': ar_payload
+		'analysis': analysis_payload,
+		'ar': ar_payload,
+		'ai': ai_payload,
+		'preprocess': pre
 	}), status_code
 
