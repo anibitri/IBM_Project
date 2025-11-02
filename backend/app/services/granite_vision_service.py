@@ -1,38 +1,42 @@
-from transformers import AutoProcessor, AutoModelForVision2Seq
+from transformers import AutoModelForImageTextToText, AutoProcessor, AutoModelForVision2Seq
 import torch
 from PIL import Image
 import os
-from typing import Optional, List  # <- add List
+from typing import Optional, List
 import logging
 
 MODEL_ID = "ibm-granite/granite-vision-3.3-2b"
 
-# Mock mode: set env GRANITE_MOCK=1 or pass mock=True to analyze_document
-IS_MOCK = os.getenv("GRANITE_MOCK") == "1"
+# Mock mode ON by default. Set to False (or pass mock=False) to use real model.
+IS_MOCK = True
 
-processor = AutoProcessor.from_pretrained(MODEL_ID)
 # Lazy-loaded model/processor
 _processor = None
 _model = None
-_device = "cuda" if torch.cuda.is_available() else "cpu"
+# _device = "cuda" if torch.cuda.is_available() else "cpu"
 
 def _ensure_model_loaded():
   global _processor, _model
   if _processor is not None and _model is not None:
     return
   try:
+    print('Loading Granite Vision model...')
     _processor = AutoProcessor.from_pretrained(MODEL_ID)
-    _model = AutoModelForVision2Seq.from_pretrained(MODEL_ID).to(_device)
-    _model.to(_device)
+    print('Processor loaded successfully.')
+    _model = AutoModelForImageTextToText.from_pretrained(MODEL_ID, dtype="auto", device_map="auto")
+    print('Granite Vision model loaded successfully.')
+    # _model.to(_device)
     _model.eval()
   except Exception as e:
-    # If loading fails, stay in mock mode so API remains testable
-    global IS_MOCK
-    IS_MOCK = True
+    logger = logging.getLogger(__name__)
+    logger.error(f'Granite Vision model load failed: {e}')
+    _processor = None
+    _model = None
 
 logger = logging.getLogger(__name__)
 
 def _is_mock(override: Optional[bool]) -> bool:
+  # Honor global mock switch or explicit override.
   return IS_MOCK or (override is True)
 
 def analyze_images(images: List[Image.Image], prompt: Optional[str] = None, mock: Optional[bool] = None) -> dict:
@@ -58,13 +62,11 @@ def analyze_images(images: List[Image.Image], prompt: Optional[str] = None, mock
 
     _ensure_model_loaded()
     if _model is None or _processor is None:
-      return {'status': 'error', 'error': 'Model not initialized. Set GRANITE_MOCK=1 for development.'}
+      return {'status': 'error', 'error': 'Model not initialized. Check server logs for load errors.'}
 
     def _run_inference(imgs):
       inputs = _processor(text=question, images=imgs, return_tensors="pt")
-      for k, v in list(inputs.items()):
-        if isinstance(v, torch.Tensor):
-          inputs[k] = v.to(_device)
+      # Remove manual device move; device_map='auto' handles placement.
       with torch.no_grad():
         generate_ids = _model.generate(
           **inputs,

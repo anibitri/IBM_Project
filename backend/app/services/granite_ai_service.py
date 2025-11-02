@@ -8,31 +8,32 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 logger = logging.getLogger(__name__)
 
 MODEL_ID = "ibm-granite/granite-4.0-micro"
-IS_MOCK = os.getenv("GRANITE_MOCK") == "1"
+# Mock mode ON by default. Set to False (or pass mock=False) to use real model.
+IS_MOCK = True
 
-_device = "cuda" if torch.cuda.is_available() else "cpu"
+# _device = "cuda" if torch.cuda.is_available() else "cpu"
 
 _tokenizer = None
 _model = None
 
 def _ensure_llm_loaded():
-	global _tokenizer, _model, IS_MOCK
+	global _tokenizer, _model
 	if _tokenizer is not None and _model is not None:
 		logger.info('LLM model already loaded')
 		return
 	try:
 		_tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-		# Keep it simple for CPU; device_map='auto' if you have accelerate installed
-		_model = AutoModelForCausalLM.from_pretrained(MODEL_ID).to(_device)
-		_model.to(_device)
+		_model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype="auto", device_map="auto")
+		logger.info('LLM model loaded successfully.')
+		# _model.to(_device)
 		_model.eval()
 	except Exception as e:
-		logger.warning(f'LLM model load failed ({e}); falling back to mock mode.')
-		IS_MOCK = True
+		logger.error(f'LLM model load failed: {e}')
 		_tokenizer = None
 		_model = None
 
 def _is_mock(override: Optional[bool]) -> bool:
+	# Honor global mock switch or explicit override.
 	return IS_MOCK or (override is True)
 
 def analyze_context(text_excerpt: str, vision: Dict[str, Any], mock: Optional[bool] = None, max_new_tokens: int = 320) -> dict:
@@ -77,9 +78,9 @@ def analyze_context(text_excerpt: str, vision: Dict[str, Any], mock: Optional[bo
 
 		_ensure_llm_loaded()
 		if _model is None or _tokenizer is None:
-			return {'status': 'error', 'error': 'LLM not initialized. Set GRANITE_MOCK=1 for development.'}
+			return {'status': 'error', 'error': 'LLM not initialized. Check server logs for load errors.'}
 
-		input_ids = _tokenizer.encode(prompt, return_tensors='pt').to(_device)
+		input_ids = _tokenizer.encode(prompt, return_tensors='pt')  # removed .to(_device)
 		with torch.no_grad():
 			gen_ids = _model.generate(
 				input_ids,
@@ -89,11 +90,16 @@ def analyze_context(text_excerpt: str, vision: Dict[str, Any], mock: Optional[bo
 				top_p=0.9,
 				eos_token_id=_tokenizer.eos_token_id
 			)
+
+		logger.info('AI synthesis generation completed')
+
 		output = _tokenizer.decode(gen_ids[0], skip_special_tokens=True)
 		# Keep only the completion after the prompt if needed
 		answer = output[len(_tokenizer.decode(input_ids[0], skip_special_tokens=True)):]
 		answer = answer.strip() if answer else output.strip()
-
+		
+		logger.info('AI synthesis analysis completed successfully')
+		
 		return {
 			'status': 'ok',
 			'answer': answer,

@@ -11,7 +11,7 @@ export default function AppNavigator() {
   return (
     <HistoryProvider>
       <Stack.Navigator initialRouteName="Home">
-        <Stack.Screen name="HomeMain" component={HomeScreen} options={{ title: 'Home' }} />
+        <Stack.Screen name="HomeMain" component={HomeScreen} options={{ title: 'Home Screen' }} />
         <Stack.Screen name="Scan" component={CameraScreen} options={{ title: 'Scan Document' }} />
         <Stack.Screen name="Upload" component={UploadScreen} options={{ title: 'Upload Document' }} />
       </Stack.Navigator>

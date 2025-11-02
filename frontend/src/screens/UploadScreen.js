@@ -19,8 +19,10 @@ export default function UploadScreen({ navigation }) {
     default: 'http://localhost:4200',
   });
 
-  // Single toggle for mock mode during development
-  const DEV_MOCK = true; // set false for actual processing
+  // Mock ON by default. To test real services:
+  // 1) set DEV_MOCK = false
+  // 2) remove "?mock=0" from URLs (optional if backend ignores)
+  const DEV_MOCK = true;
 
   const requestStoragePermission = async () => {
     try {
@@ -117,7 +119,7 @@ export default function UploadScreen({ navigation }) {
         name: fileName,
       });
 
-      // 1) Upload file (pass mock toggle via query)
+      // 1) Upload file (send mock flag)
       const uploadUrl = `${API_HOST}/api/upload/?mock=${DEV_MOCK ? '1' : '0'}`;
       const uploadResp = await axios.post(uploadUrl, formData, { timeout: 30000 });
       const uploadData = uploadResp?.data || {};
@@ -151,7 +153,7 @@ export default function UploadScreen({ navigation }) {
         const analyzeUrl = `${API_HOST}/api/vision/analyze`;
         const analyzeResp = await axios.post(analyzeUrl, {
           stored_name: storedName,
-          mock: DEV_MOCK,
+          mock: DEV_MOCK, // set to false when testing real services
         }, { timeout: 30000 });
         const analyzeData = analyzeResp?.data || {};
         if (analyzeResp.status < 200 || analyzeResp.status >= 300 || analyzeData.status !== 'ok') {

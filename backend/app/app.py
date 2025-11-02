@@ -8,25 +8,14 @@ import os
 import logging
 from werkzeug.exceptions import HTTPException
 from transformers import pipeline
+# Force mock mode by default. Uncomment and set to "0" to test real services.
+os.environ["GRANITE_MOCK"] = "1"
+from services.granite_ai_service import _ensure_llm_loaded  # added
+from services.granite_vision_service import _ensure_model_loaded as _ensure_vision_model_loaded  # added
 
 app = Flask(__name__)
 CORS(app)
 
-# Remove eager loading at import time; load on server start instead.
-analyzer = None
-analyzer2 = None
-
-def load_models():
-    """Load AI and Vision models once at server start."""
-    global analyzer, analyzer2
-    app.logger.info('Loading AI and Vision models...')
-    ai_model_id = os.getenv('AI_MODEL_ID', 'ibm-granite/granite-4.0-micro')
-    vision_model_id = os.getenv('VISION_MODEL_ID', 'ibm-granite/granite-vision-3.3-2b')
-    # Adjust tasks as needed for your models
-    analyzer = pipeline('text-generation', model=ai_model_id)
-    app.logger.info(f'Loaded AI model: {ai_model_id}')
-    analyzer2 = pipeline('image-to-text', model=vision_model_id)
-    app.logger.info(f'Loaded Vision model: {vision_model_id}')
 
 def configure_logging(app: Flask):
     # Set root logging level
@@ -76,6 +65,9 @@ app.register_blueprint(ai_bp, url_prefix='/api/ai')  # added
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '4200'))
     app.logger.info(f'Starting server on 0.0.0.0:{port}')
-    # Load models on server start
-    #load_models()
+    # Using mock mode; models are not loaded. To test real services:
+    # 1) change the env to "0": os.environ["GRANITE_MOCK"] = "0"
+    # 2) uncomment the two lines below to preload models at server start
+    # _ensure_llm_loaded()
+    # _ensure_vision_model_loaded()
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
