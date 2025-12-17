@@ -3,8 +3,17 @@ import os
 import uuid
 from werkzeug.utils import secure_filename
 import logging
+from PIL import Image # Needed for the standalone /process route
 
-upload_bp = Blueprint('upload', __name__)   
+# Import the main orchestrator (Primary Method)
+from services.preprocess_service import preprocess_document
+
+# Imports for the standalone /process route (Secondary Method)
+from services.ar_service import extract_document_features
+from services.granite_vision_service import analyze_images
+
+upload_bp = Blueprint('upload', __name__)
+
 # Resolve to backend/static/uploads absolute path to avoid CWD issues
 BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 UPLOAD_FOLDER = os.path.join(BASE_DIR, 'static', 'uploads')
@@ -29,7 +38,8 @@ def upload_file():
 
     # Read mock toggle from query string; fallback to env if not provided
     mock_q = (request.args.get('mock') or '').strip().lower()
-    mock = True if mock_q in ('1', 'true', 'yes') else (os.getenv("GRANITE_MOCK") == "1")
+    # Explicitly check for true values, default to False if not present
+    mock = True if mock_q in ('1', 'true', 'yes') else False
     logger.info(f"Preprocess mock mode: {mock}")
 
     if 'file' not in request.files:
@@ -50,11 +60,15 @@ def upload_file():
 
     # Kick off preprocessing orchestrator
     try:
-        from services.preprocess_service import preprocess_document
+        # This calls the updated preprocess_service which handles Vision -> AR -> AI
         preprocess_result = preprocess_document(file_path, mock=mock)
     except Exception as e:
         logger.exception('Preprocessing invocation failed')
         preprocess_result = {'status': 'error', 'error': f'Preprocess call failed: {e}'}
+
+    # Construct a relative URL for the frontend to load the image/texture
+    # Assuming your Flask app mounts /static
+    file_url = f"/static/uploads/{stored_name}"
 
     return jsonify({
         'status': 'ok',
@@ -62,26 +76,48 @@ def upload_file():
         'file': {
             'original_name': original_name,
             'stored_name': stored_name,
-            'path': file_path
+            'path': file_path,
+            'url': file_url 
         },
         'preprocess': preprocess_result
     }), 200
 
 @upload_bp.route('/process', methods=['POST'])
 def process_document():
+    """
+    Standalone route for AR extraction.
+    Updated to use the Hybrid Vision -> AR flow so it generates smart components.
+    """
     if 'file' not in request.files:
         return jsonify({'error': 'No file provided'}), 400
 
     file = request.files['file']
     filename = secure_filename(file.filename)
+    if not filename:
+        return jsonify({'error': 'Invalid filename'}), 400
+
     save_path = os.path.join(UPLOAD_FOLDER, filename)
     file.save(save_path)
 
-    # Extract data for AR representation
-    from services.ar_service import extract_document_features
-    result = extract_document_features(save_path)
+    try:
+        # 1. Get Hints from Vision (Granite)
+        # We need to open the image to pass it to the Vision service
+        img = Image.open(save_path).convert('RGB')
+        
+        # Call Vision with our new "ar_extraction" task to get bounding boxes
+        vision_res = analyze_images([img], task="ar_extraction")
+        ar_hints = vision_res.get('components', [])
+        
+        # 2. Extract Features using Hints (Hybrid SAM)
+        # Pass the hints to the AR service to get refined polygons/boxes
+        result = extract_document_features(save_path, hints=ar_hints)
 
-    return jsonify({
-        'message': 'Document processed',
-        'elements': result
-    })
+        return jsonify({
+            'message': 'Document processed',
+            'elements': result,
+            'vision_summary': vision_res.get('answer', '')
+        })
+
+    except Exception as e:
+        logger.error(f"Standalone processing failed: {e}")
+        return jsonify({'error': str(e)}), 500

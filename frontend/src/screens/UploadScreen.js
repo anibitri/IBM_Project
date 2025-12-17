@@ -12,70 +12,57 @@ export default function UploadScreen({ navigation }) {
   const [selectedFile, setSelectedFile] = React.useState(null);
   const [analyzing, setAnalyzing] = React.useState(false);
 
-  // Prefer emulator-safe host for Android; localhost for iOS (Flask on 4200)
+  // Use 10.0.2.2 for Android Emulator, localhost for iOS Simulator
   const API_HOST = Platform.select({
     android: 'http://10.0.2.2:4200',
     ios: 'http://localhost:4200',
     default: 'http://localhost:4200',
   });
 
-  // Mock ON by default. To test real services:
-  // 1) set DEV_MOCK = false
-  // 2) remove "?mock=0" from URLs (optional if backend ignores)
-  const DEV_MOCK = true;
+  // Set to FALSE to use your real backend logic
+  const DEV_MOCK = false;
 
   const requestStoragePermission = async () => {
     try {
       if (Platform.OS === 'android') {
+        // Modern Android (10+) often doesn't need this for DocumentPicker, 
+        // but older versions might.
+        if (Platform.Version >= 33) return true; // Android 13+ handles media permissions differently
+        
         const result = await request(PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE);
-        if (result === RESULTS.GRANTED) {
-          console.log('Storage permission granted.');
-          return true;
-        } else {
-          Alert.alert('Permission Required', 'Please allow file access to select documents.');
-          return false;
-        }
-      } else if (Platform.OS === 'ios') {
-        // iOS usually handles permission automatically with the file picker
-        return true;
+        return result === RESULTS.GRANTED;
       }
+      return true; // iOS handles this automatically
     } catch (error) {
       console.error('Permission error:', error);
-      Alert.alert('Error', 'Failed to request storage permission.');
       return false;
     }
   };
 
-  const handleFileUpload = async() => {
+  const handleFileUpload = async () => {
     const hasPermission = await requestStoragePermission();
-    if (!hasPermission) return;
+    if (!hasPermission) {
+      Alert.alert('Permission Denied', 'Storage permission is required to select files.');
+      return;
+    }
 
     try {
-      // Allow selecting PDF or Images, ensure a usable file:// URI
       const res = await DocumentPicker.pickSingle({
         type: [DocumentPicker.types.pdf, DocumentPicker.types.images],
         copyTo: 'cachesDirectory',
       });
       setSelectedFile(res);
-      console.log('Selected file:', {
-        name: res?.name,
-        type: res?.type,
-        uri: res?.uri,
-        fileCopyUri: res?.fileCopyUri,
-      });
     } catch (err) {
-      if (DocumentPicker.isCancel(err)) {
-        console.error('User cancelled file picker', err);
-        Alert.alert('Cancelled', 'File selection was cancelled.');
-      } else {
-        throw err;
+      if (!DocumentPicker.isCancel(err)) {
+        console.error('Picker Error:', err);
+        Alert.alert('Error', 'Failed to pick file.');
       }
     }
   };
 
   const handleBeginAnalysis = async () => {
     if (!selectedFile) {
-      Alert.alert('No File Selected', 'Please select a file to upload.');
+      Alert.alert('No File', 'Please select a file first.');
       return;
     }
 
@@ -84,110 +71,93 @@ export default function UploadScreen({ navigation }) {
     try {
       const formData = new FormData();
 
-      let fileUri = selectedFile?.fileCopyUri || selectedFile?.uri;
-      if (!fileUri) {
-        throw new Error('No usable file URI. Please re-select the file.');
-      }
+      // --- URI Normalization ---
+      let fileUri = selectedFile.fileCopyUri || selectedFile.uri;
       if (Platform.OS === 'ios' && !fileUri.startsWith('file://')) {
-        if (fileUri.startsWith('file:/')) fileUri = fileUri.replace(/^file:\//, 'file://');
-        else fileUri = `file://${fileUri.replace(/^\/+/, '')}`;
+        fileUri = `file://${fileUri}`;
       }
 
-      const nameFromPicker = selectedFile?.name || '';
-      const ext = (nameFromPicker.split('.').pop() || '').toLowerCase();
-      const mimeFromPicker = selectedFile?.type || '';
-      const extToMime = {
-        pdf: 'application/pdf',
-        png: 'image/png',
-        jpg: 'image/jpeg',
-        jpeg: 'image/jpeg',
-        gif: 'image/gif',
-        webp: 'image/webp',
-        bmp: 'image/bmp',
-      };
-      const mime = mimeFromPicker || extToMime[ext] || 'application/octet-stream';
-      const fileName =
-        nameFromPicker && nameFromPicker.includes('.')
-          ? nameFromPicker
-          : mime === 'application/pdf'
-          ? 'document.pdf'
-          : 'image.jpg';
-
+      const mimeType = selectedFile.type || 'application/octet-stream';
+      
       formData.append('file', {
         uri: fileUri,
-        type: mime,
-        name: fileName,
+        type: mimeType,
+        name: selectedFile.name || 'upload.bin',
       });
 
-      // 1) Upload file (send mock flag)
+      // 1. Upload & Analyze (One-Shot)
+      // We use the /api/upload/ route which now runs the full Preprocess Pipeline
       const uploadUrl = `${API_HOST}/api/upload/?mock=${DEV_MOCK ? '1' : '0'}`;
-      const uploadResp = await axios.post(uploadUrl, formData, { timeout: 30000 });
-      const uploadData = uploadResp?.data || {};
-      if (uploadResp.status < 200 || uploadResp.status >= 300 || uploadData.status !== 'ok') {
-        throw new Error(uploadData?.error || `Upload failed with status ${uploadResp.status}`);
+      console.log(`Uploading to: ${uploadUrl}`);
+      
+      const response = await axios.post(uploadUrl, formData, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 60000, // 60 sec timeout for heavy AI operations
+      });
+
+      const data = response.data;
+      if (data.status !== 'ok') throw new Error(data.error || 'Upload failed');
+
+      // 2. Extract Data
+      const preprocess = data.preprocess || {};
+      const storedName = data.file?.stored_name;
+      const imageUrl = `${API_HOST}/static/uploads/${storedName}`; // Construct full URL
+      
+      // Determine Analysis Result (Image vs PDF logic)
+      let aiSummary = "";
+      let arElements = [];
+      let fileMeta = {};
+
+      if (preprocess.kind === 'image') {
+        aiSummary = preprocess.ai?.answer || preprocess.vision?.answer || "";
+        arElements = preprocess.ar?.elements || [];
+        fileMeta = preprocess.meta || {}; // Contains width/height
+      } else {
+        // PDF
+        aiSummary = preprocess.ai_final?.answer || preprocess.ai_initial?.answer || "";
+        arElements = preprocess.ar?.elements || [];
       }
 
-      const storedName = uploadData?.file?.stored_name;
-      if (!storedName) throw new Error('No stored_name returned from server.');
-
-      // Prefer preprocess result from upload
-      let finalAnalysis = null;
-      let finalAr = [];
-      const pre = uploadData?.preprocess;
-
-      if (pre && pre.status === 'ok') {
-        // Use AI/AR from preprocess
-        // For images: pre.ai and pre.ar
-        // For PDFs: prefer ai_final, fallback to ai_initial; AR in pre.ar
-        if (pre.kind === 'image') {
-          finalAnalysis = pre.ai || pre.vision || null;
-          finalAr = Array.isArray(pre?.ar?.elements) ? pre.ar.elements : [];
-        } else if (pre.kind === 'pdf') {
-          finalAnalysis = pre.ai_final || pre.ai_initial || null;
-          finalAr = Array.isArray(pre?.ar?.elements) ? pre.ar.elements : [];
-        }
-      }
-
-      // 2) Fallback to explicit analyze call if preprocess missing or errored
-      if (!finalAnalysis) {
-        const analyzeUrl = `${API_HOST}/api/vision/analyze`;
-        const analyzeResp = await axios.post(analyzeUrl, {
-          stored_name: storedName,
-          mock: DEV_MOCK, // set to false when testing real services
-        }, { timeout: 30000 });
-        const analyzeData = analyzeResp?.data || {};
-        if (analyzeResp.status < 200 || analyzeResp.status >= 300 || analyzeData.status !== 'ok') {
-          throw new Error(analyzeData?.analysis?.error || 'Analysis failed');
-        }
-        finalAnalysis = analyzeData?.analysis || analyzeData?.ai || null;
-        finalAr = Array.isArray(analyzeData?.ar?.elements) ? analyzeData.ar.elements : [];
-      }
-
-      const analysisAnswer =
-        (typeof finalAnalysis?.answer === 'string' && finalAnalysis.answer) ||
-        (typeof finalAnalysis?.analysis === 'string' && finalAnalysis.analysis) ||
-        '';
-
-      const id = `${Date.now()}`;
-      addHistoryItem({
-        id,
+      // 3. Save to History
+      const historyItem = {
+        id: Date.now().toString(),
         name: selectedFile.name,
-        uri: selectedFile.fileCopyUri || selectedFile.uri,
-        type: selectedFile.type || mime,
-        status: 'processed',
-        analysisSummary: analysisAnswer.slice(0, 300),
-        arElementsCount: finalAr.length,
-      });
+        uri: fileUri,
+        type: selectedFile.type,
+        date: new Date().toISOString(),
+        
+        // Critical Data for Re-opening
+        status: 'completed',
+        analysisSummary: aiSummary,
+        storedName: storedName, // To re-fetch AR data later
+        imageUrl: imageUrl,     // To show in 3D viewer
+        arElements: arElements, // The clickable boxes
+        fileMeta: fileMeta      // Aspect ratio info
+      };
+      
+      addHistoryItem(historyItem);
 
-      Alert.alert('Success', DEV_MOCK ? 'Mock analysis complete.' : 'Analysis complete.');
-      navigation.navigate('Home');
+      // 4. Navigate to Result (Don't just go Home!)
+      Alert.alert(
+        'Analysis Complete',
+        `Found ${arElements.length} interactive components.`,
+        [
+          {
+            text: 'View Results',
+            onPress: () => {
+              // Navigate to your Viewer Screen
+              // Ensure you have this screen registered in your Navigator!
+              navigation.navigate('ARViewer', { 
+                data: historyItem // Pass the full object
+              });
+            }
+          }
+        ]
+      );
+
     } catch (error) {
-      console.error('Begin Analysis Failed', {
-        message: error?.message,
-        status: error?.response?.status,
-        data: error?.response?.data,
-      });
-      Alert.alert('Upload/Analysis Failed', error?.message || 'Failed to start analysis.');
+      console.error('Analysis Failed:', error);
+      Alert.alert('Error', error.response?.data?.error || error.message || 'Analysis failed.');
     } finally {
       setAnalyzing(false);
     }
@@ -195,36 +165,43 @@ export default function UploadScreen({ navigation }) {
 
   return (
     <ScrollView contentContainerStyle={styles.container}>
-      <Text style={styles.title}>Upload Technical Document</Text>
-      <Text style={styles.subtitle}>This feature lets you upload PDF or image files for AR-AI analysis.</Text>
+      <Text style={styles.title}>Upload Document</Text>
+      <Text style={styles.subtitle}>
+        Upload a schematic or diagram (PDF/Image) to generate an interactive AR analysis.
+      </Text>
 
-      <View style={styles.buttonContainer}>
-        <TouchableOpacity style={styles.button} onPress={handleFileUpload} disabled={analyzing}>
-          <Text style={styles.buttonText}>Select File to Upload (PDF/Image)</Text>
+      <View style={styles.card}>
+        <TouchableOpacity style={styles.uploadBox} onPress={handleFileUpload} disabled={analyzing}>
+          <Text style={styles.uploadIcon}>📂</Text>
+          <Text style={styles.uploadText}>
+            {selectedFile ? selectedFile.name : 'Tap to select file'}
+          </Text>
         </TouchableOpacity>
 
         {selectedFile && (
-          <View style={styles.fileInfo}>
-            <Text style={styles.infoText}>Selected File: {selectedFile.name}</Text>
-            <TouchableOpacity
-              style={[styles.button, styles.analyzeBtn]}
-              onPress={handleBeginAnalysis}
-              disabled={analyzing}
-            >
-              {analyzing ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.buttonText}>Begin Analysis</Text>
-              )}
-            </TouchableOpacity>
-          </View>
+          <TouchableOpacity
+            style={[styles.analyzeBtn, analyzing && styles.disabledBtn]}
+            onPress={handleBeginAnalysis}
+            disabled={analyzing}
+          >
+            {analyzing ? (
+              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                <ActivityIndicator color="#fff" style={{ marginRight: 10 }} />
+                <Text style={styles.btnText}>Processing (this may take 30s)...</Text>
+              </View>
+            ) : (
+              <Text style={styles.btnText}>Analyze & Generate AR</Text>
+            )}
+          </TouchableOpacity>
         )}
       </View>
 
-      <View style={styles.infoSection}>
-        <Text style={styles.sectionTitle}>Info</Text>
+      <View style={styles.infoBox}>
+        <Text style={styles.infoTitle}>💡 How it works</Text>
         <Text style={styles.infoText}>
-          Upload functionality is under development. Analysis will be connected to the backend in a later update.
+          1. Our AI scans your diagram.{'\n'}
+          2. It identifies components (Valves, Pumps, etc.).{'\n'}
+          3. It creates an interactive 3D board you can explore.
         </Text>
       </View>
     </ScrollView>
@@ -232,15 +209,17 @@ export default function UploadScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, alignItems: 'center', padding: 20, backgroundColor: '#f8f9fa' },
-  title: { fontSize: 24, fontWeight: 'bold', marginTop: 50, color: '#1c1c1e' },
-  subtitle: { fontSize: 15, color: '#6c757d', textAlign: 'center', marginVertical: 10, paddingHorizontal: 20 },
-  buttonContainer: { marginVertical: 40, width: '100%' },
-  button: { backgroundColor: '#007bff', paddingVertical: 15, paddingHorizontal: 30, borderRadius: 8, alignSelf: 'center' },
-  analyzeBtn: { backgroundColor: '#28a745', marginTop: 12 },
-  buttonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  infoSection: { width: '100%', marginTop: 30, paddingHorizontal: 10 },
-  sectionTitle: { fontSize: 20, fontWeight: '600', marginBottom: 10, color: '#1c1c1e' },
-  infoText: { fontSize: 15, color: '#6c757d', lineHeight: 22 },
-  fileInfo: { marginTop: 15, padding: 10, backgroundColor: '#e9ecef', borderRadius: 5, width: '100%' },
+  container: { flexGrow: 1, padding: 20, backgroundColor: '#F2F4F8' },
+  title: { fontSize: 28, fontWeight: '800', color: '#1A1A1A', marginTop: 20 },
+  subtitle: { fontSize: 16, color: '#666', marginTop: 10, marginBottom: 30, lineHeight: 22 },
+  card: { backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
+  uploadBox: { borderStyle: 'dashed', borderWidth: 2, borderColor: '#D1D1D6', borderRadius: 12, height: 150, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAFA' },
+  uploadIcon: { fontSize: 40, marginBottom: 10 },
+  uploadText: { fontSize: 16, color: '#333', fontWeight: '500' },
+  analyzeBtn: { backgroundColor: '#007AFF', borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginTop: 20 },
+  disabledBtn: { backgroundColor: '#A1A1A1' },
+  btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  infoBox: { marginTop: 30, padding: 20, backgroundColor: '#E3F2FD', borderRadius: 12 },
+  infoTitle: { fontSize: 16, fontWeight: '700', color: '#0D47A1', marginBottom: 8 },
+  infoText: { fontSize: 14, color: '#1565C0', lineHeight: 20 },
 });

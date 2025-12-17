@@ -1,113 +1,193 @@
 import os
 import logging
 from typing import Optional, Dict, Any
-
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from transformers import TextIteratorStreamer
+from threading import Thread
+import sys
+
 logger = logging.getLogger(__name__)
 
-MODEL_ID = "ibm-granite/granite-4.0-micro"
-# Mock mode ON by default. Set to False (or pass mock=False) to use real model.
-IS_MOCK = True
+# Use the exact ID from your snippet
+MODEL_ID = "ibm-granite/granite-3.1-1b-a400m-instruct"
+# MODEL_ID = "ibm-granite/granite-4.0-micro"
+IS_MOCK = False
 
-# _device = "cuda" if torch.cuda.is_available() else "cpu"
+# Smart Device Selection
+def get_device():
+    if torch.backends.mps.is_available():
+        return "mps"
+    elif torch.cuda.is_available():
+        return "cuda"
+    return "cpu"
 
+device = get_device()
 _tokenizer = None
 _model = None
 
 def _ensure_llm_loaded():
-	global _tokenizer, _model
-	if _tokenizer is not None and _model is not None:
-		logger.info('LLM model already loaded')
-		return
-	try:
-		_tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-		_model = AutoModelForCausalLM.from_pretrained(MODEL_ID, dtype="auto", device_map="auto")
-		logger.info('LLM model loaded successfully.')
-		# _model.to(_device)
-		_model.eval()
-	except Exception as e:
-		logger.error(f'LLM model load failed: {e}')
-		_tokenizer = None
-		_model = None
+    global _tokenizer, _model
+    if _tokenizer is not None and _model is not None:
+        return
+    try:
+        logger.info(f'Loading LLM model {MODEL_ID} on {device}...')
+        
+        # 1. Load Tokenizer
+        _tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+        
+        # 2. Load Model (Directly, mirroring your snippet)
+        # We add torch_dtype=float16 only for GPU/MPS to make it faster.
+        # CPU must use float32.
+        dtype = torch.float16 if device != "cpu" else torch.float32
+        
+        _model = AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            torch_dtype=dtype,
+            low_cpu_mem_usage=True
+        ).to(device)
+             
+        _model.eval()
+        logger.info(f'LLM loaded successfully on {device}.')
+        
+    except Exception as e:
+        logger.error(f'LLM load failed: {e}')
+        _tokenizer = None
+        _model = None
 
 def _is_mock(override: Optional[bool]) -> bool:
-	# Honor global mock switch or explicit override.
-	return IS_MOCK or (override is True)
+    return IS_MOCK or (override is True)
 
-def analyze_context(text_excerpt: str, vision: Dict[str, Any], mock: Optional[bool] = None, max_new_tokens: int = 320) -> dict:
-	"""
-	Combine document text (excerpt) with vision output to produce a synthesized analysis.
-	vision: { "vision_answer"?: str, "ar_elements"?: list, "meta"?: any }
-	Returns: { status: 'ok', answer: str, meta?: {...} } or { status: 'error', error: str }
-	"""
-	
+def _generate_response(messages, max_new_tokens=256):
+    """
+    Runs model generation with a Streamer to show progress in the terminal.
+    """
+    _ensure_llm_loaded()
+    if _model is None or _tokenizer is None:
+        raise Exception("LLM not initialized")
+
+    # 1. Prepare Inputs
+    inputs = _tokenizer.apply_chat_template(
+        messages,
+        add_generation_prompt=True,
+        tokenize=True,
+        return_dict=True,
+        return_tensors="pt"
+    ).to(_model.device)
+
+    # 2. Setup Streamer (This decodes tokens one by one)
+    streamer = TextIteratorStreamer(
+        _tokenizer, 
+        skip_prompt=True,       # Don't print the huge system prompt, just the new answer
+        skip_special_tokens=True
+    )
+
+    # 3. Configure Generation Arguments
+    generation_kwargs = dict(
+        inputs, 
+        streamer=streamer, 
+        max_new_tokens=max_new_tokens,
+        do_sample=True,
+        temperature=0.7,
+        # top_p=0.9,
+        # repetition_penalty=1.15,
+        eos_token_id=_tokenizer.eos_token_id
+    )
+
+    # 4. Run Generation in a Separate Thread
+    # We need a thread because .generate() blocks execution, but the streamer needs to read
+    # from it simultaneously.
+    thread = Thread(target=_model.generate, kwargs=generation_kwargs)
+    thread.start()
+
+    # 5. Consume the Stream (Print to Console & Build String)
+    generated_text = ""
+    print("\n--- AI IS THINKING ---")
     
-	try:
-		logger.info('Starting AI synthesis analysis')
-		vision_answer = (vision.get('vision_answer') or '').strip() if isinstance(vision, dict) else ''
-		ar_elements = vision.get('ar_elements') if isinstance(vision, dict) else None
-		ar_count = len(ar_elements) if isinstance(ar_elements, list) else 0
+    for new_text in streamer:
+        # Print to terminal immediately (flush ensures it appears instantly)
+        sys.stdout.write(new_text)
+        sys.stdout.flush()
+        generated_text += new_text
 
-		prompt = (
-			"You are an AI assistant synthesizing a technical document.\n"
-			"Given the text excerpt and the vision findings (objects/diagrams), produce:\n"
-			"1) A concise summary\n2) Key entities and relationships\n3) Detected components/diagrams and their roles\n"
-			"Be specific and structured.\n\n"
-			f"Text Excerpt:\n{text_excerpt[:4000]}\n\n"
-			f"Vision Findings Summary:\n{vision_answer[:1500]}\n\n"
-			f"AR Elements Count: {ar_count}\n"
-		)
+    print("\n----------------------\n")
+    
+    # Wait for thread to finish cleaning up
+    thread.join()
 
-		if _is_mock(mock):
-			logger.info('Returning mock AI synthesis response')
-			return {
-				'status': 'ok',
-				'answer': (
-					"[MOCK AI] Synthesized understanding based on provided text excerpt and vision output.\n"
-					"- Summary: The document covers key technical aspects and components.\n"
-					"- Entities/Relationships: Derived from text and visual elements.\n"
-					"- Visual Components: Interpreted from detected AR elements and vision summary."
-				),
-				'meta': {
-					'used_mock': True,
-					'ar_elements_count': ar_count
-				}
-			}
+    return generated_text.strip()
 
-		_ensure_llm_loaded()
-		if _model is None or _tokenizer is None:
-			return {'status': 'error', 'error': 'LLM not initialized. Check server logs for load errors.'}
+# --- 1. ANALYSIS / SUMMARY FUNCTION ---
+def analyze_context(text_excerpt: str, vision: Dict[str, Any], mock: Optional[bool] = None) -> dict:
+    if _is_mock(mock):
+        return {'status': 'ok', 'answer': "[MOCK] Document analyzed."}
 
-		input_ids = _tokenizer.encode(prompt, return_tensors='pt')  # removed .to(_device)
-		with torch.no_grad():
-			gen_ids = _model.generate(
-				input_ids,
-				max_new_tokens=max_new_tokens,
-				do_sample=True,
-				temperature=0.7,
-				top_p=0.9,
-				eos_token_id=_tokenizer.eos_token_id
-			)
+    try:
+        vision_summary = (vision.get('vision_answer') or '').strip() if isinstance(vision, dict) else ''
+        ar_elements = vision.get('ar_elements') if isinstance(vision, dict) else []
+        
+        # Build Context String
+        context_str = f"Document Text:\n{text_excerpt[:3000]}\n\nVisual Summary:\n{vision_summary[:1000]}\n\n"
+        
+        if ar_elements:
+            context_str += f"Diagram Components Detected ({len(ar_elements)}):\n"
+            for item in ar_elements[:15]:
+                context_str += f"- {item.get('label')}: {item.get('description', '')}\n"
 
-		logger.info('AI synthesis generation completed')
+        # Construct Chat Messages
+        messages = [
+            {"role": "system", "content": "You are a technical assistant. Summarize the provided document context, highlighting key components and their functions."},
+            {"role": "user", "content": f"Here is the data:\n{context_str}\n\nPlease provide a structured summary."},
+        ]
 
-		output = _tokenizer.decode(gen_ids[0], skip_special_tokens=True)
-		# Keep only the completion after the prompt if needed
-		answer = output[len(_tokenizer.decode(input_ids[0], skip_special_tokens=True)):]
-		answer = answer.strip() if answer else output.strip()
-		
-		logger.info('AI synthesis analysis completed successfully')
-		
-		return {
-			'status': 'ok',
-			'answer': answer,
-			'meta': {
-				'ar_elements_count': ar_count
-			}
-		}
-	except Exception as e:
-		logger.exception('AI synthesis failed')
-		return {'status': 'error', 'error': f'AI synthesis failed: {e}'}
+        logger.info("Generating summary...")
+        answer = _generate_response(messages, max_new_tokens=512)
+        return {'status': 'ok', 'answer': answer}
 
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        return {'status': 'error', 'error': str(e)}
+
+# --- 2. CHAT FUNCTION ---
+def chat_with_document(query: str, context: Dict[str, Any], chat_history: list = None, mock: Optional[bool] = None) -> dict:
+    if _is_mock(mock):
+        return {'status': 'ok', 'answer': f"[MOCK] You asked: {query}"}
+
+    try:
+        # Unpack Context
+        doc_text = context.get('text_excerpt', '')
+        vision_summary = context.get('vision_answer', '')
+        ar_elements = context.get('ar_elements', [])
+        focused_component = context.get('focused_component')
+
+        # Build Context Block
+        data_block = f"--- CONTEXT ---\nText: {doc_text[:2000]}\nVisuals: {vision_summary[:1000]}\n"
+        
+        if ar_elements:
+            data_block += "Interactive Components:\n" + "\n".join([f"- {i.get('label')}" for i in ar_elements[:10]]) + "\n"
+            
+        if focused_component:
+            data_block += f"\nUSER IS POINTING AT: {focused_component.get('label')} ({focused_component.get('description')})\n"
+
+        # Construct Chat Messages
+        messages = [
+            {"role": "system", "content": "You are a helpful expert. Answer the question based strictly on the provided context."},
+        ]
+        
+        # Add history if exists
+        if chat_history:
+            # You might need to map your frontend history format to {"role":, "content":}
+            # Assuming frontend sends [{role: "user", content: "..."}]
+            messages.extend(chat_history[-4:]) # Keep last 4 turns for context
+
+        # Current Turn
+        messages.append({"role": "user", "content": f"{data_block}\n\nQuestion: {query}"})
+
+        logger.info(f"Chat query: {query}")
+        answer = _generate_response(messages, max_new_tokens=256)
+        return {'status': 'ok', 'answer': answer}
+
+    except Exception as e:
+        logger.error(f"Chat failed: {e}")
+        return {'status': 'error', 'error': str(e)}

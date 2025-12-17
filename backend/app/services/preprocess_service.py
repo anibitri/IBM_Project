@@ -1,14 +1,16 @@
 import os
 import uuid
 import logging
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Tuple
 from PIL import Image
 from io import BytesIO
 
-from services.granite_vision_service import analyze_images  # use images-only analyzer
+# Services
+from services.granite_vision_service import analyze_images
 from services.granite_ai_service import analyze_context as ai_analyze
 from services.ar_service import extract_document_features
-from PyPDF2 import PdfReader  # for text and fallback image extraction
+# Updated import: PyPDF2 is deprecated, usage remains mostly the same
+from pypdf import PdfReader 
 
 logger = logging.getLogger(__name__)
 
@@ -29,28 +31,45 @@ def _save_pil_image(img: Image.Image, stem: str) -> str:
         logger.warning(f'Failed to save derived image: {e}')
         raise
 
-def _merge_ar_elements(paths: List[str]) -> List[Dict]:
-    merged = []
-    for p in paths:
-        try:
-            merged.extend(extract_document_features(p) or [])
-        except Exception as e:
-            logger.warning(f'AR extraction failed for {p}: {e}')
-    return merged
+def _process_single_image(img_path: str, mock: bool = False) -> Dict:
+    """
+    Helper to run the "Hybrid" AR flow on a single image path:
+    1. Get Image Dimensions (Vital for Unity AR scaling)
+    2. Granite Vision -> Finds Components & Bounding Boxes
+    3. SAM (AR Service) -> Uses Granite boxes as prompts to create perfect masks
+    """
+    try:
+        # 1. Load and Measure
+        with Image.open(img_path) as pil_img:
+            img = pil_img.convert('RGB')
+            width, height = img.size # Unity needs these to aspect-ratio match the 3D plane
 
-def _extract_pdf_text(file_path: str, max_chars: int = 12000) -> str:
-    """
-    Extract raw text from a PDF using PyPDF2. Returns possibly-empty string.
-    """
+        # 2. Granite Analysis (The "Brain")
+        # Ensure analyze_images returns a JSON with 'components' and 'bboxes'
+        vision_res = analyze_images([img], task="ar_extraction", mock=mock)
+        
+        # 3. AR Generation (The "Visuals")
+        # Pass the Granite 'components' (bboxes) into the AR service to guide SAM
+        ar_hints = vision_res.get('components', [])
+        ar_elems = extract_document_features(img_path, hints=ar_hints) or []
+
+        return {
+            'width': width,
+            'height': height,
+            'vision_response': vision_res,
+            'ar_elements': ar_elems
+        }
+    except Exception as e:
+        logger.error(f"Failed to process image {img_path}: {e}")
+        return {}
+
+def _extract_pdf_text(file_path: str, max_chars: int = 200000) -> str:
     try:
         reader = PdfReader(file_path)
         parts = []
         total = 0
         for page in reader.pages:
-            try:
-                txt = page.extract_text() or ""
-            except Exception:
-                txt = ""
+            txt = page.extract_text() or ""
             if txt:
                 parts.append(txt)
                 total += len(txt)
@@ -59,88 +78,61 @@ def _extract_pdf_text(file_path: str, max_chars: int = 12000) -> str:
         text = "\n".join(parts)
         return text[:max_chars]
     except Exception as e:
-        logger.warning(f'PDF text extraction failed via PyPDF2: {e}')
+        logger.warning(f'PDF text extraction failed: {e}')
         return ""
 
 def _extract_images_from_pdf(file_path: str, max_pages: int = 5, max_images: int = 6) -> List[Image.Image]:
     """
-    Extract embedded images from a PDF without poppler/pdf2image.
-    - Tries PyMuPDF (fitz) first; falls back to PyPDF2 XObject traversal.
-    Returns a list of PIL.Image.
+    Refined extraction. 
+    Note: For AR, usually we want to render the *whole page* as an image 
+    rather than extracting embedded images, but sticking to your current logic for now.
     """
     images: List[Image.Image] = []
+    
+    # Try PyMuPDF (fitz) first - superior for image handling
     try:
-        import fitz  # PyMuPDF
+        import fitz 
         doc = fitz.open(file_path)
         for page_index in range(min(len(doc), max_pages)):
             page = doc.load_page(page_index)
-            for img in page.get_images(full=True):
-                xref = img[0]
-                try:
-                    base = doc.extract_image(xref)
-                    img_bytes = base.get("image", None)
-                    if not img_bytes:
-                        continue
-                    pil_img = Image.open(BytesIO(img_bytes)).convert('RGB')
+            # Only grab large images likely to be diagrams (ignore icons)
+            image_list = page.get_images(full=True)
+            for img_info in image_list:
+                xref = img_info[0]
+                base = doc.extract_image(xref)
+                img_bytes = base["image"]
+                pil_img = Image.open(BytesIO(img_bytes)).convert('RGB')
+                
+                # Filter small icons
+                if pil_img.width > 200 and pil_img.height > 200:
                     images.append(pil_img)
-                    if len(images) >= max_images:
-                        break
-                except Exception as e:
-                    logger.debug(f'PyMuPDF image extract failed on page {page_index}, xref {xref}: {e}')
-            if len(images) >= max_images:
-                break
+                
+                if len(images) >= max_images: break
+            if len(images) >= max_images: break
         doc.close()
-        if images:
-            logger.info(f'Extracted {len(images)} embedded images via PyMuPDF.')
-            return images
+        if images: return images
+    except ImportError:
+        logger.info("PyMuPDF not found, falling back to pypdf.")
     except Exception as e:
-        logger.debug(f'PyMuPDF not available or failed: {e}')
+        logger.debug(f'PyMuPDF extraction failed: {e}')
 
-    # PyPDF2 fallback
+    # pypdf Fallback
     try:
         reader = PdfReader(file_path)
-        for page_i, page in enumerate(reader.pages[:max_pages]):
-            try:
-                resources = page.get("/Resources")
-                if not resources:
-                    continue
-                xobjects = resources.get("/XObject")
-                if not xobjects:
-                    continue
-                for name, xobj in xobjects.items():
-                    try:
-                        obj = xobj.get_object()
-                        subtype = obj.get("/Subtype")
-                        if subtype and subtype == "/Image":
-                            data = obj.get_data()
-                            pil_img = None
-                            # Best-effort decodes
-                            try:
-                                pil_img = Image.open(BytesIO(data)).convert('RGB')
-                            except Exception:
-                                pil_img = None
-                            if pil_img:
-                                images.append(pil_img)
-                                if len(images) >= max_images:
-                                    break
-                    except Exception as e:
-                        logger.debug(f'PyPDF2 XObject image extract failed: {e}')
-            except Exception as e:
-                logger.debug(f'PyPDF2 page parse failed: {e}')
-        if images:
-            logger.info(f'Extracted {len(images)} embedded images via PyPDF2 fallback.')
+        for page in reader.pages[:max_pages]:
+            for image_file_object in page.images:
+                try:
+                    pil_img = Image.open(BytesIO(image_file_object.data)).convert('RGB')
+                    if pil_img.width > 200: 
+                        images.append(pil_img)
+                    if len(images) >= max_images: break
+                except Exception: continue
     except Exception as e:
-        logger.debug(f'PyPDF2 image extraction failed: {e}')
+        logger.debug(f'pypdf image extraction failed: {e}')
 
     return images
 
 def preprocess_document(file_path: str, mock: Optional[bool] = None) -> Dict:
-    """
-    Orchestrate preprocessing:
-    - Image: Vision -> AR -> AI (with vision + optional text from vision)
-    - PDF: Text extraction -> AI (initial) -> Image extraction -> Vision per image -> AR -> AI (final)
-    Returns a structured dict describing the pipeline outputs.
-    """
     try:
         logger.info(f'Starting preprocessing for document: {file_path}')
         ext = os.path.splitext(file_path)[1].lower()
@@ -152,80 +144,70 @@ def preprocess_document(file_path: str, mock: Optional[bool] = None) -> Dict:
 
         if is_image:
             logger.info('Processing as image document')
-            # Load single image and analyze
-            img = Image.open(file_path).convert('RGB')
-            logger.info('Starting vision analysis on image')
-            vision_res = analyze_images([img], mock=mock)
-            logger.info('Vision analysis completed.')
-            ar_elems = []
-            try:
-                ar_elems = extract_document_features(file_path) or []
-            except Exception as e:
-                logger.warning(f'AR extraction on image failed: {e}')
-
-            text_excerpt = vision_res.get('text_excerpt') or ""  # if provided by upstream model
+            
+            # Use the new helper to get dimensions + Hybrid AR analysis
+            processed_data = _process_single_image(file_path, mock=mock)
+            
+            vision_res = processed_data.get('vision_response', {})
+            ar_elems = processed_data.get('ar_elements', [])
+            
+            # Pass both text AND spatial context to the final AI summary
             vision_ctx = {
                 'vision_answer': vision_res.get('answer') or "",
-                'ar_elements': ar_elems
+                'ar_elements': ar_elems, # AI now knows what AR found
+                'components': vision_res.get('components', []) # AI knows component names
             }
+            
+            text_excerpt = vision_res.get('text_excerpt') or ""
             ai_res = ai_analyze(text_excerpt=text_excerpt, vision=vision_ctx, mock=mock)
 
             return {
                 'status': 'ok',
                 'kind': 'image',
+                'meta': {
+                    'width': processed_data.get('width'),
+                    'height': processed_data.get('height')
+                },
                 'vision': vision_res,
                 'ar': { 'status': 'ok', 'elements': ar_elems },
                 'ai': ai_res
             }
 
         if is_pdf:
-            # 1) Text extraction
-            logger.info('Starting PDF text extraction')
-            text = _extract_pdf_text(file_path) or ""
-            logger.info(f'Extracted {len(text)} characters of text from PDF.')
+            # 1. Text Extraction
+            text = _extract_pdf_text(file_path)
 
-            # 2) Initial AI on text-only
-            logger.info('Starting initial AI synthesis on extracted text')
+            # 2. Initial AI
             ai_initial = ai_analyze(text_excerpt=text, vision={}, mock=mock)
-            logger.info('Initial AI synthesis completed.')
 
-            # 3) Extract embedded images (no poppler)
-            logger.info('Starting embedded image extraction from PDF')
-            extracted_imgs = _extract_images_from_pdf(file_path, max_pages=5, max_images=6) or []
-            logger.info(f'Extracted {len(extracted_imgs)} images from PDF for vision analysis.')
-
-            # Save and analyze each image
-            saved_paths: List[str] = []
+            # 3. Image Extraction & Hybrid Analysis
+            extracted_imgs = _extract_images_from_pdf(file_path)
+            per_image_results = []
+            
+            all_ar_elems = []
+            
             for img in extracted_imgs:
-                try:
-                    saved_paths.append(_save_pil_image(img, stem=os.path.splitext(os.path.basename(file_path))[0]))
-                except Exception:
-                    continue
+                saved_path = _save_pil_image(img, stem=os.path.splitext(os.path.basename(file_path))[0])
+                
+                # Run the full Hybrid flow on this extracted image
+                p_data = _process_single_image(saved_path, mock=mock)
+                
+                per_image_results.append({
+                    'path': saved_path,
+                    'meta': {'width': p_data.get('width'), 'height': p_data.get('height')},
+                    'vision': p_data.get('vision_response'),
+                    'ar': p_data.get('ar_elements')
+                })
+                all_ar_elems.extend(p_data.get('ar_elements', []))
 
-            per_image_vision = []
-            for img_path in saved_paths:
-                try:
-                    pil = Image.open(img_path).convert('RGB')
-                    per_image_vision.append({
-                        'path': img_path,
-                        'analysis': analyze_images([pil], mock=mock)
-                    })
-                except Exception as e:
-                    logger.warning(f'Vision analysis failed for derived image {img_path}: {e}')
-
-            # 4) AR on derived images
-            ar_elems = _merge_ar_elements(saved_paths)
-
-            # 5) Final AI synthesis using text + concatenated vision summaries
-            vision_summary = "\n\n".join(
-                (v.get('analysis', {}) or {}).get('answer', '')
-                for v in per_image_vision
-                if isinstance(v, dict)
-            )[:3000]
+            # 4. Final AI Summary
+            vision_summary = "\n".join(
+                res['vision'].get('answer', '') for res in per_image_results if res['vision']
+            )
 
             ai_final = ai_analyze(
                 text_excerpt=text,
-                vision={ 'vision_answer': vision_summary, 'ar_elements': ar_elems },
+                vision={ 'vision_answer': vision_summary, 'ar_elements': all_ar_elems },
                 mock=mock
             )
 
@@ -233,8 +215,7 @@ def preprocess_document(file_path: str, mock: Optional[bool] = None) -> Dict:
                 'status': 'ok',
                 'kind': 'pdf',
                 'text_chars': len(text),
-                'vision_per_image': per_image_vision,
-                'ar': { 'status': 'ok', 'elements': ar_elems },
+                'vision_per_image': per_image_results,
                 'ai_initial': ai_initial,
                 'ai_final': ai_final
             }

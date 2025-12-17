@@ -1,44 +1,50 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-from routes.upload_route import upload_bp
-from routes.ar_routes import ar_bp
-from routes.vision_routes import vision_bp
-from routes.ai_routes import ai_bp  # added
 import os
 import logging
+from flask import Flask, request, jsonify, send_from_directory
+from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
-from transformers import pipeline
-# Force mock mode by default. Uncomment and set to "0" to test real services.
-os.environ["GRANITE_MOCK"] = "1"
-from services.granite_ai_service import _ensure_llm_loaded  # added
-from services.granite_vision_service import _ensure_model_loaded as _ensure_vision_model_loaded  # added
+
+# --- ROUTES ---
+# Ensure filenames match these imports!
+# If your file is named 'upload_route.py', change this back to 'routes.upload_route'
+from routes.upload_route import upload_bp 
+from routes.ar_routes import ar_bp
+from routes.vision_routes import vision_bp
+from routes.ai_routes import ai_bp
+
+# --- SERVICES (For Preloading) ---
+from services.granite_ai_service import _ensure_llm_loaded
+from services.granite_vision_service import _ensure_model_loaded as _ensure_vision_model_loaded
+# Import SAM loader to warm it up on startup
+try:
+    from services.ar_service import _get_sam_model 
+except ImportError:
+    _get_sam_model = None
+
+# --- CONFIGURATION ---
+# Force mock mode by default. Change to "0" to use real AI models.
+os.environ["GRANITE_MOCK"] = "0"
 
 app = Flask(__name__)
-CORS(app)
-
+CORS(app) # Enable CORS for React Frontend
 
 def configure_logging(app: Flask):
-    # Set root logging level
     logging.basicConfig(level=logging.INFO)
-    # Configure Flask app logger
     app.logger.setLevel(logging.DEBUG if app.debug else logging.INFO)
+    
     if not app.logger.handlers:
         handler = logging.StreamHandler()
         handler.setFormatter(logging.Formatter(
             '[%(asctime)s] %(levelname)s in %(name)s: %(message)s'
         ))
         app.logger.addHandler(handler)
-    # Werkzeug (HTTP access) logger
-    wlog = logging.getLogger('werkzeug')
-    wlog.setLevel(logging.INFO)
-    # Ensure warnings are captured
+    
+    logging.getLogger('werkzeug').setLevel(logging.INFO)
     logging.captureWarnings(True)
-    # Propagate exceptions for better visibility
-    app.config['PROPAGATE_EXCEPTIONS'] = True
 
 configure_logging(app)
 
-# Basic request logging
+# --- MIDDLEWARE ---
 @app.before_request
 def _log_request():
     app.logger.info(f'{request.method} {request.path} from {request.remote_addr}')
@@ -48,7 +54,6 @@ def _log_response(response):
     app.logger.info(f'{request.method} {request.path} -> {response.status_code}')
     return response
 
-# Log any uncaught exceptions with stack trace
 @app.errorhandler(Exception)
 def handle_exception(e):
     if isinstance(e, HTTPException):
@@ -57,17 +62,39 @@ def handle_exception(e):
     app.logger.exception('Unhandled exception')
     return jsonify({'status': 'error', 'error': 'Internal server error'}), 500
 
+# --- CRITICAL: STATIC FILE SERVING ---
+# This allows React to load the uploaded images as textures
+@app.route('/static/<path:path>')
+def serve_static(path):
+    return send_from_directory('static', path)
+
+# --- BLUEPRINTS ---
 app.register_blueprint(upload_bp, url_prefix='/api/upload')
 app.register_blueprint(ar_bp, url_prefix='/api/ar')
 app.register_blueprint(vision_bp, url_prefix='/api/vision')
-app.register_blueprint(ai_bp, url_prefix='/api/ai')  # added
+app.register_blueprint(ai_bp, url_prefix='/api/ai')
 
+# --- MAIN ENTRY POINT ---
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '4200'))
     app.logger.info(f'Starting server on 0.0.0.0:{port}')
-    # Using mock mode; models are not loaded. To test real services:
-    # 1) change the env to "0": os.environ["GRANITE_MOCK"] = "0"
-    # 2) uncomment the two lines below to preload models at server start
-    # _ensure_llm_loaded()
-    # _ensure_vision_model_loaded()
+
+    # --- MODEL PRELOADING ---
+    # Only preload if we are NOT in mock mode
+    if os.environ.get("GRANITE_MOCK") == "0":
+        app.logger.info("Warm-up: Loading Granite AI...")
+        _ensure_llm_loaded()
+        
+        app.logger.info("Warm-up: Loading Granite Vision...")
+        _ensure_vision_model_loaded()
+        
+        if _get_sam_model:
+            app.logger.info("Warm-up: Loading SAM (AR Model)...")
+            try:
+                _get_sam_model() # Triggers the lazy load
+            except Exception as e:
+                app.logger.warning(f"SAM preload failed (non-fatal): {e}")
+    else:
+        app.logger.info("Skipping model warm-up (Mock Mode Enabled)")
+
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
