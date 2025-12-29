@@ -6,11 +6,11 @@ import logging
 from PIL import Image # Needed for the standalone /process route
 
 # Import the main orchestrator (Primary Method)
-from services.preprocess_service import preprocess_document
+from app.services.preprocess_service import preprocess_document
 
 # Imports for the standalone /process route (Secondary Method)
-from services.ar_service import extract_document_features
-from services.granite_vision_service import analyze_images
+from app.services.ar_service import extract_document_features
+from app.services.granite_vision_service import analyze_images
 
 upload_bp = Blueprint('upload', __name__)
 

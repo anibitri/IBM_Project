@@ -2,7 +2,7 @@ from flask import Blueprint, request, jsonify
 import os
 import logging
 # Import the centralized orchestrator
-from services.preprocess_service import preprocess_document  
+from app.services.preprocess_service import preprocess_document  
 
 vision_bp = Blueprint('vision', __name__)
 

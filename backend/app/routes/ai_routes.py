@@ -4,7 +4,7 @@ import logging
 # Updated Import: Use pypdf instead of deprecated PyPDF2
 from pypdf import PdfReader 
 
-from services.granite_ai_service import analyze_context as ai_analyze
+from app.services.granite_ai_service import analyze_context as ai_analyze
 
 ai_bp = Blueprint('ai', __name__)
 logger = logging.getLogger(__name__)
@@ -117,7 +117,7 @@ def analyze():
 
 # ... (Keep existing imports) ...
 # Import the new function
-from services.granite_ai_service import analyze_context as ai_analyze, chat_with_document
+from app.services.granite_ai_service import analyze_context as ai_analyze, chat_with_document
 # --- 2. NEW CHAT ROUTE (Add this) ---
 @ai_bp.route('/ask', methods=['POST'])
 def ask():

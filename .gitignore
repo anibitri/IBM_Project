@@ -29,8 +29,12 @@ backend/app/services/__pycache__/
 backend/app/services/*.pyc
 backend/routes/__pycache__/
 backend/routes/*.pyc
+backend/app/static/
+mobile_sam.pt
+*.png
 .DS_Store
 
 __pycache__/
 
 
+venv/

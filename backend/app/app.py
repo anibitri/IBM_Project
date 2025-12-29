@@ -4,30 +4,32 @@ from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
-# --- ROUTES ---
-# Ensure filenames match these imports!
-# If your file is named 'upload_route.py', change this back to 'routes.upload_route'
+# 1. FORCE CACHE LOCATION (Crucial for your setup)
+os.environ['HF_HOME'] = r'G:\AI_Models'
+
+# 2. CONFIGURATION
+# Set to "0" to use real AI models. Set to "1" for Mock mode (fake data).
+os.environ["GRANITE_MOCK"] = "0"
+
+# 3. IMPORT ROUTES
+# Ensure these filenames match your actual file structure in /routes/
 from routes.upload_route import upload_bp 
 from routes.ar_routes import ar_bp
 from routes.vision_routes import vision_bp
 from routes.ai_routes import ai_bp
 
-# --- SERVICES (For Preloading) ---
-from services.granite_ai_service import _ensure_llm_loaded
-from services.granite_vision_service import _ensure_model_loaded as _ensure_vision_model_loaded
-# Import SAM loader to warm it up on startup
+# 4. IMPORT MODEL MANAGER (Triggers Initialization)
+# This automatically loads the models into RAM when the app starts.
 try:
-    from services.ar_service import _get_sam_model 
+    from services.model_manager import manager
 except ImportError:
-    _get_sam_model = None
-
-# --- CONFIGURATION ---
-# Force mock mode by default. Change to "0" to use real AI models.
-os.environ["GRANITE_MOCK"] = "0"
+    # Fallback if specific libraries aren't installed yet
+    manager = None 
 
 app = Flask(__name__)
 CORS(app) # Enable CORS for React Frontend
 
+# --- LOGGING SETUP ---
 def configure_logging(app: Flask):
     logging.basicConfig(level=logging.INFO)
     app.logger.setLevel(logging.DEBUG if app.debug else logging.INFO)
@@ -62,13 +64,13 @@ def handle_exception(e):
     app.logger.exception('Unhandled exception')
     return jsonify({'status': 'error', 'error': 'Internal server error'}), 500
 
-# --- CRITICAL: STATIC FILE SERVING ---
-# This allows React to load the uploaded images as textures
+# --- STATIC FILE SERVING ---
+# Allows React/Frontend to access uploaded images
 @app.route('/static/<path:path>')
 def serve_static(path):
     return send_from_directory('static', path)
 
-# --- BLUEPRINTS ---
+# --- REGISTER BLUEPRINTS ---
 app.register_blueprint(upload_bp, url_prefix='/api/upload')
 app.register_blueprint(ar_bp, url_prefix='/api/ar')
 app.register_blueprint(vision_bp, url_prefix='/api/vision')
@@ -77,24 +79,14 @@ app.register_blueprint(ai_bp, url_prefix='/api/ai')
 # --- MAIN ENTRY POINT ---
 if __name__ == '__main__':
     port = int(os.getenv('PORT', '4200'))
-    app.logger.info(f'Starting server on 0.0.0.0:{port}')
+    
+    app.logger.info(f'--- STARTING SERVER on Port {port} ---')
+    app.logger.info(f'--- MODE: {"REAL AI" if os.environ["GRANITE_MOCK"] == "0" else "MOCK"} ---')
 
-    # --- MODEL PRELOADING ---
-    # Only preload if we are NOT in mock mode
-    if os.environ.get("GRANITE_MOCK") == "0":
-        app.logger.info("Warm-up: Loading Granite AI...")
-        _ensure_llm_loaded()
-        
-        app.logger.info("Warm-up: Loading Granite Vision...")
-        _ensure_vision_model_loaded()
-        
-        if _get_sam_model:
-            app.logger.info("Warm-up: Loading SAM (AR Model)...")
-            try:
-                _get_sam_model() # Triggers the lazy load
-            except Exception as e:
-                app.logger.warning(f"SAM preload failed (non-fatal): {e}")
+    if manager:
+        app.logger.info("✅ Model Manager loaded. AI Models are ready in RAM.")
     else:
-        app.logger.info("Skipping model warm-up (Mock Mode Enabled)")
+        app.logger.warning("⚠️ Model Manager not found. AI features may fail.")
 
+    # use_reloader=False prevents the app from loading twice (saving RAM)
     app.run(host='0.0.0.0', port=port, debug=True, use_reloader=False)
