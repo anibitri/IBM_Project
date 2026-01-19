@@ -5,7 +5,7 @@ import json # Added to pretty-print
 
 # CONFIG
 BASE_URL = "http://127.0.0.1:4200/api"
-SERVER_EXPECTED_DIR = r"G:\IBM_Project\backend\app\static\uploads"
+SERVER_EXPECTED_DIR = r"backend\app\static\uploads"
 KNOWN_FILE_NAME = "labeled_schematic.png" 
 
 def visualize_ar():

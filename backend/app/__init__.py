@@ -5,7 +5,6 @@ from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
 
 # 1. FORCE CACHE LOCATION (Global Config)
-os.environ['HF_HOME'] = r'G:\AI_Models'
 os.environ["GRANITE_MOCK"] = "0"
 
 def create_app():
