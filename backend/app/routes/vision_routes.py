@@ -14,6 +14,8 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 # Allowed extensions (mirror upload_route)
 _ALLOWED_EXTS = {'.pdf', '.png', '.jpg', '.jpeg', '.bmp', '.gif', '.webp'}
 
+logger = logging.getLogger(__name__)
+
 def _safe_under_uploads(path: str) -> bool:
     """
     Security check to prevent path traversal attacks (e.g. ../../etc/passwd)
@@ -24,8 +26,6 @@ def _safe_under_uploads(path: str) -> bool:
         return os.path.commonpath([real_path, real_upload]) == real_upload
     except Exception:
         return False
-
-logger = logging.getLogger(__name__)
 
 @vision_bp.route('/analyze', methods=['POST'])
 def analyze():
@@ -79,41 +79,46 @@ def analyze():
         return jsonify({'status': 'error', 'error': 'File not found'}), 404
 
     # 3. Run Centralized Preprocessing (Vision + AR + AI)
-    # Note: We do not pass 'prompt' here because the AR pipeline requires specific internal prompts.
     try:
         pre = preprocess_document(file_path, mock=mock)
     except Exception as e:
         logger.exception("Preprocessing failed during /analyze")
         return jsonify({'status': 'error', 'error': str(e)}), 500
 
-    ok = pre.get('status') == 'ok'
+    ok = pre.get('status') == 'success' or pre.get('status') == 'ok'
     status_code = 200 if ok else 500
 
-    # 4. Construct Response (Backward Compatibility + New AR Fields)
+    # 4. Construct Response (RESTORED LOGIC)
+    # This logic bubbles up specific data based on whether it's a PDF or Image
+    
     analysis_payload = {'status': 'error', 'error': 'No analysis available'}
     ar_payload = {'status': 'error', 'error': 'No AR elements'}
+    
+    # Grab AI result from various possible keys
     ai_payload = pre.get('ai') or pre.get('ai_final') or pre.get('ai_initial') or {'status': 'error', 'error': 'No AI result'}
     
-    # Metadata is crucial for the React 3D Viewer (Aspect Ratio)
+    # Metadata for Frontend 3D Viewer (Aspect Ratio, etc.)
     file_meta = {}
 
-    kind = pre.get('kind')
+    kind = pre.get('type') or pre.get('kind')
     
     if kind == 'image':
         # For images, Vision is the primary analysis
-        analysis_payload = pre.get('vision') or analysis_payload
-        ar_payload = pre.get('ar') or ar_payload
+        # Note: In the new service, we might return 'vision_data' or 'ai_summary' inside 'pre'
+        if 'ai_summary' in pre:
+             analysis_payload = {'summary': pre['ai_summary']}
         
-        # Bubbling up dimensions for frontend convenience
+        ar_payload = pre.get('ar') or ar_payload
         if 'meta' in pre:
-            file_meta = pre['meta'] # contains width/height
+            file_meta = pre['meta'] 
 
     elif kind == 'pdf':
         # For PDFs, the Final AI Summary is the primary analysis
-        if pre.get('ai_final'):
+        if pre.get('ai_summary'):
+            analysis_payload = {'summary': pre['ai_summary']}
+        elif pre.get('ai_final'):
             analysis_payload = pre['ai_final']
-        elif pre.get('ai_initial'):
-            analysis_payload = pre['ai_initial']
+        
         ar_payload = pre.get('ar') or ar_payload
 
     return jsonify({

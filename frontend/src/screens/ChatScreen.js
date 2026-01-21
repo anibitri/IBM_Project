@@ -1,335 +1,348 @@
-import React from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator } from 'react-native';
+import React, { useState, useRef, useEffect } from 'react';
+import { 
+  View, Text, StyleSheet, TouchableOpacity, Modal, TextInput, 
+  KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator, SafeAreaView, Alert, TouchableWithoutFeedback 
+} from 'react-native';
 import { useHistory } from '../context/HistoryContext';
 
+// 🛑 IMPORTANT: Do NOT put 'async' here. It must be a standard function.
 export default function ChatScreen({ route, navigation }) {
-  // Replace direct destructure so we can try optional context methods later
-  const historyCtx = useHistory();
-  const { history } = historyCtx;
-  const docId = route?.params?.docId;
-  const selected = Array.isArray(history) ? history.find((item) => item?.id === docId) : undefined;
+  
+  // --- 1. ALWAYS CALL HOOKS FIRST (To prevent "Should have a queue" error) ---
+  
+  const { history, addHistoryItem, addMessageToItem, updateHistoryItem } = useHistory();
+  
+  // Local State
+  const [inputText, setInputText] = useState('');
+  const [sending, setSending] = useState(false);
+  const [historyVisible, setHistoryVisible] = useState(false);
+  const [menuVisible, setMenuVisible] = useState(false);
+  const [isRenaming, setIsRenaming] = useState(false);
+  const [renameText, setRenameText] = useState('');
+  
+  const scrollRef = useRef(null);
 
-  // Menu-like modal for switching conversations
-  const [historyVisible, setHistoryVisible] = React.useState(false);
-  const openHistory = () => setHistoryVisible(true);
-  const closeHistory = () => setHistoryVisible(false);
-  const handleSelect = (item) => {
-    navigation.setParams({ docId: item?.id });
-    closeHistory();
-  };
+  // --- 2. CALCULATE VARIABLES AFTER HOOKS ---
 
-  // Chat state: per-doc threads and input
-  const [messagesByDoc, setMessagesByDoc] = React.useState({});
-  const [inputText, setInputText] = React.useState('');
-  const [sending, setSending] = React.useState(false);
+  const routeDocId = route?.params?.docId;
+  // Safety check: Make sure history is an array before using .find()
+  const safeHistory = Array.isArray(history) ? history : [];
+  
+  const activeItem = safeHistory.find((item) => item.id === routeDocId) || safeHistory[0];
+  const activeId = activeItem?.id;
 
-  const docKey = docId ?? 'global';
-  const messages = messagesByDoc[docKey] ?? [];
+  // --- 3. EFFECTS ---
 
-  const appendMessage = (key, msg) =>
-    setMessagesByDoc((prev) => ({ ...prev, [key]: [...(prev[key] ?? []), msg] }));
+  useEffect(() => {
+    // Scroll to bottom when messages change
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 100);
+  }, [activeItem?.messages, activeId]);
 
-  // Try calling a context method if present (no-op if not provided)
-  const tryCall = (fn, ...args) => {
-    if (typeof fn === 'function') {
-      try { return fn(...args); } catch (_) {}
-    }
-    return undefined;
-  };
+  // --- 4. ACTIONS ---
 
-  // Create a new conversation and try to add it to history if the context supports it
-  const createNewConversation = (nameHint) => {
-    const id = `chat-${Date.now()}`;
-    const item = {
-      id,
-      name: nameHint || 'New chat',
-      type: 'chat',
-      createdAt: Date.now(),
-      // Optional fields some contexts might store:
-      // messages: [],
-      // attachments: [],
-      // lastActivityAt: Date.now(),
-    };
-    // Try a few common method names; ignore if none exist
-    tryCall(historyCtx?.addHistoryItem, item)
-      ?? tryCall(historyCtx?.addHistory, item)
-      ?? tryCall(historyCtx?.add, item)
-      ?? tryCall(historyCtx?.upsertHistoryItem, item)
-      ?? tryCall(historyCtx?.upsert, item);
-    navigation.setParams({ docId: id });
-    return id;
-  };
-
-  // Ensure we have a conversation id; create one if not
-  const ensureConversationId = (nameHint) => {
-    if (docId) return docId;
-    const newId = createNewConversation(nameHint);
+  const createNewSession = (type = 'chat', name = 'New Chat') => {
+    const newId = `session-${Date.now()}`;
+    addHistoryItem({
+      id: newId,
+      name: name,
+      type: type,
+      messages: [],
+    });
+    navigation.setParams({ docId: newId });
+    setHistoryVisible(false);
     return newId;
   };
 
-  // Placeholder reply (replace with backend call later)
-  const mockReply = async (userMsg, context) => {
-    await new Promise((r) => setTimeout(r, 600));
-    const ctx = context?.name ? ` about "${context.name}"` : '';
-    return `Acknowledged${ctx}. You said: "${userMsg.text}". This is a placeholder response.`;
+  const handleActionRequest = (actionType) => {
+    setMenuVisible(false); 
+    
+    Alert.alert(
+      `Start New ${actionType}?`,
+      `This will create a new chat session for your ${actionType.toLowerCase()}ed item.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        { 
+          text: "Continue", 
+          onPress: () => {
+            const newId = createNewSession(actionType.toLowerCase(), `New ${actionType}...`);
+            if(actionType === 'Upload') navigation.navigate('Upload', { docId: newId });
+            if(actionType === 'Scan') navigation.navigate('Scan', { docId: newId });
+          }
+        }
+      ]
+    );
   };
 
+  const switchConversation = (item) => {
+    navigation.setParams({ docId: item.id });
+    setHistoryVisible(false);
+  };
+
+  // Rename Logic
+  const handleStartRename = () => {
+    if (!activeItem) return;
+    setRenameText(activeItem.name);
+    setIsRenaming(true);
+  };
+
+  const handleFinishRename = () => {
+    if (activeId && renameText.trim()) {
+      updateHistoryItem(activeId, { name: renameText.trim() });
+    }
+    setIsRenaming(false);
+  };
+
+  // Send Logic
   const handleSend = async () => {
     const text = inputText.trim();
     if (!text || sending) return;
 
-    // Ensure this message belongs to a concrete conversation (not the 'global' key)
-    const useId = ensureConversationId();
+    let currentId = activeId;
+    if (!currentId) {
+      currentId = createNewSession('chat', 'New Conversation');
+    }
+
+    setSending(true);
+    setInputText('');
+    setMenuVisible(false);
 
     const userMsg = { id: `u-${Date.now()}`, role: 'user', text, createdAt: Date.now() };
-    appendMessage(useId, userMsg);
-    setInputText('');
-    setSending(true);
-
-    // Try to update lastActivity if supported by context
-    tryCall(historyCtx?.updateHistoryItem, useId, { lastActivityAt: Date.now() })
-      ?? tryCall(historyCtx?.update, useId, { lastActivityAt: Date.now() });
+    addMessageToItem(currentId, userMsg);
 
     try {
-      const current = Array.isArray(history) ? history.find((h) => h?.id === useId) : undefined;
-      const replyText = await mockReply(userMsg, current);
-      const botMsg = { id: `a-${Date.now()}`, role: 'assistant', text: replyText, createdAt: Date.now() };
-      appendMessage(useId, botMsg);
-      tryCall(historyCtx?.updateHistoryItem, useId, { lastActivityAt: Date.now() })
-        ?? tryCall(historyCtx?.update, useId, { lastActivityAt: Date.now() });
+      // Mock API call
+      await new Promise(r => setTimeout(r, 800)); 
+      const botMsg = { 
+        id: `b-${Date.now()}`, 
+        role: 'assistant', 
+        text: `I received your message regarding "${activeItem?.name || 'this document'}".`, 
+        createdAt: Date.now() 
+      };
+      addMessageToItem(currentId, botMsg);
+    } catch (err) {
+      console.error(err);
     } finally {
       setSending(false);
     }
   };
 
-  // Trigger Upload/Scan from the chat, associated with the current conversation
-  const handleUploadFromChat = () => {
-    const useId = ensureConversationId('Untitled chat');
-    navigation.navigate('Upload', { docId: useId });
-  };
-  const handleScanFromChat = () => {
-    const useId = ensureConversationId('Untitled chat');
-    navigation.navigate('Scan', { docId: useId });
-  };
-
-  // Ref for auto-scrolling the message list
-  const scrollRef = React.useRef(null);
+  // --- 5. RENDER ---
 
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={80}
-    >
-      {/* History menu button */}
-      <View style={styles.menuWrapper}>
-        <TouchableOpacity style={styles.historyButton} onPress={openHistory}>
-          <Text style={styles.historyButtonText}>History</Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* Messages list (replaced FlatList with ScrollView) */}
-      <ScrollView
-        ref={scrollRef}
-        style={styles.messagesList}
-        contentContainerStyle={styles.messagesContent}
-        onContentSizeChange={() => scrollRef.current?.scrollToEnd({ animated: true })}
-        onLayout={() => scrollRef.current?.scrollToEnd({ animated: false })}
+    <SafeAreaView style={styles.container}>
+      <KeyboardAvoidingView
+        style={{ flex: 1 }}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        keyboardVerticalOffset={Platform.OS === 'ios' ? 60 : 0}
       >
-        <View style={{ marginBottom: 8 }}>
-          {selected ? (
-            <Text style={styles.contextText}>Chatting about: {selected.name}</Text>
-          ) : (
-            <Text style={styles.contextText}>No document selected.</Text>
-          )}
-        </View>
-
-        {messages.map((item) => {
-          const isUser = item.role === 'user';
-          return (
-            <View key={String(item.id)} style={[styles.msgRow, isUser ? { justifyContent: 'flex-end' } : { justifyContent: 'flex-start' }]}>
-              <View style={[styles.msgBubble, isUser ? styles.msgUser : styles.msgAssistant]}>
-                <Text style={[styles.msgText, isUser ? { color: '#fff' } : null]}>{item.text}</Text>
-              </View>
-            </View>
-          );
-        })}
-      </ScrollView>
-
-      {/* Input bar with Upload/Scan actions */}
-      <View style={styles.inputBar}>
-        <TouchableOpacity style={styles.actionButton} onPress={handleUploadFromChat}>
-          <Text style={styles.actionButtonText}>Upload</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.actionButton} onPress={handleScanFromChat}>
-          <Text style={styles.actionButtonText}>Scan</Text>
-        </TouchableOpacity>
-
-        <TextInput
-          style={styles.input}
-          placeholder="Type a message"
-          value={inputText}
-          onChangeText={setInputText}
-          editable={!sending}
-          multiline
-        />
-        <TouchableOpacity
-          style={[styles.sendButton, (sending || !inputText.trim()) && { opacity: 0.6 }]}
-          disabled={sending || !inputText.trim()}
-          onPress={handleSend}
-        >
-          {sending ? <ActivityIndicator color="#fff" /> : <Text style={styles.sendButtonText}>Send</Text>}
-        </TouchableOpacity>
-      </View>
-
-      {/* History picker modal */}
-      <Modal
-        visible={historyVisible}
-        animationType="fade"
-        transparent
-        onRequestClose={closeHistory}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Switch conversation</Text>
-
-            {(Array.isArray(history) ? history : []).map((item, index) => {
-              const key = item?.id != null ? String(item.id) : `row-${index}`;
-              const active = item?.id === docId;
-              return (
-                <TouchableOpacity key={key} style={styles.modalItem} onPress={() => handleSelect(item)}>
-                  <Text style={{ fontWeight: active ? '700' : '500' }}>
-                    {item?.name ?? 'Untitled'}
-                  </Text>
-                  {item?.createdAt ? (
-                    <Text style={{ color: '#6c757d', fontSize: 12 }}>
-                      {new Date(item.createdAt).toLocaleString()}
-                    </Text>
-                  ) : null}
-                </TouchableOpacity>
-              );
-            })}
-
-            {/* New chat action */}
-            <TouchableOpacity
-              style={[styles.modalClose, { alignSelf: 'flex-start', backgroundColor: '#e7f0ff' }]}
-              onPress={() => {
-                const id = createNewConversation('New chat');
-                // Optional: pre-create an empty thread
-                setMessagesByDoc((prev) => ({ ...prev, [id]: prev[id] ?? [] }));
-                closeHistory();
-              }}
-            >
-              <Text style={{ color: '#007AFF', fontWeight: '600' }}>New chat</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity style={styles.modalClose} onPress={closeHistory}>
-              <Text>Close</Text>
-            </TouchableOpacity>
+        
+        {/* HEADER */}
+        <View style={styles.headerBar}>
+          <TouchableOpacity style={styles.historyButton} onPress={() => setHistoryVisible(true)}>
+            <Text style={styles.historyButtonText}>☰</Text>
+          </TouchableOpacity>
+          
+          <View style={styles.headerTitleContainer}>
+            {isRenaming ? (
+              <TextInput 
+                style={styles.renameInput}
+                value={renameText}
+                onChangeText={setRenameText}
+                onBlur={handleFinishRename}
+                onSubmitEditing={handleFinishRename}
+                autoFocus={true}
+                returnKeyType="done"
+              />
+            ) : (
+              <TouchableOpacity onPress={handleStartRename} activeOpacity={0.7}>
+                <Text style={styles.headerTitle} numberOfLines={1}>
+                  {activeItem ? activeItem.name : 'Select a Chat'} 
+                  {activeItem && <Text style={{fontSize: 12, color: '#aaa'}}> ✎</Text>}
+                </Text>
+              </TouchableOpacity>
+            )}
+            {!isRenaming && activeItem && (
+              <Text style={styles.headerSubtitle}>{activeItem.type}</Text>
+            )}
           </View>
         </View>
-      </Modal>
-    </KeyboardAvoidingView>
+
+        {/* MESSAGES */}
+        <TouchableWithoutFeedback onPress={() => setMenuVisible(false)}>
+          <ScrollView
+            ref={scrollRef}
+            style={styles.messagesList}
+            contentContainerStyle={styles.messagesContent}
+          >
+            {!activeItem && (
+              <View style={styles.emptyState}>
+                <Text style={styles.emptyStateText}>No chat selected.</Text>
+                <Text style={styles.emptyStateSub}>Start a new chat or upload a document.</Text>
+              </View>
+            )}
+
+            {activeItem?.messages?.map((msg, index) => {
+              const isUser = msg.role === 'user';
+              return (
+                <View key={index} style={[styles.msgRow, isUser ? styles.rowUser : styles.rowBot]}>
+                  {!isUser && <View style={styles.botAvatar}><Text style={styles.botAvatarText}>AI</Text></View>}
+                  <View style={[styles.msgBubble, isUser ? styles.bubbleUser : styles.bubbleBot]}>
+                    <Text style={[styles.msgText, isUser ? styles.textUser : styles.textBot]}>
+                      {msg.text}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })}
+            {sending && (
+              <View style={{ marginLeft: 40, marginTop: 10 }}>
+                <ActivityIndicator size="small" color="#aaa" />
+              </View>
+            )}
+          </ScrollView>
+        </TouchableWithoutFeedback>
+
+        {/* INPUT BAR */}
+        <View style={styles.inputBar}>
+          {/* Popup Menu */}
+          {menuVisible && (
+            <View style={styles.popupMenu}>
+              <TouchableOpacity style={styles.menuItem} onPress={() => handleActionRequest('Upload')}>
+                <Text style={styles.menuText}>Upload File</Text>
+              </TouchableOpacity>
+              <View style={styles.menuDivider} />
+              <TouchableOpacity style={styles.menuItem} onPress={() => handleActionRequest('Scan')}>
+                <Text style={styles.menuText}>Scan Document</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* Plus Button */}
+          <TouchableOpacity 
+            style={styles.plusButton} 
+            onPress={() => setMenuVisible(!menuVisible)}
+          >
+            <Text style={styles.plusButtonText}>{menuVisible ? '×' : '+'}</Text>
+          </TouchableOpacity>
+
+          <TextInput
+            style={styles.input}
+            placeholder="Type a message..."
+            value={inputText}
+            onChangeText={setInputText}
+            multiline
+            onFocus={() => setMenuVisible(false)}
+          />
+          <TouchableOpacity 
+            style={[styles.sendButton, (!inputText.trim()) && { opacity: 0.5 }]} 
+            onPress={handleSend}
+            disabled={!inputText.trim() || sending}
+          >
+            <Text style={styles.sendButtonText}>Send</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* HISTORY SIDEBAR */}
+        <Modal
+          visible={historyVisible}
+          animationType="fade"
+          transparent
+          onRequestClose={() => setHistoryVisible(false)}
+        >
+          <TouchableOpacity 
+            style={styles.modalOverlay} 
+            activeOpacity={1} 
+            onPress={() => setHistoryVisible(false)}
+          >
+            <View style={styles.sidebarContainer}>
+              <Text style={styles.sidebarTitle}>Chats & Docs</Text>
+              
+              <TouchableOpacity 
+                style={styles.newChatButton} 
+                onPress={() => createNewSession('chat', 'New Chat')}
+              >
+                <Text style={styles.newChatText}>+ New Chat</Text>
+              </TouchableOpacity>
+
+              <ScrollView style={{ flex: 1 }}>
+                {safeHistory.length === 0 && (
+                  <Text style={{ color: '#999', padding: 20 }}>No history yet.</Text>
+                )}
+                {safeHistory.map((item) => {
+                  const isActive = item.id === activeId;
+                  return (
+                    <TouchableOpacity 
+                      key={item.id} 
+                      style={[styles.historyItem, isActive && styles.historyItemActive]}
+                      onPress={() => switchConversation(item)}
+                    >
+                      <View>
+                        <Text style={[styles.historyName, isActive && styles.historyNameActive]}>
+                          {item.name}
+                        </Text>
+                        <Text style={styles.historyDate}>
+                          {new Date(item.lastActivityAt || item.createdAt).toLocaleDateString()}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </ScrollView>
+            </View>
+          </TouchableOpacity>
+        </Modal>
+
+      </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  text: { fontSize: 18 },
-  messagesList: { flex: 1 },
-  messagesContent: { paddingHorizontal: 16, paddingTop: 72, paddingBottom: 12 },
-  contextText: { color: '#6c757d', fontSize: 12 },
-  msgRow: { flexDirection: 'row', marginVertical: 6 },
-  msgBubble: {
-    maxWidth: '80%',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 14,
+  container: { flex: 1, backgroundColor: '#f8f9fa' },
+  headerBar: {
+    flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12,
+    backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee', height: 60,
   },
-  msgUser: { backgroundColor: '#007AFF', borderTopRightRadius: 4 },
-  msgAssistant: { backgroundColor: '#E9ECEF', borderTopLeftRadius: 4 },
-  msgText: { fontSize: 15, color: '#1c1c1e' },
-  inputBar: {
-    flexDirection: 'row',
-    alignItems: 'flex-end',
-    padding: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: '#e9ecef',
-    backgroundColor: '#fff',
-  },
-  actionButton: {
-    backgroundColor: '#f1f3f5',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-    marginRight: 6,
-  },
-  actionButtonText: { color: '#1c1c1e', fontWeight: '600', fontSize: 12 },
-  input: {
-    flex: 1,
-    minHeight: 40,
-    maxHeight: 120,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    backgroundColor: '#f8f9fa',
-    borderRadius: 10,
-  },
-  sendButton: {
-    marginLeft: 8,
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    borderRadius: 10,
-    justifyContent: 'center',
-    alignItems: 'center',
-    minWidth: 68,
-  },
+  historyButton: { padding: 8, marginRight: 12, backgroundColor: '#f1f3f5', borderRadius: 8 },
+  historyButtonText: { fontSize: 18, fontWeight: '600' },
+  headerTitleContainer: { flex: 1, justifyContent: 'center' },
+  headerTitle: { fontSize: 16, fontWeight: '700', color: '#333' },
+  headerSubtitle: { fontSize: 11, color: '#888', textTransform: 'uppercase' },
+  renameInput: { fontSize: 16, fontWeight: '700', color: '#333', borderBottomWidth: 1, borderBottomColor: '#007AFF', paddingBottom: 2 },
+  messagesList: { flex: 1, backgroundColor: '#f8f9fa' },
+  messagesContent: { padding: 16, paddingBottom: 20 },
+  msgRow: { flexDirection: 'row', marginBottom: 12 },
+  rowUser: { justifyContent: 'flex-end' },
+  rowBot: { justifyContent: 'flex-start' },
+  msgBubble: { maxWidth: '80%', padding: 12, borderRadius: 16 },
+  bubbleUser: { backgroundColor: '#007AFF', borderBottomRightRadius: 2 },
+  bubbleBot: { backgroundColor: '#fff', borderBottomLeftRadius: 2, borderWidth: 1, borderColor: '#e9ecef' },
+  msgText: { fontSize: 15, lineHeight: 20 },
+  textUser: { color: '#fff' },
+  textBot: { color: '#333' },
+  botAvatar: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#42be65', justifyContent: 'center', alignItems: 'center', marginRight: 8, marginTop: 6 },
+  botAvatarText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+  emptyState: { marginTop: 100, alignItems: 'center' },
+  emptyStateText: { fontSize: 18, fontWeight: 'bold', color: '#ccc' },
+  emptyStateSub: { fontSize: 14, color: '#ccc', marginTop: 8 },
+  inputBar: { flexDirection: 'row', alignItems: 'center', padding: 10, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#eee', zIndex: 10 },
+  plusButton: { width: 40, height: 40, borderRadius: 20, backgroundColor: '#f1f3f5', justifyContent: 'center', alignItems: 'center', marginRight: 8 },
+  plusButtonText: { fontSize: 24, color: '#007AFF', fontWeight: '400', lineHeight: 26 },
+  input: { flex: 1, backgroundColor: '#f1f3f5', borderRadius: 20, paddingHorizontal: 16, paddingVertical: 10, maxHeight: 100, fontSize: 15 },
+  sendButton: { marginLeft: 10, backgroundColor: '#007AFF', paddingHorizontal: 16, paddingVertical: 10, borderRadius: 20 },
   sendButtonText: { color: '#fff', fontWeight: '600' },
-  // New styles
-  menuWrapper: {
-    position: 'absolute',
-    top: 55,
-    left: 15,
-    zIndex: 10,
-  },
-  historyButton: {
-    backgroundColor: '#007AFF',
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 8,
-  },
-  historyButtonText: {
-    color: '#fff',
-    fontWeight: '600',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.35)',
-    justifyContent: 'center',
-    padding: 24,
-  },
-  modalContent: {
-    backgroundColor: '#fff',
-    borderRadius: 12,
-    padding: 16,
-    maxHeight: '70%',
-  },
-  modalTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    marginBottom: 8,
-  },
-  modalItem: {
-    paddingVertical: 10,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: '#e9ecef',
-  },
-  modalClose: {
-    alignSelf: 'flex-end',
-    marginTop: 12,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 6,
-    backgroundColor: '#f1f3f5',
-  },
+  popupMenu: { position: 'absolute', bottom: 70, left: 10, backgroundColor: '#fff', borderRadius: 12, paddingVertical: 5, width: 160, shadowColor: "#000", shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.2, shadowRadius: 5, elevation: 8, borderWidth: 1, borderColor: '#eee' },
+  menuItem: { paddingVertical: 12, paddingHorizontal: 16 },
+  menuText: { fontSize: 15, color: '#333', fontWeight: '500' },
+  menuDivider: { height: 1, backgroundColor: '#f0f0f0' },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', flexDirection: 'row' },
+  sidebarContainer: { width: '80%', backgroundColor: '#fff', height: '100%', paddingTop: 50, paddingHorizontal: 20 },
+  sidebarTitle: { fontSize: 22, fontWeight: 'bold', marginBottom: 20 },
+  newChatButton: { backgroundColor: '#42be65', padding: 12, borderRadius: 10, alignItems: 'center', marginBottom: 20 },
+  newChatText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  historyItem: { paddingVertical: 15, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
+  historyItemActive: { backgroundColor: '#f0f8ff', marginHorizontal: -10, paddingHorizontal: 10, borderRadius: 8 },
+  historyName: { fontSize: 16, color: '#333', fontWeight: '500' },
+  historyNameActive: { color: '#007AFF', fontWeight: '700' },
+  historyDate: { fontSize: 12, color: '#999', marginTop: 4 },
 });

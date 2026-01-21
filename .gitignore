@@ -36,5 +36,6 @@ mobile_sam.pt
 
 __pycache__/
 
+*.swp
 
 venv/

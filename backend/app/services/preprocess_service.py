@@ -3,16 +3,20 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
-# NEW: Import Docling
-from docling.document_converter import DocumentConverter
+# Docling
+try:
+    from docling.document_converter import DocumentConverter
+    doc_converter = DocumentConverter()
+    HAS_DOCLING = True
+except ImportError:
+    HAS_DOCLING = False
+    print("Warning: docling not installed. PDF parsing will be limited.")
 
-# Import AI services
+# Imports
 from app.services.granite_vision_service import analyze_images
 from app.services.granite_ai_service import analyze_context as ai_analyze
 
-# Thread pool for background tasks
 executor = ThreadPoolExecutor(max_workers=1)
-doc_converter = DocumentConverter() # Initialize Docling
 
 def _run_background_vision_task(file_path):
     """Runs Granite Vision on GPU in background."""
@@ -31,25 +35,27 @@ def preprocess_document(file_path, mock=False):
     logging.info(f"Preprocessing: {file_path}")
 
     try:
-        # --- PATH A: PDF Processing (Using IBM DOCLING) ---
+        # --- PATH A: PDF Processing ---
         if file_ext == 'pdf':
-            logging.info("Using Docling to parse PDF structure...")
-            
-            # Docling reads the PDF and converts it to Markdown (Markdown is native language for LLMs!)
-            result = doc_converter.convert(file_path)
-            markdown_text = result.document.export_to_markdown()
-            
-            # Send the clean Markdown to the Chat Model for summarization
-            summary = ai_analyze(text=markdown_text)
+            if HAS_DOCLING:
+                logging.info("Using Docling to parse PDF...")
+                result = doc_converter.convert(file_path)
+                markdown_text = result.document.export_to_markdown()
+                
+                # Send to AI
+                summary_res = ai_analyze(text_excerpt=markdown_text[:2000])
+                summary = summary_res.get('answer', '')
 
-            return {
-                "status": "success",
-                "type": "pdf",
-                "text_excerpt": markdown_text[:2000], # Store clean markdown
-                "ai_summary": summary
-            }
+                return {
+                    "status": "success",
+                    "type": "pdf",
+                    "text_excerpt": markdown_text[:2000],
+                    "ai_summary": summary
+                }
+            else:
+                return {"status": "error", "message": "PDF parser missing"}
 
-        # --- PATH B: Image Processing (Background GPU) ---
+        # --- PATH B: Image Processing ---
         elif file_ext in ['png', 'jpg', 'jpeg', 'bmp', 'tiff']:
             try:
                 with Image.open(file_path) as img:

@@ -2,34 +2,46 @@ import torch
 from PIL import Image
 from app.services.model_manager import manager
 
-def analyze_images(image_path):
+def analyze_images(input_data, task=None):
     """
-    Uses the pre-loaded Quantized/Float16 Granite Vision model from RAM.
+    Uses the pre-loaded Quantized/Float16 Granite Vision model.
+    
+    Args:
+        input_data: Can be a file path (str) OR a list containing a PIL Image (from upload_route).
+        task: If "ar_extraction", prompts for component locations.
     """
-    # Is the model loaded?
     if not manager.vision_model or not manager.vision_processor:
-        return {
-            "analysis": {
-                "summary": "Error: Vision Model not loaded in ModelManager."
-            }
-        }
+        return {"analysis": {"summary": "Error: Vision Model not loaded."}}
 
     try:
-        print(f"--- VISION SERVICE: Processing {image_path} ---")
+        # 1. Handle Input (Path vs PIL List)
+        image = None
+        path_str = "InMemoryImage"
         
-        # Load Image
-        image = Image.open(image_path).convert("RGB")
+        if isinstance(input_data, str):
+            image = Image.open(input_data).convert("RGB")
+            path_str = input_data
+        elif isinstance(input_data, list) and len(input_data) > 0:
+            image = input_data[0]
+            
+        if not image:
+            return {"error": "Invalid input to analyze_images"}
+
+        print(f"--- VISION SERVICE: Processing {path_str} [Task: {task}] ---")
         
-        # Prepare Inputs (The "Processor" handles resizing/normalization)
-        prompt = "Describe the technical diagram in detail, focusing on components like pumps and valves."
-        
+        # 2. Select Prompt
+        if task == "ar_extraction":
+            prompt = "Locate all technical components like pumps, valves, and sensors. List them."
+        else:
+            prompt = "Describe the technical diagram in detail, focusing on components like pumps and valves."
+
+        # 3. Process
         inputs = manager.vision_processor(
             images=image, 
             text=prompt, 
             return_tensors="pt"
-        ).to(manager.device) # <--- CRITICAL: Move input to GPU/MPS
+        ).to(manager.device)
 
-        # 4. Generate Response (Inference)
         with torch.no_grad():
             output_ids = manager.vision_model.generate(
                 **inputs,
@@ -39,18 +51,24 @@ def analyze_images(image_path):
                 top_p=0.9
             )
 
-        #Decode Response 
         generated_text = manager.vision_processor.batch_decode(
             output_ids, 
             skip_special_tokens=True
         )[0]
 
-        # Clean up the output (sometimes model repeats the prompt)
+        # Clean Prompt Echo
         if generated_text.startswith(prompt):
             generated_text = generated_text[len(prompt):].strip()
 
-        print("--- VISION SERVICE: Success ---")
-        
+        # 4. Return Format
+        # If AR Extraction was requested, we return the text in 'answer' 
+        # (Real implementation would parse coords, but text summary works for now)
+        if task == "ar_extraction":
+            return {
+                "components": [], # Placeholder for actual parsed boxes
+                "answer": generated_text
+            }
+
         return {
             "analysis": {
                 "summary": generated_text
@@ -59,8 +77,4 @@ def analyze_images(image_path):
 
     except Exception as e:
         print(f"❌ ERROR in Vision Service: {e}")
-        return {
-            "analysis": {
-                "summary": f"Error analyzing image: {str(e)}"
-            }
-        }
+        return {"analysis": {"summary": f"Error: {str(e)}"}}

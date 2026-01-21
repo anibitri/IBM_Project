@@ -5,24 +5,67 @@ const HistoryContext = createContext(null);
 export function HistoryProvider({ children }) {
   const [history, setHistory] = useState([]);
 
+  // Add a new item (e.g., a new upload or chat session)
   const addHistoryItem = useCallback((item) => {
     if (!item || typeof item !== 'object') return;
-    const safe = (() => {
-      const id = item.id ?? `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const name = typeof item.name === 'string' && item.name.trim() ? item.name : 'Untitled';
-      // removed createdAt defaulting
-      return { ...item, id: String(id), name };
-    })();
+    
+    const newItem = {
+      id: item.id ? String(item.id) : `doc-${Date.now()}`,
+      name: item.name && item.name.trim() ? item.name : 'Untitled Chat',
+      type: item.type || 'chat',
+      createdAt: item.createdAt || Date.now(),
+      lastActivityAt: Date.now(),
+      messages: item.messages || [], // We now store messages inside the history item
+      ...item
+    };
 
     setHistory((prev) => {
-      const withoutDup = prev.filter((it) => it && it.id !== safe.id);
-      return [safe, ...withoutDup];
+      // Remove any existing item with the same ID to prevent duplicates
+      const others = prev.filter((it) => it.id !== newItem.id);
+      // Add new item to the top
+      return [newItem, ...others];
     });
+    
+    return newItem.id;
+  }, []);
+
+  // Update an existing item (e.g., to add a message or change the name)
+  const updateHistoryItem = useCallback((id, updates) => {
+    setHistory((prev) => 
+      prev.map((item) => {
+        if (item.id === id) {
+          return { ...item, ...updates, lastActivityAt: Date.now() };
+        }
+        return item;
+      })
+    );
+  }, []);
+
+  // specific helper to append a message to a specific history item
+  const addMessageToItem = useCallback((id, message) => {
+    setHistory((prev) => 
+      prev.map((item) => {
+        if (item.id === id) {
+          return {
+            ...item,
+            lastActivityAt: Date.now(),
+            messages: [...(item.messages || []), message]
+          };
+        }
+        return item;
+      })
+    );
   }, []);
 
   const clearHistory = useCallback(() => setHistory([]), []);
 
-  const value = useMemo(() => ({ history, addHistoryItem, clearHistory }), [history, addHistoryItem, clearHistory]);
+  const value = useMemo(() => ({
+    history,
+    addHistoryItem,
+    updateHistoryItem,
+    addMessageToItem,
+    clearHistory
+  }), [history, addHistoryItem, updateHistoryItem, addMessageToItem, clearHistory]);
 
   return <HistoryContext.Provider value={value}>{children}</HistoryContext.Provider>;
 }
