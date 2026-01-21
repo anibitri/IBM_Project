@@ -6,8 +6,8 @@ import numpy as np
 
 # CONFIG
 BASE_URL = "http://127.0.0.1:4200/api" # Make sure this port matches your Flask run port (usually 5000)
-SERVER_EXPECTED_DIR = r"backend\app\static\uploads"
-KNOWN_FILE_NAME = "labeled_schematic.png" 
+SERVER_EXPECTED_DIR = r"/dcs/23/u2287990/IBM_Project/IBM_Project/backend/app/static/uploads"  # Where the server expects files to be
+KNOWN_FILE_NAME = "simple_schematic.png" 
 
 def visualize_ar():
     print(f"--- 1. Target File: {KNOWN_FILE_NAME} ---")
@@ -23,7 +23,7 @@ def visualize_ar():
     
     try:
         # Check port! standard flask is 5000, your script had 4200
-        ar_resp = requests.post(f"http://127.0.0.1:5000/api/ar/generate", json=ar_payload)
+        ar_resp = requests.post(f"http://127.0.0.1:4200/api/ar/generate", json=ar_payload)
     except Exception as e:
         print(f"Connection Error: {e}")
         return

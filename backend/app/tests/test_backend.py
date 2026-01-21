@@ -45,22 +45,22 @@ class TestBackend(unittest.TestCase):
         print("\n--- TEST 2: Real AR (Labeled Schematic) + Vision ---")
         
         # 1. Use the Real Schematic (if exists), else make a dummy
-        real_schematic = os.path.join(self.upload_folder, 'labeled_schematic.png')
+        real_schematic = os.path.join(self.upload_folder, 'simple_schematic.png')
         if not os.path.exists(real_schematic):
             print("WARNING: Real schematic not found. Creating dummy.")
-            image = Image.new('RGB', (1024, 1024), color='white')
+            image = Image.new('RGB', (1024, 1024), color='orange')
             image.save(real_schematic)
             
         # 2. Upload it properly to get it into the system
         with open(real_schematic, 'rb') as f:
-            data = {'file': (f, 'labeled_schematic.png')}
+            data = {'file': (f, 'simple_schematic.png')}
             self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
 
         print(f"Generated labeled diagram at: {real_schematic}")
 
         # 3. Call AR Endpoint
         # Note: We use the filename, not the full path, as the API expects
-        response = self.client.post('/api/ar/generate', json={'stored_name': 'labeled_schematic.png'})
+        response = self.client.post('/api/ar/generate', json={'stored_name': real_schematic})
         self.assertEqual(response.status_code, 200)
         
         data = response.get_json()

@@ -6,7 +6,7 @@
 *.fdb_latexmk
 *.synctex.gz
 
-
+*.pt
 
 .DS_Store
 frontend/.DS_Store

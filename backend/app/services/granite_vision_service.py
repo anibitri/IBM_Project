@@ -30,17 +30,21 @@ def analyze_images(input_data, task=None):
         print(f"--- VISION SERVICE: Processing {path_str} [Task: {task}] ---")
         
         # 2. Select Prompt
+        base_prompt = "Describe the technical diagram in detail, focusing on components."
         if task == "ar_extraction":
-            prompt = "Locate all technical components like pumps, valves, and sensors. List them."
-        else:
-            prompt = "Describe the technical diagram in detail, focusing on components like pumps and valves."
+            base_prompt = "Locate all technical components. List them."
+
+        prompt = f"<image>\n{base_prompt}"
 
         # 3. Process
         inputs = manager.vision_processor(
             images=image, 
             text=prompt, 
             return_tensors="pt"
-        ).to(manager.device)
+        ).to("cuda")
+
+        if "pixel_values" in inputs:
+            inputs["pixel_values"] = inputs["pixel_values"].to(dtype=manager.dtype)
 
         with torch.no_grad():
             output_ids = manager.vision_model.generate(

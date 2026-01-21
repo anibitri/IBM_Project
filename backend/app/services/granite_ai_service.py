@@ -7,7 +7,7 @@ def _generate_text(prompt, max_tokens=200):
 
     input_ids = manager.chat_tokenizer(
         prompt, return_tensors="pt"
-    ).input_ids.to(manager.device)
+    ).input_ids.to("cpu")
 
     with torch.no_grad():
         output_ids = manager.chat_model.generate(
