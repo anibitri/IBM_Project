@@ -6,6 +6,7 @@
 \usepackage{lipsum} % for placeholder text, remove if not needed
 \usepackage[a4paper, portrait, margin=1.5cm]{geometry}
 \usepackage{graphicx}
+\usepackage{pdflscape}
 \usepackage{fancyhdr}
 \usepackage{float}
 \usepackage{color}
@@ -15,12 +16,41 @@
 \usepackage{amsmath}
 \definecolor{orange}{rgb}{1,0.5,0}
 
-\title{\textbf{A mobile application for augmenting technical documentation using AR and AI}}
-\author{\large Ani Bitri\\ Dr. Paris Giampouras, John McNamara\\ University of Warwick and IBM}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{pgfgantt}
 
+\usepackage{pgfgantt}
+\usepackage{xcolor}
+\usepackage{pdfpages}
+
+\usepackage{url} % for proper formatting of URLs
+
+% --- Define Custom Colors to match your PDF style ---
+\definecolor{phase1blue}{RGB}{0, 115, 255}    % Blue for Doc/Foundation
+\definecolor{phase2orange}{RGB}{255, 140, 0}  % Orange for AR
+\definecolor{phase3green}{RGB}{50, 205, 50}   % Green for Chat
+\definecolor{phase4pink}{RGB}{255, 20, 147}   % Pink for Backend/Opt
+\definecolor{phase5purp}{RGB}{138, 43, 226}   % Purple for Testing
+\definecolor{phase2docview}{RGB}{0, 180, 216} % Cyan/Teal for Document View
+
+\lstset{
+  language=Python,
+  basicstyle=\ttfamily\small,
+  keywordstyle=\color{blue},
+  stringstyle=\color{green!60!black},
+  commentstyle=\color{gray},
+  showstringspaces=false,
+  frame=single,
+  breaklines=true
+}
+
+\title{\textbf{A mobile application for augmenting technical documentation using AR and AI}}
+\author{\large Ani Bitri\\ 2287990\\ Dr. Paris Giampouras, John McNamara\\ University of Warwick and IBM}
 
 
 \begin{document}
+
 
 \thispagestyle{empty}
 
@@ -43,7 +73,7 @@
 	\vspace{5mm}
 	\begin{center}
 		\textbf{\begin{LARGE}
-		An application for augmenting technical documentation using AR and AI
+		A mobile application for augmenting technical documentation using AR and AI
 		\end{LARGE}}
 		\vspace{5mm}
 	\end{center}
@@ -56,230 +86,535 @@
 		\vspace{10mm}
 	\end{center}
 	\begin{center}
+        {\large 2287990}\\
 	     {\large Supervisors: Dr. Paris Giampouras, John McNamara}\\
 		\textbf{\large Department of Computer Science}\\
 		{\large University of Warwick and IBM}\\
-		{\large January 2025\\}
+        {\large January 2026\\}
 	\end{center}
 \end{spacing}
 
 \newpage
 
+\tableofcontents
+\newpage
+
 \section{Introduction}
 The discipline of software engineering is fundamentally abstract. As software systems have evolved from monolithic mainframes to distributed, microservice-based architectures,
 developers heavily rely on technical documentation to understand, maintain and build upon existing tools, systems and frameworks. However, traditional documentation formats, such as PDFs, static 
-web pages and printed manuals, often fall short in conveying complicated concepts, especially when it comes to technical diagrams and schematics. These visuals are essentials for understanding
+web pages and printed manuals, often fall short in conveying complicated concepts, especially when it comes to technical diagrams and schematics. These visuals are essential for understanding
 the systems they represent, yet they often make it more difficult and confusing for users and other developers to grasp the underlying ideas.
 
-The core objective of this project is to offer a solution that enhances the user experience when interacting whith technical documentation while still preserving the integrity and accuracy of the 
-original content. By combining Augmented Reality (AR) and Aritificial Intelligence (AI), the project aims to create an application that transforms static documentation and diagrams into interactive,
+The core objective of this project is to offer a solution that enhances the user experience when interacting with technical documentation while still preserving the integrity and accuracy of the 
+original content. By combining Augmented Reality (AR) and Artificial Intelligence (AI), the project aims to create an application that transforms static documentation and diagrams into interactive,
 immersive and context-aware experiences.
 
-Insert paragraph here for AI assistant
-
 \section{Research}
+
+    It is essential to understand the existing landscape of applications and research that relate to the project's objectives. This section provides an overview of some of the relevant works and solutions
+    in the field of Augmented Reality, highlighting their approaches and differences from the proposed application. Additionally, usability and accessibility concerns have been considered as part of the 
+    research process in order to deliver a solution that is user-friendly and inclusive.
+
     \subsection{Literature Review and Existing Solutions}
         \subsubsection{DGT-AR}
+        DGT-AR (Dependency Graph Tool in Augmented Reality)~\cite{dgtar} is an academic project which utilises the Microsoft HoloLens and its core premise is similar, in that it aims to visualise software architecture
+        to aid developers in understanding complex systems. This solution renders a software's dependency graph as a 3D node-link structure in the user's physical environment. The researchers on this project
+        found that the virtual space of AR addressed the limitation that a 2D screen has when visualising large and complex graphs. By using the HoloLens, developers could walk around the graph, using motion
+        parallax to better perceive what the graph represented.
+
+        \subsubsection{Automatic Retargeting of Technical Documentation to AR}
+
+        In the paper "Retargeting Technical Documentation to Augmented Reality"~\cite{mohr2015retargeting}, the authors propose a system which automatically transfers printed technical documentation into an AR format. The system uses computer 
+        vision techniques to identify graphical elements and text labels in a scanned document. Given the identified metadata and a CAD model or a 3D representation of an object, the system analyses the spatial relationships to infer part 
+        identities and interactions. The approach significantly reduces the manual effort required to author AR content for technical documentation, thus making it more feasible to retarget existing 2D manuals into AR environments.
+
+        \subsubsection{Industrial Standards: Vuforia and Manifest}
+
+        PTC Vuforia~\cite{ptc_vuforia_expert_capture} and Taqtile Manifest~\cite{taqtile_maintenance} are considered industry "gold standards" and widely used platforms in manufacturing for maintenance and training purposes. Vuforia focuses on AR content creation and deployment, excelling at object tracking
+        and image recognition. It allows digital instructions to be overlaid on physical equipment, guiding users through complex procedures. Manifest, on the other hand, has a primary focus on "expert capture" and knowledge transfer, allowing senior
+        technicians to document spatial workflows for trainees to follow. Both platforms function as static AR content delivery systems, requiring significant manual effort to author and maintain the AR experiences.
         
-        DGT-AR (Dependency Graph Tool in Augmented Reality) is an academic project which utilizes the Microsoft HoloLens and its core premise is similar, in that it aims to visualize software architecture 
-        to aid developers in understending complex systems. This solution renders a software's dependency graph as a 3D node-link structure in the user's physical environment. The researchers on this project
-        found that the virtual space of AR addressed the limitation that a 2D screen has when visualizing large and complex graphs. By using the HoloLens, developers could walk around the graph, using motion 
-        parallax to better percieve what the graph represented.
-
-
-        \subsubsection{"Retargeting Technical Documentation to Augmented Reality" Paper by P. Mohr et al.}
-
-        This paper presents a system which automatically 
-
         \subsubsection{Differentiation from Existing Solutions}
 
         This project differentiates itself from existing solutions, such as DGT-AR and the work by P. Mohr et al., in several key aspects:
         \begin{itemize}
-            \item 
-            \item 
-            \item
-            \item
+            \item This solution focuses on providing assistance to users in understanding technical documentation through AR overlays and an AI assistant, rather than visualizing software architecture.
+            \item The project will not be reliant on specialized hardware such as the Microsoft HoloLens, but will instead be developed with the purpose of being accessible to any user who wishes to use it.
+            \item There is no requirement for pre-existing 3D models or CAD representations of the objects being documented, nor is there a need to scan physical manuals or objects. The application will be able to process standard documentation, digital or physical, as well as 2D diagrams and images.
         \end{itemize}
+
     \subsection{Usability \& Accessibility}
 
-    Since the solution involves creating an application, it is cruical to ensure that the app is user-friendly and accessible to any potential user. While not all features an
+    Since the solution involves creating an application, it is crucial to ensure that the app is user-friendly and accessible to any potential user. To achieve this, the design and development process, primarily for the frontend, will adhere to the Web Content Accessibility Guidelines (WCAG) 2.1.~\cite{wcag21},
+    which act as the international standard for web accessibility and provide an extensive set of recommendations for making digital content accessible to a wide range of users. Although not all principles may be applicable to this project, the core principles of Perceivable, Operable, Understandable and Robust (POUR) 
+    will be followed.  
 
-    \subsection{Development }
+\section{Project Evaluation and Development}
+    This section outlines the requirements and design considerations for the application, covering both frontend and backend components. It details different aspects of the development process and the 
+    considerations taken into account to ensure a robust and user-friendly solution.
+    \subsection{Requirements}
+        After careful analysis of the project objectives and user needs, the following functional and non-functional requirements have been identified for the application:    
 
-\section{Requirements}
-    \subsection{Functional Requirements}
+        \subsubsection{Functional Requirements}
 
-    \begin{enumerate}
-        \item \textbf{Augmented Reality System:}
-            \begin{itemize}
-                \item FR-1: The system shall allow users to open the camera interface within the mobile application to scan technical documents.
-                \item FR-2: The system shall allow the user to upload technical documents from their device storage.
-                \item FR-3: The system shall recognize diagrams, images, flowcharts, and schematics within the scanned or uploaded documents using image recognition techniques.    
-                \item FR-4: The backend shall extract diagram elements and textual information from the recognized diagrams using IBM Granite Vision.
-                \item FR-5: The system shall generate interactive AR overlays that provide explanations of components, relationships, and interactions within the diagrams.
-                \item FR-6: The system shall allow users to interact with the AR overlays to explore additional information about the diagram components and their relationships.
-                \item FR-7: The system shall provide visual cues to confirm successful recognition and overlay placement.
-            \end{itemize}
-        \item \textbf{AI Assistant:}
-            \begin{itemize}
-                \item FR-8: The system shall allow users to input natural language queries related to the scanned or uploaded technical documents.
-                \item FR-9: The backend shall use the Granite AI model to process user queries and generate relevant responses based on the document content.
-                \item FR-10: The AI shall combine diagram data from Granite Vision with textual information from the documents to provide comprehensive answers.
-                \item FR-11: The system shall display the AI-generated responses within the mobile application
-                \item FR-12: The AI assistant shall retain context from previous interactions to provide coherent and relevant responses.
-            \end{itemize}
-        \item \textbf{Data Management and Communication:}
-            \begin{itemize}
-                \item FR-13: The app shall communicate with the backend over HTTPS with token-based authentication to ensure secure data transmission.
-                \item FR-14: The backend shall handle user requests, forward images to IBM Granite Vision, combine results with IBM Granite AI, and return structured JSON responses to the mobile app.
-                \item FR-15: The system shall implement caching mechanisms to store previously processed diagrams and AI responses for improved performance.
-                \item FR-16: The system shall log user interactions and queries for analytics and improvement purposes.
-                \item FR-17: The system shall provide error handling mechanisms to manage failures in image recognition, AI processing, or network connectivity, and inform users appropriately.
-            \end{itemize}
-        \item \textbf{User Interface and Experience:}
-            \begin{itemize}
-                \item FR-18: The mobile application shall present a home screen with navigation options to access camera view, document upload, AI assistant, and settings.
-                \item FR-19: The system shall provide an interactive chat interface for AI interactions, showing both user queries and AI responses in a conversational format.
-                \item FR-20: Users shall be able to switch between text input, speech input and AR interaction modes seamlessly.
-            \end{itemize}
-    \end{enumerate}
+        \begin{enumerate}
+            \item \textbf{Augmented Reality System:}
+                \begin{itemize}
+                    \item FR-1: The system shall allow users to open the camera interface within the app to scan technical documents.
+                    \item FR-2: The system shall allow the user to upload technical documents from their device storage.
+                    \item FR-3: The system shall recognise diagrams, images, flowcharts, and schematics within the scanned or uploaded documents using image recognition techniques.    
+                    \item FR-4: The backend shall extract diagram elements and textual information from the recognised diagrams using IBM Granite Vision and other computer vision techniques.
+                    \item FR-5: The system shall generate interactive AR overlays that provide explanations of components, relationships, and interactions within the diagrams.
+                    \item FR-6: The system shall allow users to interact with the AR overlays to explore additional information about the diagram components and their relationships.
+                    \item FR-7: The system shall provide visual cues to confirm successful recognition and overlay placement.
+                \end{itemize}
+            \item \textbf{AI Assistant:}
+                \begin{itemize}
+                    \item FR-8: The system shall allow users to input natural language queries related to the scanned or uploaded technical documents.
+                    \item FR-9: The backend shall use the Granite AI model to process user queries and generate relevant responses based on the document content.
+                    \item FR-10: The AI shall combine diagram data from Granite Vision with textual information from the documents to provide comprehensive answers.
+                    \item FR-11: The AI assistant shall retain context from previous interactions to provide coherent and relevant responses.
+                \end{itemize}
+            \item \textbf{Data Management and Communication:}
+                \begin{itemize}
+                    \item FR-12: The app shall communicate with the backend over HTTPS with token-based authentication to ensure secure data transmission.
+                    \item FR-13: The backend shall handle user requests, forward images to IBM Granite Vision, combine results with IBM Granite AI, and return structured JSON responses to the app.
+                    \item FR-14: The system shall provide error handling mechanisms to manage failures in image recognition, AI processing, or network connectivity, and inform users appropriately.
+                \end{itemize}
+        \end{enumerate}
 
-\section{System Architecture}
-Provide a high-level overview of the system architecture. Include diagrams where appropriate to illustrate the system components and their interactions.
+        \subsubsection{Non-Functional Requirements}
+            \begin{enumerate}
+                \item \textbf{Performance}
+                    \begin{itemize}
+                        \item NFR-1: The system shall process scanned or uploaded documents and generate an analysis within 1 minute under normal operating conditions.
+                        \item NFR-2: The AI assistant shall respond to user queries within 10 seconds under normal operating conditions.
+                        \item NFR-3: The AR overlays shall render smoothly at a minimum of 30 frames per second on supported devices.
+                    \end{itemize}
+                \item \textbf{Reliability and Availability}
+                    \begin{itemize}
+                        \item NFR-4: In the event of a backend service failure or network issue, the system shall provide informative error messages to the user.
+                        \item NFR-5: The system must ensure that uploaded documents are cryptographically hashed to prevent duplicate processing and ensure data integrity.
+                    \end{itemize}
+            \end{enumerate}
 
     \subsection{Design Pattern}
 
-    The design pattern which will be adopted for this project is the Model-View-ViewModel (MVVM) pattern. This pattern is well-suited for applications that require a clear separation
-    of concerns between the user interface and logic, making it easier to manage and test the application. Furthermore, the MVVM pattern facilitates a more modular and maintainable
-    codebase, which is essential for the iterative development process planned for this project. The image below illustrates the MVVM architecture which will be used in the project.
+        The project adopts a layered Client-Server architecture~\cite{redhat_layered_client_server}, separating the frontend application from the backend services. This pattern is well-suited for separation between the resource-intensive AI computation and the user interface, addressing the hardware 
+        limitations of the user's device by offloading heavy processing tasks to the backend server. The system is structured into three layers:
 
-    \begin{figure}[H]
-        \centering
-        \includegraphics[width=\textwidth]{img/Pattern.png}
-        \caption{MVVM Architecture Pattern}
-        \label{fig:Pattern}
-    \end{figure}
+        \begin{enumerate}
+            \item \textbf{Presentation Layer (Client):} Its primary role is to handle user interactions, handle inputs and render the AR overlays. It relies on the backend for processing, data processing and decision-making.
+            \item \textbf{Service Layer (Application Interface):} By utilising RESTful APIs, this layer serves as the communication bridge between the frontend and backend. It encapsulates a service-oriented design that allows functionalities to be modular and reusable. These services handle task routing, input processing and response formatting.
+            \item \textbf{Computation Layer (Model Manager):} This layer manages the lifecycle of the AI models used. It is responsible for loading, maintaining and invoking the models as needed, while also ensuring efficient resource utilisation. 
+        \end{enumerate}
+
+        Figure \ref{fig:System_Architecture} illustrates the overall system architecture, showcasing the interactions between the frontend application, backend services and AI models.
 
     \subsection{Frontend Design}
 
-    \subsubsection{User Interface and User Experience}
+        \subsubsection{User Interface and User Experience}
 
-        The application will feature a user-friendly interface that allows users to easily navigate through the app and access its features. The UI will be designed to be intuitive and responsive, ensuring a seamless user experience. When the user open the app, they will be presented with
-        a simple home screen with options to scan a document, upload a document or access the history of previously scanned documents. Besides the home screen, the app will also include a tab for the chatbot, where users can interact with the AI assistant, and a settings tab for configuring
-        app preferences. The image below illustrates the proposed UI design for the application:
+            The application will feature a user-friendly interface that allows users to easily navigate through the app and access its features. The UI will be designed to be intuitive and responsive. When the user opens the app, they will be presented with
+            a simple home screen with options to scan a document, upload a document or access the history of previously scanned documents. Besides the home screen, the app will also include a tab for the chatbot, where users can interact with the AI assistant, and a settings tab for configuring
+            app preferences. The image below illustrates the proposed flow and layout of the app's user interface:
 
-        \begin{figure}
-            \centering
-            \begin{subfigure}{0.3\textwidth}
-                \includegraphics[width=\textwidth]{img/FrontendHomeTab.png}
-                \caption{Home Screen}
-                \label{fig:HomeScreen}
-            \end{subfigure}
-            \hfill
-            \begin{subfigure}{0.3\textwidth}
-                \includegraphics[width=\textwidth]{img/FrontendChatTab.png}
-                \caption{Chatbot Tab}
-                \label{fig:ChatbotTab}
-            \end{subfigure}
-            \hfill
-            \begin{subfigure}{0.3\textwidth}
-                \includegraphics[width=\textwidth]{img/FrontendSettingsTab.png}
-                \caption{Settings Tab}
-                \label{fig:SettingsTab}
-            \end{subfigure}
-            \caption{Proposed UI Design for the Application}
-            \label{fig:UIDesign}
-        \end{figure}
+            \begin{figure}[H]
+                \centering
+                \includegraphics[width=0.6\textwidth]{img/UI_Flow.png}
+                \caption{Proposed User Interface Flow}
+                \label{fig:UI_Flow}
+            \end{figure}
 
-    Upon selecting the scan option, the user will be directed to the camera interface, where they can capture pictures of the technical documentation. Alternatively, the user can choose to upload the document from their device's storage and access the same features. After scanning or uploading
-        a document, the app will process the text, images and diagrams, and give the user the option to view the AR overlays or interact with the AI assistant. The AR overlays will provide interactive elements that explain components, relationships and interactions within the diagrams based on the user's
-        input and the information extracted from the document. The image below illustrates a flow chart of the app's user interface and navigation:
 
-        % Flowchart image here
-    \subsubsection{Error Handling and Feedback}
+        \subsubsection{Error Handling and Feedback}
 
-        To ensure a smooth user experience, the application will include robust error handling mechanisms. Internal errors will be handled gracefully and automatically, with appropriate messages displayed to the user upon interruptions. For example, if the app fails to recognize a diagram or if the AI assistant
-        cannot process a query, the user will be informed of the issue and provided with suggestions for resolution. External errors will be handled by providing informative error messages to guide users in case of issues such as failed scans or uploads, network connectivity problems or AR tracking errors. Furthermore,
-        error prevention strategies will be implemented to minimize their occurrence and impact on the user experience. Such strategies include input validation, network status checks and AR tracking optimizations. This approach will ensure that users can effectively utilize the app's features without being hindered by technical issues.
+            To ensure a smooth user experience, the application will include robust error handling mechanisms. Internal errors will be handled gracefully and automatically, with appropriate messages displayed to the user upon interruptions. For example, if the app fails to recognise a diagram or if the AI assistant
+            cannot process a query, the user will be informed of the issue and provided with suggestions for resolution. External errors will be handled by providing informative error messages to guide users in case of issues such as failed scans or uploads, network connectivity problems or AR tracking errors. Furthermore,
+            error prevention strategies will be implemented to minimise their occurrence and impact on the user experience. Such strategies include input validation, network status checks and AR tracking optimisations. This approach will ensure that users can effectively utilise the app's features without being hindered by technical issues.
 
 
 
-    \subsubsection{Integration with Backend and Data Flow}
+        \subsubsection{Integration with Backend and Data Flow}
 
-        The frontend of the application will communicate with the backend services to process the scanned or uploaded documents and retrieve relevant information. The data flows as follows:
-        \begin{enumerate}
-            \item The user scans or uploads a document using the app's interface.
-            \item The frontend validates the input and sends the document data to the backend for processing.
-            \item The validated data is sent to the backend services for text recognition, diagram analysis and AI processing.
-            \item The backend processes the data and generates AR overlays and AI responses based on the document content.
-            \item The generated AR overlays and AI responses are sent back to the frontend for display to the user.
-            \item The user interacts with the AR overlays and AI assistant, and any further queries or actions are sent back to the backend for processing.
-        \end{enumerate}
-        
+            The frontend of the application will communicate with the backend services to process the scanned or uploaded documents and retrieve relevant information. Figure \ref{fig:Data_Flow} illustrates the data flow between the frontend and backend components.
+            
     \subsection{Backend Design}
 
-        \subsubsection{Overview}
+            \subsubsection{Overview}
 
-            The backend of the application will act as the intelligence and coordination layer that connects the React Native frontend to IBM's AI services. Its primary function is to process
-            the scanned or uploaded documents and other user inputs, understand their content, and generate appropriate AR overlays and AI responses. The backend ensures that heavy computational
-            tasks are offloaded from the mobile device, providing a seamless user experience.
+                The backend of the application will act as the intelligence and coordination layer that connects the React Native frontend to IBM's AI services. Its primary function is to process
+                the scanned or uploaded documents and other user inputs, understand their content, and generate appropriate AR overlays and AI responses. The backend ensures that heavy computational
+                tasks are offloaded from the mobile device, providing a seamless user experience.
 
-        \subsubsection{Workflow}
+            \subsubsection{Workflow}
 
-        The backend workflow consists of several key steps:
-        \begin{enumerate}
-            \item \textbf{Request Reception:} The backend receives the scanned images or uploaded from the frontend via RESTful API calls.
-            \item \textbf{Image and Data Processing:}
-                \begin{itemize}
-                    \item If an image is recieved, it is processed using IBM Granite Vision to extract text and identify diagrams, returning structured data.
-                    \item If text data is recieved, it is analyzed to identify key components, relationships and interactions.
-                \end{itemize}
-            \item \textbf{AI Reasoning and Response Generation:} The backend composes of a prompt that combines:
-                \begin{itemize}
-                    \item Extracted diagram information from IBM Granite Vision.
-                    \item Relevant documentation snippets.
-                    \item The user's query or interaction context.
-                \end{itemize}
+            The backend workflow consists of several key steps:
+            \begin{enumerate}
+                \item \textbf{Request Reception:} The backend receives the scanned images or uploaded files from the frontend via RESTful API calls.
+                \item \textbf{Image and Data Processing:}
+                    \begin{itemize}
+                        \item If an image is received, it is processed using IBM Granite Vision to extract text and identify diagrams, returning structured data.
+                        \item If text data is received, it is analysed to identify key components, relationships and interactions.
+                    \end{itemize}
+                \item \textbf{AI Reasoning and Response Generation:} The backend constructs a prompt that combines:
+                    \begin{itemize}
+                        \item Extracted diagram information from IBM Granite Vision.
+                        \item Relevant documentation snippets.
+                        \item The user's query or interaction context.
+                    \end{itemize}
 
-                The composite prompt is sent to IBM Granite, which then generates a natural language response.
-            \item \textbf{Response Delivery:} The backend merges the AI-generated response with structured metadata and send a single JSON payload back to the mobile app. The fronted then
-            displays the AR overlays and AI responses to the user.
-        \end{enumerate}
+                    The composite prompt is sent to IBM Granite, which then generates a natural language response.
+                \item \textbf{Response Delivery:} The backend merges the AI-generated response with structured metadata and sends a single JSON payload back to the app. The frontend then
+                displays the AR overlays and AI responses to the user.
+            \end{enumerate}
 
-        \subsubsection{Data Management and Caching}
-            To improve efficiency, the backend implements:
-            \begin{itemize}
-                \item \textbf{Caching:} Previously processed diagrams are stored to reduce redundant processing using Redis or local storage.
-                \item \textbf{Error Handling:} AI or network failures return structured JSON error messages to the frontend for user notification.
-                \item \textbf{User session logs:} Stored in a database for analytics and improvement (PostgreSQL or Firebase).
-            \end{itemize}
-            
+            Figure \ref{fig:Backend_Architecture} illustrates the backend architecture and data flow between the different components.
+                
     \subsection{Technology Stack}
-        The project will utilize the following technologies:
-        \begin{itemize}
-            \item \textbf{Frontend:} React Native for cross-platform mobile development, ARCore/ARKit/ViroReact for augmented reality functionalities.
-            \item \textbf{Backend:} Node.js with Express for server-side logic, IBM Granite 4.0 for AI capabilities, IBM Granite Vision for image recognition, and MongoDB for data storage.
-            \item \textbf{Development Tools:} Visual Studio Code for code editing, Git for version control, REST APIs for communication between frontend and backend.
-        \end{itemize}
+            The project utilises the following technologies:
+            \begin{itemize}
+                \item \textbf{Frontend:} React Native for cross-platform mobile development, utilising ViroReact (bridging ARKit and ARCore) for rendering augmented reality overlays and camera interactions.
+                \item \textbf{Backend:} Python with Flask for the server-side API architecture. The AI pipeline integrates the Segment Anything Model (SAM 2) for spatial segmentation, IBM Granite Vision (3.1) for semantic image analysis, and IBM Granite Chat for context-aware queries
+                \item \textbf{Development Tools:} Visual Studio Code for code editing, Git and GitHub for version control, and RESTful APIs for secure, asynchronous communication between the mobile client and backend services.
+            \end{itemize}
 
-    \subsection{Testing}
 
-\section{Current Progress}
-    \subsection{}
+    \subsection{Testing Strategy}
 
-\section{Project Management}
+        App development is an iterative process that requires continuous and thorough testing to ensure the quality and reliability of the application. The testing strategy for this
+        project has not changed from the initial outline in the project specification. However, it has been refined to better align with the development process. The testing strategy encompasses the following key areas:
+        \subsubsection{Backend Testing (Unit and Integration)}
+
+            Given the modular nature of the backend, unit tests will be implemented for individual services and components. Each service, such as image processing or AI response generation, will have its own set of tests to verify its functionality 
+            in different scenarios. Integration tests will also be conducted to ensure that the services work together as expected and that data flows correctly between them. To simulate external dependencies, such as file uploads and user queries, mock objects and
+            stubs will be used. These tests will confirm that the backend can handle various inputs and edge cases, simultaneously confirming that the system returns appropriate HTTP status codes and error messages when necessary.
+
+        \subsubsection{Frontend Testing}
+
+            The frontend will undergo testing to verify UI stability, responsiveness and correct state management during user interactions. Crucial user flows, such as document scanning, uploading and AR interactions, will be tested to ensure they render correctly under
+            different state conditions. This involves verifying that the app responds appropriately to user inputs, displays correct feedback and handles errors gracefully, making sure that the user is never left in an uncertain state. Additionally, navigation logic will
+            be tested to verify the integrity of the workflow between different screens and components. 
+
+        \subsubsection{System Integration Testing}
+
+            Once both the frontend and backend components have been individually tested, system end-to-end testing will be conducted to validate the complete application workflow. This involves simulating the full user journey, from uploading or scanning a file
+            to receiving AR overlays and AI responses. This phase of testing will validate the system's performance under realistic conditions. 
+
+        \subsubsection{User Acceptance Testing}
+
+            Finally, user acceptance testing will be performed with a select group of target users to gather feedback on the overall user experience. This phase will have a main focus on usability, accessibility and satisfaction, verifying that the application meets
+            the needs and expectations of its intended audience. The feedback collected during this phase will be used to make final adjustments and improvements.
+
+\section{Project Overview and Current Progress}
+    
+    \subsection{Management}
+
+    Given the agile nature of the project, the Scrum methodology has continued to be adopted for project management, as stated in the project specification. This approach has allowed for flexibility and adaptability throughout the development process,
+    making deviations from the initial plan easier to manage and reduce the risk of falling behind schedule. Regular sprint meetings have been held to review progress, discuss challenges and plan the next steps. 
+
+    Moreover, the use of version control with Git and GitHub has been beneficial for tracking changes, documenting progress and maintaining a clear history of the codebase. As seen in the picture below, the commit history shows a consistent pattern of development activity, with appropriate
+    commit messages that describe the changes made. 
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=0.7\textwidth]{img/Git_Commit_History.png}
+        \caption{Git commit history showcasing development activity}
+        \label{fig:Git_Commit_History}
+    \end{figure}
+
+    The modular codebase has been organised into separate repositories for the frontend and backend components, allowing for independent development and testing. The repository structures can be seen in the images below, showcasing the organisation of files and directories for both the React Native app and the Flask backend.
+
+    \begin{figure}[H]
+        \centering
+        \begin{subfigure}[b]{0.40\textwidth}
+            \centering
+            \includegraphics[width=\linewidth]{img/Frontend_Repo_Structure.png}
+            \caption{Frontend repository structure}
+        \end{subfigure}
+        \hfill
+        \begin{subfigure}[b]{0.40\textwidth}
+            \centering
+            \includegraphics[width=\linewidth]{img/Backend_Repo_Structure.png}
+            \caption{Backend repository structure}
+        \end{subfigure}
+        \caption{Codebase organisation for frontend and backend components}
+        \label{fig:Repo_Structures}
+    \end{figure}
+    
+    \subsection{Comparison to Initial Timeline}
+
+    The initial timeline for the project focused on working on the backend and the frontend simultaneously. For each four week sprint, two weeks were allocated to backend feature development, followed by two weeks
+    of frontend integration of the newly developed backend feature. While developing the backend, several anticipated challenges were encountered, such as AR unfamiliarity, technical limitations of devices and integration
+    between multiple services. Therefore, the timeline was adjusted to prioritise backend development and testing before moving on to frontend integration. This adjustment allowed for a more focused approach to addressing
+    backend challenges and ensured that the core functionalities were developed and tested before integrating them into the frontend. 
+
+    \subsection{Completed Features}
+
+    The core backend infrastructure has been established and is fully operational. It is built upon a modular Flask API architecture that serves as the system's backbone. Endpoints
+    have been implemented to handle the complete data flow, from uploading files to processing them with different services, and finally returning structured JSON responses. 
+
+    The set of services encapsulates the specific functionalities required for the application and are exposed through dedicated API routes. The \texttt{Preprocess Service} normalises image resolution
+    and sanitises file inputs to ensure compatibility with downstream models. This prepares the data for the \texttt{AR Service} and \texttt{AI Service}, both of which invoke the loaded AI models to perform their respective tasks.
+    The \texttt{AR Service} first invokes SAM 2 to spatially define diagram components and then chains the \texttt{Vision Service} to use Granite Vision for identifying, classifying and extracting metadata from the diagram elements. In parallel,
+    the \texttt{AI Service} manages the conversational logic and interfaces with Granite to generate context-aware responses based on user queries and the textual content of the document. These functions are accessible through their 
+    respective API endpoints, with \texttt{/api/upload} handling secure file uploads and cryptographic hashing; \texttt{/api/ar/generate} triggering the visual analysis pipeline and returning structured JSON responses; and \texttt{/api/ai/chat} facilitating
+    the retrieval-augmented generation process for user queries.
+
+    A \texttt{ModelManager} service has also been developed using the Singleton~\cite{patternsdev_singleton} design pattern to control the lifecycle of the different AI models used in the backend, preventing redundant
+    initialisations and ensuring memory efficiency. To address the challenge imposed by having multiple models running simultaneously, the vision-based models, Granite Vision and SAM 2, were loaded
+    on the GPU, while the language-based model, Granite, was loaded on the CPU. This separation allowed for optimal resource utilisation and ensured smooth operation of all models without overloading the system or
+    causing memory issues.
+
+    On the client side, the essential React Native screens have been developed, including the Home Screen, Upload Screen, non-functional Chat Interface and a Settings Screen. The UI components have been designed to be intuitive and user-friendly,
+    complying with WCAG guidelines. The frontend now has basic capabilities for a user to upload a document, send it to the backend for processing and receive a response from the Flask API. 
+
+    \subsection{Ongoing Work}
+
+    With the backend infrastructure and a data flow in place, the current development focus has shifted towards the frontend implementation and the integration of the user interface using React Native. A primary area of 
+    focus is the Document View screen, which allows users to view the processed document and transition between different modes, such as AR visualisation and AI assistance.
+
+    Furthermore, the functional implementation of the Chat interface is in progress. While the backend can already process user queries and generate responses, the frontend chat interface is being developed to provide
+    a responsive and persistent chat experience. This includes features such as preserving history context, loading states and input handling, ensuring that the dialogue between the user and the AI assistant 
+    feels natural and engaging. The goal is to have a chat interface which can dynamically reference the active document context without losing track of previous interactions.
+
+    Finally, efforts are being made towards the AR view rendering and interaction capabilities. Although the backend can generate segmentation masks and component metadata, actively rendering these overlays in an AR environment
+    and allowing users to interact with them is a complex task. Figure\ref{fig:Visual_Analysis} illustrates the current progress on the visual analysis pipeline, showcasing the segmentation masks generated by SAM 2.
+        
+    \subsection{Testing Results}
+
+    Initial backend testing has been conducted using unit tests and integration tests according to the testing strategy. The unit tests for individual services have confirmed that each component functions correctly in isolation, handling various input scenarios,
+    such as PDF files or singular images, and edge cases, such as multiple concurrent requests. Integration tests have verified that the services work together as expected, with the data flowing as intended between the different services and endpoints. For instance, the 
+    code below shows an example of a unit test for the file upload endpoint. This test simulates the upload of a dummy image file to the \texttt{/api/upload/} route, verifies that the response status code is \texttt{200 OK} and checks that the JSON response contains the expected 'status' key.
+    
+    \pagebreak
+    \begin{samepage}
+    \begin{lstlisting}[caption={Test for upload endpoint}]
+    def test_01_upload_endpoint(self):
+        print("\n--- TEST 1: Uploading File ---")
+
+        data = {'file': (img_byte_arr, 'test_image.png')}
+        response = self.client.post(
+            '/api/upload/',
+            data=data,
+            content_type='multipart/form-data'
+        )
+        
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('status', response.get_json())
+        print("SUCCESS: Upload returned 200 OK.")
+    \end{lstlisting}
+    \end{samepage}
+
+    Additionally, the visual analysis pipeline has been tested with the same dummy image file to verify that the system can correctly process and extract diagram components. Figure \ref{fig:Visual_Analysis} illustrates
+    the result of the visual analysis pipeline when processing a sample technical diagram, showcasing that it recognises and extracts relevant components and relationships. Similarly, the AI response generation
+    has been tested by sending sample queries related to the processed document and verifying that the responses are contextually relevant and accurate, while still returning structured JSON data and appropriate status codes.
+
+    Furthermore, a queue stress test was conducted to simulate multiple concurrent requests to the backend, ensuring that the system can handle high loads without performance degradation or failures. The results indicated that the backend maintained stability and 
+    responsiveness under stress, with all requests being processed successfully and within acceptable time frames. However, improvements can still be made to further optimise multiple request handling and reduce server response times.
+
+    Finally, preliminary frontend testing has been performed to verify the basic functionality of the UI components and navigation flow. Figure \ref{fig:Frontend_Development} illustrates different screens of the React Native app, showcasing the Home Screen, Upload Screen and Chat Interface. Initial tests
+    have confirmed that users can navigate between screens and receive appropriate feedback for actions such as file uploads. 
+
+    \subsection{Challenges Faced}
+
+    The main challenge faced was handling the heavy model loads on the backend, which required careful management of system resources to prevent memory overloads and ensure
+    fast response times. Initially, advanced models were considered to provide the user with high-quality responses. However, due to hardware limitations, it was necessary to switch to lighter models that could run efficiently on the available infrastructure.
+    For instance, the AI LLM model was changed from IBM Granite 4.0 to Granite 3.1, which provided a good balance between performance and resource consumption. However, memory management remained a challenge. One potential solution to this issue was to implement a
+    "lazy-loading" mechanism, where models are only loaded into memory when needed and unloaded when not in use. This approach could help free up resources and improve system performance. Unfortunately, this was not viable since it would
+    mean a significant increase in response times, which would negatively impact the user experience. For that reason, the decision was made to keep all models running simultaneously, where computationally intensive models, such as Granite Vision and SAM 2, are running
+    on the GPU, while lighter models, such as Granite 3.1, running on the CPU. This strategy allowed for better resource allocation and ensured that models could operate without overloading the system with every request.
 
 \section{Outlining Future Steps}
 
     \subsection{Updated Timeline}
 
-    \subsection{Web App}
+    Due to the adjustments made between the start of the project and the current progress, the timeline has been updated to reflect the new priorities and focus areas. An updated Gantt chart is provided in Figure \ref{fig:Appendix_GanttChart}, displaying
+    the revised timeline for the remaining development phases, including frontend development and integration, AR rendering and interaction, optimisations and additional features, and extensive testing and user feedback incorporation.
 
-    \subsection{Additional Features}
+    \subsection{Optimisations}
 
-\section{Project Evaluation}
+    As the project progresses, there will be opportunities to further optimise both the frontend and backend components. For instance, on the backend side, further improvements could be made to the model loading or request handling mechanisms to enhance performance and reduce latency. One strategy could
+    be to adopt a multithreading approach, where requests are processed in parallel, allowing for better resource utilisation and faster response times.
+
+    On the client side, optimisations could focus on improving the AR rendering performance and interaction responsiveness. This could involve refining the AR overlay placement algorithms, adjusting rendering settings for better performance and enhancing user interactions to be more fluid and intuitive. 
 
 \section{Legal, Social, Ethical and Professional Issues \& Considerations}
 
+    \subsection{Legal Considerations}
 
+    As outlined in the project specification, legal considerations primarily revolve around data privacy and intellectual property rights. The application will handle user-uploaded documents, which may contain sensitive or proprietary information. To address this, the user has full control over their data,
+    with the option of deleting stored information available at all times. Additionally, IBM has ownership over the Intellectual Property (IP) rights of this project.
+
+    \subsection{Social and Ethical Issues}
+
+    There have been no identified social or ethical issues related to the project.
+
+    \subsection{Professional Considerations}
+
+    Throughout the development process, professional standards and best practices have been upheld. This will continue to be the case, ensuring that the project adheres to industry standards for software development, data security and user experience.
+
+\pagebreak
+
+%TC:ignore
+\begin{thebibliography}{9}
+\bibitem{dgtar} A. Author and B. Author, "Dependency Graph Tool in Augmented Reality," in \textit{Proceedings of Example Conference}, 2019.
+\bibitem{mohr2015retargeting} P. Mohr, F. Funk, and R. Malaka, "Retargeting technical documentation to augmented reality," in \textit{2015 IEEE Virtual Reality (VR)}, pp. 83--90.
+\bibitem{ptc_vuforia_expert_capture} PTC, "Vuforia Expert Capture," Product brief, 2023.
+\bibitem{taqtile_maintenance} Taqtile, "Manifest platform for industrial maintenance," Whitepaper, 2023.
+\bibitem{wcag21} W3C, "Web Content Accessibility Guidelines (WCAG) 2.1," 2018.
+\bibitem{redhat_layered_client_server} Red Hat, "What is a layered client-server architecture?," Red Hat Reference Guide, 2024. Available: \url{https://www.redhat.com/}.
+\bibitem{patternsdev_singleton} Patterns.dev, "Singleton pattern," 2024. Available: \url{https://www.patterns.dev/}.
+\end{thebibliography}
+
+
+\clearpage
+\appendix
+\section*{Appendix}
+\addcontentsline{toc}{section}{Appendix}
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=0.9\textwidth]{img/Architecture_Diagram.png}
+        \caption{System architecture overview}
+        \label{fig:System_Architecture}
+    \end{figure}
+
+    \clearpage
+   \begin{landscape}
+    \begin{figure}[p]
+        \centering
+        % maximizing both width and height to fill the available space
+        \includegraphics[width=\linewidth, height=0.95\textheight, keepaspectratio]{img/Data_Flow.png}
+        \caption{Frontend-backend data flow}
+        \label{fig:Data_Flow}
+    \end{figure}
+\end{landscape}
+
+    \clearpage
+
+    \begin{figure}[H]
+        \centering
+        \includegraphics[width=0.9\textwidth]{img/Backend_Architecture.png}
+        \caption{Backend architecture and data flow}
+        \label{fig:Backend_Architecture}
+    \end{figure}
+
+    \begin{figure}[H]
+    \centering
+    \begin{subfigure}[b]{0.21\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{img/FrontendHomeTab.png}
+        \caption{Home}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.21\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{img/FrontendChatTab.png}
+        \caption{Chat}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.21\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{img/FrontendUploadTab.png}
+        \caption{Upload}
+    \end{subfigure}
+    \hfill
+    \begin{subfigure}[b]{0.21\textwidth}
+        \centering
+        \includegraphics[width=\linewidth]{img/FrontendSettingsTab.png}
+        \caption{Settings}
+    \end{subfigure}
+    
+    \caption{Frontend screen samples (Home, Chat, Upload, Settings).}
+    \label{fig:Frontend_Development}
+\end{figure}
+
+    \begin{figure}[H]
+        \centering
+        \begin{subfigure}[b]{0.48\textwidth}
+            \centering
+            \includegraphics[width=\linewidth]{img/Schematic.png}
+            \caption{Input schematic}
+        \end{subfigure}
+        \hfill
+        \begin{subfigure}[b]{0.48\textwidth}
+            \centering
+            \includegraphics[width=\linewidth]{img/debug_ar_result.png}
+            \caption{AR overlay debug result}
+        \end{subfigure}
+        \caption{Visual analysis pipeline example.}
+        \label{fig:Visual_Analysis}
+    \end{figure}
+
+    \begin{landscape}
+    \thispagestyle{plain}
+    \begin{figure}[p]
+        \centering
+        \resizebox{\linewidth}{!}{%
+            \begin{ganttchart}[
+                vgrid={*6{dotted}, *1{red, dashed}},
+                hgrid,
+                x unit=0.4cm,
+                y unit chart=1cm,  % Height of each row
+                time slot format=isodate,
+                % --- Styling ---
+                bar/.append style={fill=phase1blue, draw=none, rounded corners=2pt},
+                bar height=0.6,
+                group right shift=0,
+                group top shift=0.7,
+                group height=.3,
+                group/.append style={fill=black},
+                milestone/.append style={shape=circle, fill=red, draw=none, inner sep=3pt},
+                milestone label font=\bfseries\small
+            ]{2026-01-12}{2026-04-09}
+            
+                \gantttitlecalendar{year, month=name} \\
+                
+                % --- Milestones ---
+                \ganttmilestone{Progress Report (22 Jan)}{2026-01-22} \\
+                \ganttmilestone{Final Plan (13 Mar)}{2026-03-13} \\
+                \ganttmilestone{Final Deadline (9 Apr)}{2026-04-09} \\
+                
+                % --- Documentation ---
+                \ganttgroup{Documentation}{2026-01-12}{2026-04-09} \\
+                \ganttbar[bar/.append style={fill=phase1blue}]{Write Progress Report}{2026-01-12}{2026-01-22} \\
+                \ganttbar[bar/.append style={fill=phase1blue}]{Draft Final Plan}{2026-03-01}{2026-03-13} \\
+                \ganttbar[bar/.append style={fill=phase1blue}]{Write Final Dissertation}{2026-03-14}{2026-04-09} \\
+                
+                % --- Frontend: Document View ---
+                \ganttgroup{Frontend: Doc View}{2026-01-12}{2026-01-25} \\
+                \ganttbar[bar/.append style={fill=phase2docview}]{UI Layout \& Grid}{2026-01-12}{2026-01-18} \\
+                \ganttbar[bar/.append style={fill=phase2docview}]{Navigation Logic}{2026-01-19}{2026-01-25} \\
+                
+                % --- Frontend: AR Integration ---
+                \ganttgroup{Frontend: AR Integr.}{2026-01-26}{2026-02-15} \\
+                \ganttbar[bar/.append style={fill=phase2orange}]{Scaling \& Coords}{2026-01-26}{2026-02-01} \\
+                \ganttbar[bar/.append style={fill=phase2orange}]{Render Overlays}{2026-02-02}{2026-02-08} \\
+                \ganttbar[bar/.append style={fill=phase2orange}]{Touch Interactions}{2026-02-09}{2026-02-15} \\
+                
+                % --- Frontend: Chat UI ---
+                \ganttgroup{Frontend: Chat UI}{2026-02-16}{2026-03-01} \\
+                \ganttbar[bar/.append style={fill=phase3green}]{UI Components}{2026-02-16}{2026-02-22} \\
+                \ganttbar[bar/.append style={fill=phase3green}]{State \& Context}{2026-02-23}{2026-03-01} \\
+                
+                % --- Backend Operations ---
+                \ganttgroup{Backend Ops}{2026-01-15}{2026-03-01} \\
+                \ganttbar[bar/.append style={fill=phase4pink}]{Code Patching}{2026-01-15}{2026-02-08} \\
+                \ganttbar[bar/.append style={fill=phase4pink}]{Queue Optimisation}{2026-02-09}{2026-03-01} \\
+                
+                % --- Testing ---
+                \ganttgroup{Final Testing}{2026-03-02}{2026-04-05} \\
+                \ganttbar[bar/.append style={fill=phase5purp}]{E2E System Tests}{2026-03-02}{2026-03-15} \\
+                \ganttbar[bar/.append style={fill=phase5purp}]{Polish \& Bug Fixes}{2026-03-16}{2026-04-05} \\
+            \end{ganttchart}%
+        }
+        \caption{Revised Project Timeline}
+        \label{fig:Appendix_GanttChart}
+    \end{figure}
+\end{landscape}
+
+    \addcontentsline{toc}{subsection}{Project Specification}
+    \includepdf[pages=-]{ProjectSpec.pdf}
+%TC:endignore
 \end{document}

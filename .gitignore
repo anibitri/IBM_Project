@@ -38,4 +38,10 @@ __pycache__/
 
 *.swp
 
+.bib
+.bbl
+
+
 venv/
+deliverables/RequirementsDesign.bbl
+deliverables/references.bib
