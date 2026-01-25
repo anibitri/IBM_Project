@@ -37,7 +37,7 @@ class ModelManager:
         # 1. Vision Model
         try:
             print("👁️ Loading Granite Vision...")
-            vision_path = "ibm-granite/granite-vision-3.1-2b-preview"
+            vision_path = "ibm-granite/granite-vision-3.3-2b"
             self.vision_processor = AutoProcessor.from_pretrained(vision_path)
 
             self.vision_model = AutoModelForVision2Seq.from_pretrained(

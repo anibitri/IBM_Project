@@ -7,10 +7,12 @@ import { useHistory } from '../context/HistoryContext';
 import axios from 'axios';
 
 export default function UploadScreen({ navigation }) {
-  const { addHistoryItem } = useHistory();
+  // ensure updateHistoryItem is available in your Context Provider
+  const { addHistoryItem, updateHistoryItem } = useHistory();
 
   const [selectedFile, setSelectedFile] = React.useState(null);
-  const [analyzing, setAnalyzing] = React.useState(false);
+  // We keep track of local analyzing state just to prevent double-clicks
+  const [isStarting, setIsStarting] = React.useState(false);
 
   // Use 10.0.2.2 for Android Emulator, localhost for iOS Simulator
   const API_HOST = Platform.select({
@@ -19,20 +21,16 @@ export default function UploadScreen({ navigation }) {
     default: 'http://localhost:4200',
   });
 
-  // Set to FALSE to use your real backend logic
   const DEV_MOCK = false;
 
   const requestStoragePermission = async () => {
     try {
       if (Platform.OS === 'android') {
-        // Modern Android (10+) often doesn't need this for DocumentPicker, 
-        // but older versions might.
-        if (Platform.Version >= 33) return true; // Android 13+ handles media permissions differently
-        
+        if (Platform.Version >= 33) return true; 
         const result = await request(PERMISSIONS.ANDROID.READ_EXTERNAL_STORAGE);
         return result === RESULTS.GRANTED;
       }
-      return true; // iOS handles this automatically
+      return true; 
     } catch (error) {
       console.error('Permission error:', error);
       return false;
@@ -66,44 +64,69 @@ export default function UploadScreen({ navigation }) {
       return;
     }
 
-    setAnalyzing(true);
+    setIsStarting(true);
 
+    // --- 1. PREPARE DATA ---
+    let fileUri = selectedFile.fileCopyUri || selectedFile.uri;
+    if (Platform.OS === 'ios' && !fileUri.startsWith('file://')) {
+      fileUri = `file://${fileUri}`;
+    }
+    
+    // Generate a unique ID immediately
+    const tempId = Date.now().toString();
+
+    // --- 2. CREATE PENDING HISTORY ITEM ---
+    const pendingItem = {
+      id: tempId,
+      name: selectedFile.name,
+      uri: fileUri,
+      type: selectedFile.type,
+      date: new Date().toISOString(),
+      status: 'analyzing', // <--- IMPORTANT: UI will show spinner based on this
+      progress: 0,
+      analysisSummary: null,
+      arElements: [],
+    };
+
+    // Add to Context immediately
+    addHistoryItem(pendingItem);
+
+    // --- 3. NAVIGATE IMMEDIATELY ---
+    // User sees the document view while it loads in background
+    navigation.navigate('DocView', { item: pendingItem });
+    setIsStarting(false); // Reset local button state
+
+    // --- 4. START BACKGROUND ANALYSIS ---
+    performBackgroundUpload(tempId, fileUri, selectedFile.type, selectedFile.name);
+  };
+
+  // This runs "in the background" even after navigation
+  const performBackgroundUpload = async (itemId, uri, type, name) => {
     try {
       const formData = new FormData();
-
-      // --- URI Normalization ---
-      let fileUri = selectedFile.fileCopyUri || selectedFile.uri;
-      if (Platform.OS === 'ios' && !fileUri.startsWith('file://')) {
-        fileUri = `file://${fileUri}`;
-      }
-
-      const mimeType = selectedFile.type || 'application/octet-stream';
+      const mimeType = type || 'application/octet-stream';
       
       formData.append('file', {
-        uri: fileUri,
+        uri: uri,
         type: mimeType,
-        name: selectedFile.name || 'upload.bin',
+        name: name || 'upload.bin',
       });
 
-      // 1. Upload & Analyze (One-Shot)
-      // We use the /api/upload/ route which now runs the full Preprocess Pipeline
       const uploadUrl = `${API_HOST}/api/upload/?mock=${DEV_MOCK ? '1' : '0'}`;
-      console.log(`Uploading to: ${uploadUrl}`);
       
       const response = await axios.post(uploadUrl, formData, {
         headers: { 'Content-Type': 'multipart/form-data' },
-        timeout: 60000, // 60 sec timeout for heavy AI operations
+        timeout: 60000, 
       });
 
       const data = response.data;
       if (data.status !== 'ok') throw new Error(data.error || 'Upload failed');
 
-      // 2. Extract Data
+      // Extract Data
       const preprocess = data.preprocess || {};
       const storedName = data.file?.stored_name;
-      const imageUrl = `${API_HOST}/static/uploads/${storedName}`; // Construct full URL
+      const imageUrl = `${API_HOST}/static/uploads/${storedName}`;
       
-      // Determine Analysis Result (Image vs PDF logic)
       let aiSummary = "";
       let arElements = [];
       let fileMeta = {};
@@ -111,55 +134,31 @@ export default function UploadScreen({ navigation }) {
       if (preprocess.kind === 'image') {
         aiSummary = preprocess.ai?.answer || preprocess.vision?.answer || "";
         arElements = preprocess.ar?.elements || [];
-        fileMeta = preprocess.meta || {}; // Contains width/height
+        fileMeta = preprocess.meta || {};
       } else {
-        // PDF
         aiSummary = preprocess.ai_final?.answer || preprocess.ai_initial?.answer || "";
         arElements = preprocess.ar?.elements || [];
       }
 
-      // 3. Save to History
-      const historyItem = {
-        id: Date.now().toString(),
-        name: selectedFile.name,
-        uri: fileUri,
-        type: selectedFile.type,
-        date: new Date().toISOString(),
-        
-        // Critical Data for Re-opening
+      // --- 5. UPDATE HISTORY ITEM ON SUCCESS ---
+      // This will automatically update the DocView screen via Context
+      updateHistoryItem(itemId, {
         status: 'completed',
         analysisSummary: aiSummary,
-        storedName: storedName, // To re-fetch AR data later
-        imageUrl: imageUrl,     // To show in 3D viewer
-        arElements: arElements, // The clickable boxes
-        fileMeta: fileMeta      // Aspect ratio info
-      };
-      
-      addHistoryItem(historyItem);
-
-      // 4. Navigate to Result (Don't just go Home!)
-      Alert.alert(
-        'Analysis Complete',
-        `Found ${arElements.length} interactive components.`,
-        [
-          {
-            text: 'View Results',
-            onPress: () => {
-              // Navigate to your Viewer Screen
-              // Ensure you have this screen registered in your Navigator!
-              navigation.navigate('ARViewer', { 
-                data: historyItem // Pass the full object
-              });
-            }
-          }
-        ]
-      );
+        storedName: storedName,
+        imageUrl: imageUrl,
+        arElements: arElements,
+        fileMeta: fileMeta
+      });
 
     } catch (error) {
-      console.error('Analysis Failed:', error);
-      Alert.alert('Error', error.response?.data?.error || error.message || 'Analysis failed.');
-    } finally {
-      setAnalyzing(false);
+      console.error('Background Analysis Failed:', error);
+      
+      // --- 6. UPDATE HISTORY ITEM ON FAILURE ---
+      updateHistoryItem(itemId, {
+        status: 'failed',
+        error: error.response?.data?.error || error.message || 'Analysis failed.'
+      });
     }
   };
 
@@ -167,11 +166,11 @@ export default function UploadScreen({ navigation }) {
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Upload Document</Text>
       <Text style={styles.subtitle}>
-        Upload a schematic or diagram (PDF/Image) to generate an interactive AR analysis.
+        Upload a schematic or diagram to generate an interactive AR analysis.
       </Text>
 
       <View style={styles.card}>
-        <TouchableOpacity style={styles.uploadBox} onPress={handleFileUpload} disabled={analyzing}>
+        <TouchableOpacity style={styles.uploadBox} onPress={handleFileUpload} disabled={isStarting}>
           <Text style={styles.uploadIcon}>📂</Text>
           <Text style={styles.uploadText}>
             {selectedFile ? selectedFile.name : 'Tap to select file'}
@@ -180,17 +179,14 @@ export default function UploadScreen({ navigation }) {
 
         {selectedFile && (
           <TouchableOpacity
-            style={[styles.analyzeBtn, analyzing && styles.disabledBtn]}
+            style={[styles.analyzeBtn, isStarting && styles.disabledBtn]}
             onPress={handleBeginAnalysis}
-            disabled={analyzing}
+            disabled={isStarting}
           >
-            {analyzing ? (
-              <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <ActivityIndicator color="#fff" style={{ marginRight: 10 }} />
-                <Text style={styles.btnText}>Processing (this may take 30s)...</Text>
-              </View>
+            {isStarting ? (
+              <ActivityIndicator color="#fff" />
             ) : (
-              <Text style={styles.btnText}>Analyze & Generate AR</Text>
+              <Text style={styles.btnText}>Analyze & Open</Text>
             )}
           </TouchableOpacity>
         )}
@@ -199,9 +195,10 @@ export default function UploadScreen({ navigation }) {
       <View style={styles.infoBox}>
         <Text style={styles.infoTitle}>💡 How it works</Text>
         <Text style={styles.infoText}>
-          1. Our AI scans your diagram.{'\n'}
-          2. It identifies components (Valves, Pumps, etc.).{'\n'}
-          3. It creates an interactive 3D board you can explore.
+          1. Select your file.{'\n'}
+          2. We immediately open the document view.{'\n'}
+          3. AI processing happens in the background.{'\n'}
+          4. If analysis fails, you can retry from the view screen.
         </Text>
       </View>
     </ScrollView>

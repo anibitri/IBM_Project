@@ -10,6 +10,7 @@ import CameraScreen from './src/screens/CameraScreen';
 import UploadScreen from './src/screens/UploadScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
+import DocumentScreen from './src/screens/DocumentScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -54,13 +55,10 @@ export default function App() {
     <HistoryProvider>
       <NavigationContainer>
         <Stack.Navigator>
-          <Stack.Screen
-            name="Home"
-            component={TabNavigator}
-            options={{ headerShown: false }}
-          />
+          <Stack.Screen name="Home" component={TabNavigator} options={{ headerShown: false }} />
           <Stack.Screen name="Scan" component={CameraScreen} />
           <Stack.Screen name="Upload" component={UploadScreen} />
+          <Stack.Screen name="DocView" component={DocumentScreen} options={{ title: 'Document Analysis' }} />
         </Stack.Navigator>
       </NavigationContainer>
     </HistoryProvider>
