@@ -5,7 +5,7 @@ from transformers import (
     AutoModelForCausalLM, 
     AutoTokenizer, 
     AutoProcessor, 
-    AutoModelForVision2Seq,
+    AutoModelForImageTextToText,
     BitsAndBytesConfig
 )
 from ultralytics import SAM
@@ -61,7 +61,7 @@ class ModelManager:
             vision_path = "ibm-granite/granite-vision-3.3-2b"
             self.vision_processor = AutoProcessor.from_pretrained(vision_path)
 
-            self.vision_model = AutoModelForVision2Seq.from_pretrained(
+            self.vision_model = AutoModelForImageTextToText.from_pretrained(
                 vision_path,
                 device_map="auto" if torch.cuda.is_available() else self.device,
                 torch_dtype=self.vision_compute_dtype,

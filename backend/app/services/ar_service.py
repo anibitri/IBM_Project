@@ -3,25 +3,33 @@ from app.services.model_manager import manager
 def extract_document_features(file_path, hints=None):
     """
     Runs MobileSAM to generate bounding boxes/segments.
-    Args:
-        file_path: Path to image
-        hints: Optional list of components from Vision (not fully used yet, but signature required)
+    Returns list of [x1, y1, x2, y2].
     """
+    if hints is None:
+        hints = []
+
     if not manager.ar_model:
         return []
 
     try:
         print(f"--- AR SERVICE: Segmenting {file_path} ---")
-        
-        # Run Inference
         results = manager.ar_model(file_path)
-        
+
+        if results is None:
+            return []
+
         segments = []
+
         for r in results:
-            # Extract boxes in [x1, y1, x2, y2] format
-            boxes = r.boxes.xyxy.cpu().numpy().tolist()
-            segments.extend(boxes)
-            
+            if not hasattr(r, "boxes") or r.boxes is None:
+                continue
+            if not hasattr(r.boxes, "xyxy"):
+                continue
+            boxes = r.boxes.xyxy
+            if boxes is None:
+                continue
+            segments.extend(boxes.cpu().numpy().tolist())
+
         return segments
 
     except Exception as e:

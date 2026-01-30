@@ -1,6 +1,5 @@
 import os
 import logging
-from concurrent.futures import ThreadPoolExecutor
 from PIL import Image
 
 # Docling
@@ -10,73 +9,99 @@ try:
     HAS_DOCLING = True
 except ImportError:
     HAS_DOCLING = False
-    print("Warning: docling not installed. PDF parsing will be limited.")
+    logging.warning("docling not installed. PDF parsing will be limited.")
 
-# Imports
+# Services
 from app.services.granite_vision_service import analyze_images
 from app.services.granite_ai_service import analyze_context as ai_analyze
 
-executor = ThreadPoolExecutor(max_workers=1)
-
-def _run_background_vision_task(file_path):
-    """Runs Granite Vision on GPU in background."""
-    try:
-        logging.info(f"BACKGROUND: Starting Vision Analysis for {os.path.basename(file_path)}...")
-        result = analyze_images(file_path)
-        summary = result.get('analysis', {}).get('summary', 'No summary.')
-        logging.info(f"BACKGROUND: Vision Complete. Summary: {summary[:50]}...")
-    except Exception as e:
-        logging.error(f"BACKGROUND ERROR: {e}")
 
 def preprocess_document(file_path, mock=False):
+    """
+    Central preprocessing pipeline.
+    - PDFs: parse -> AI summarize
+    - Images: run vision synchronously (safe)
+    """
     filename = os.path.basename(file_path)
     file_ext = filename.lower().split('.')[-1]
-    
+
     logging.info(f"Preprocessing: {file_path}")
 
     try:
-        # --- PATH A: PDF Processing ---
-        if file_ext == 'pdf':
-            if HAS_DOCLING:
-                logging.info("Using Docling to parse PDF...")
-                result = doc_converter.convert(file_path)
-                markdown_text = result.document.export_to_markdown()
-                
-                # Send to AI
-                summary_res = ai_analyze(text_excerpt=markdown_text[:2000])
-                summary = summary_res.get('answer', '')
-
+        # -----------------------------
+        # PATH A: PDF Processing
+        # -----------------------------
+        if file_ext == "pdf":
+            if not HAS_DOCLING:
                 return {
-                    "status": "success",
+                    "status": "error",
                     "type": "pdf",
-                    "text_excerpt": markdown_text[:2000],
-                    "ai_summary": summary
+                    "message": "PDF parser missing"
                 }
-            else:
-                return {"status": "error", "message": "PDF parser missing"}
 
-        # --- PATH B: Image Processing ---
-        elif file_ext in ['png', 'jpg', 'jpeg', 'bmp', 'tiff']:
+            logging.info("Using Docling to parse PDF...")
+            result = doc_converter.convert(file_path)
+
+            markdown_text = result.document.export_to_markdown()
+            excerpt = markdown_text[:2000]
+
+            ai_result = ai_analyze(text_excerpt=excerpt)
+            summary = ai_result.get("answer", "") if isinstance(ai_result, dict) else ""
+
+            return {
+                "status": "success",
+                "type": "pdf",
+                "text_excerpt": excerpt,
+                "ai_summary": summary,
+                "ai": ai_result
+            }
+
+        # -----------------------------
+        # PATH B: Image Processing
+        # -----------------------------
+        elif file_ext in {"png", "jpg", "jpeg", "bmp", "tiff", "webp"}:
+            # Validate image safely
             try:
                 with Image.open(file_path) as img:
-                    img.verify() 
+                    img.load()
             except Exception as e:
-                return {"status": "error", "message": f"Invalid image: {str(e)}"}
+                return {
+                    "status": "error",
+                    "type": "image",
+                    "message": f"Invalid image: {str(e)}"
+                }
 
-            # Fire background vision task
-            executor.submit(_run_background_vision_task, file_path)
-            
+            logging.info("Running vision analysis synchronously...")
+
+            vision_result = analyze_images(file_path)
+
+            if not isinstance(vision_result, dict):
+                raise RuntimeError("Vision service returned invalid result")
+
+            vision_summary = vision_result.get("analysis", {}).get(
+                "summary", "No summary generated."
+            )
+
             return {
                 "status": "success",
                 "type": "image",
-                "text_excerpt": "Image uploaded. Analysis running in background.",
-                "ai_summary": "Pending...", 
-                "vision_data": {"status": "processing"}
+                "text_excerpt": "Image processed successfully.",
+                "ai_summary": vision_summary,
+                "vision": vision_result
             }
 
+        # -----------------------------
+        # UNSUPPORTED FORMAT
+        # -----------------------------
         else:
-            return {"status": "error", "message": "Unsupported format"}
+            return {
+                "status": "error",
+                "message": f"Unsupported format: .{file_ext}"
+            }
 
     except Exception as e:
-        logging.error(f"Preprocessing failed: {e}")
-        return {"status": "error", "message": str(e)}
+        logging.exception("Preprocessing failed")
+        return {
+            "status": "error",
+            "message": str(e)
+        }

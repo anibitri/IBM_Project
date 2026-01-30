@@ -6,120 +6,92 @@ from app.services.model_manager import manager
 def _truncate_summary(text: str, max_chars: int = 220) -> str:
     """Safely truncate text to a specific length."""
     if len(text) <= max_chars:
-        return text
+        return text.strip()
     truncated = text[:max_chars]
-    # Try to cut off at the last complete sentence or punctuation
     last_punct = max(truncated.rfind('.'), truncated.rfind('!'), truncated.rfind('?'))
     if last_punct > 0:
-        return truncated[:last_punct+1]
+        return truncated[:last_punct+1].strip()
     return truncated.rstrip() + "..."
 
+def _clean_generated_text(text: str) -> str:
+    """Process generated text into clean component list."""
+    # Split lines, remove empty or nonsense lines
+    lines = [line.strip("-* ").strip() for line in text.splitlines()]
+    lines = [l for l in lines if re.search(r"[A-Za-z]", l) and len(l) < 60]
+    return "\n".join(lines) or "No components identified."
+
+def _load_image(input_data):
+    if isinstance(input_data, str):
+        return Image.open(input_data).convert("RGB"), input_data
+    if isinstance(input_data, list) and input_data:
+        return input_data[0], "InMemoryImage"
+    return None, "Invalid"
+
 def analyze_images(input_data, task="ar_extraction"):
-    """
-    Uses the pre-loaded Granite Vision model with strict Chat Template formatting.
-    """
+    """Run Granite Vision and return a clean component list."""
     if not manager.vision_model or not manager.vision_processor:
         return {"analysis": {"summary": "Error: Vision Model not loaded."}}
 
     try:
-        # 1. Handle Input (Path vs PIL List)
-        image = None
-        path_str = "InMemoryImage"
-        
-        if isinstance(input_data, str):
-            image = Image.open(input_data).convert("RGB")
-            path_str = input_data
-        elif isinstance(input_data, list) and len(input_data) > 0:
-            image = input_data[0]
-            
-        if not image:
-            return {"error": "Invalid input"}
+        image, path_str = _load_image(input_data)
+        if image is None:
+            return {"analysis": {"summary": "Invalid input."}}
 
-        # 2. Resize Image (CRITICAL STEP)
-        # Large images (>2000px) introduce noise. Resizing to ~1024px helps the model focus.
+        # Resize large images
         if max(image.size) > 1024:
             ratio = 1024.0 / max(image.size)
-            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
-            image = image.resize(new_size, Image.LANCZOS)
+            image = image.resize((int(image.size[0] * ratio), int(image.size[1] * ratio)), Image.LANCZOS)
 
         print(f"--- VISION SERVICE: Processing {path_str} [Task: {task}] ---")
-        
-        # 3. Define Prompt with Persona
-        # The prompt needs to be specific to stop rambling.
-        prompt_text = (
-            "You are a technical inspection assistant. "
-            "Analyze this image and strictly describe the visible equipment. "
-            "Identify components, read labels, and summarize the diagram."
-        )
-        if task == "ar_extraction":
-            prompt_text = "List the main technical components visible in this image."
 
-        # 4. Apply Chat Template (The Real Fix)
-        # This replaces manual "<image>" strings and ensures tokens align perfectly.
-        conversation = [
-            {
-                "role": "user", 
-                "content": [
-                    {"type": "image"}, 
-                    {"type": "text", "text": prompt_text}
-                ]
-            },
-        ]
-        
-        # Pre-process inputs
-        inputs = manager.vision_processor.apply_chat_template(
-            conversation,
-            add_generation_prompt=True,
-            tokenize=True,
-            return_dict=True,
-            return_tensors="pt"
-        ).to(manager.device)
+        # --- Improved Prompt ---
+        prompt = f"""<image>
+You are a technical inspection assistant.
+Carefully identify all visible components in this image.
+List each component on a separate line using only the name.
+Do NOT repeat characters or generate gibberish.
+If labels or text are visible, include them as well.
+Begin your list immediately, one component per line:
+- """
 
-        # Explicitly process image pixels
-        pixel_values = manager.vision_processor.image_processor(
-            image, return_tensors="pt"
-        ).pixel_values.to(manager.device).to(manager.dtype)
+        # Tokenize inputs
+        inputs = manager.vision_processor(images=image, text=prompt, return_tensors="pt")
+        target_dtype = getattr(manager, "vision_compute_dtype", manager.dtype)
+        processed_inputs = {k: v.to(manager.device, dtype=torch.long if k in ["input_ids", "attention_mask"] else target_dtype)
+                            for k, v in inputs.items()}
 
-        # 5. Generate with Strict Parameters
+        # --- Generate ---
         with torch.no_grad():
             output_ids = manager.vision_model.generate(
-                **inputs,
-                pixel_values=pixel_values,
-                max_new_tokens=250,
-                
-                # --- STABILITY SETTINGS ---
-                do_sample=False,         # Greedy decoding (Best for factual tasks)
-                repetition_penalty=1.2,  # Strong penalty for loops
-                min_length=20,           # Forces it to write a real sentence
+                **processed_inputs,
+                max_new_tokens=120,
+                do_sample=True,
+                temperature=0.25,
+                top_p=0.85,
+                repetition_penalty=1.5,
+                no_repeat_ngram_size=2,
                 eos_token_id=manager.vision_processor.tokenizer.eos_token_id
             )
 
-        # 6. Decode Response
-        generated_text = manager.vision_processor.decode(
-            output_ids[0], 
-            skip_special_tokens=True
-        )
+        # Decode only the new tokens
+        prompt_len = processed_inputs["input_ids"].shape[1]
+        generated_text = manager.vision_processor.batch_decode(
+            output_ids[:, prompt_len:], skip_special_tokens=True
+        )[0]
 
-        # 7. Post-Processing (Sanity Check)
-        generated_text = _truncate_summary(generated_text)
-        
-        if not generated_text or len(generated_text) < 5:
-            generated_text = "Analysis complete. Components identified."
+        # --- Clean generated text ---
+        lines = [line.strip("-* ").strip() for line in generated_text.splitlines()]
+        lines = [l for l in lines if re.search(r"[A-Za-z0-9]", l) and len(l) < 60]
 
-        print(f"--- VISION OUTPUT: {generated_text} ---")
+        summary = "\n".join(lines)
+        if not summary.strip():
+            summary = "No components identified."
 
-        # 8. Return Format
-        response = {
-            "analysis": {
-                "summary": generated_text
-            }
-        }
+        print(f"--- VISION OUTPUT:\n{summary}")
 
+        response = {"analysis": {"summary": summary}}
         if task == "ar_extraction":
-            response.update({
-                "components": [], # Placeholder for AR bounding boxes
-                "answer": generated_text
-            })
+            response.update({"components": summary.splitlines(), "answer": summary})
 
         return response
 
