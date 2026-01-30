@@ -5,17 +5,26 @@ def _generate_text(prompt, max_tokens=200):
     if not manager.chat_model or not manager.chat_tokenizer:
         return "Error: AI Model offline."
 
-    input_ids = manager.chat_tokenizer(
-        prompt, return_tensors="pt"
-    ).input_ids.to("cpu")
+    enc = manager.chat_tokenizer(
+        prompt,
+        return_tensors="pt",
+        padding=True,
+        truncation=True
+    )
+
+    # Move tensors to the model device and keep masks as longs.
+    enc = {k: v.to(manager.device) for k, v in enc.items()}
+    if "attention_mask" in enc:
+        enc["attention_mask"] = enc["attention_mask"].long()
 
     with torch.no_grad():
         output_ids = manager.chat_model.generate(
-            input_ids,
+            **enc,
             max_new_tokens=max_tokens,
             do_sample=True,
             temperature=0.7,
-            top_p=0.9
+            top_p=0.9,
+            pad_token_id=manager.chat_tokenizer.pad_token_id
         )
     
     response = manager.chat_tokenizer.decode(output_ids[0], skip_special_tokens=True)

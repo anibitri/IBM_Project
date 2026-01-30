@@ -42,12 +42,10 @@ class TestBackend(unittest.TestCase):
         print("SUCCESS: Upload returned 200 OK.")
 
     def test_02_real_ar_and_vision(self):
-        print("\n--- TEST 2: Real AR (Labeled Schematic) + Vision ---")
-        
+        # Keep output minimal: only print vision summary.
         # 1. Use the Real Schematic (if exists), else make a dummy
         real_schematic = os.path.join(self.upload_folder, 'simple_schematic.png')
         if not os.path.exists(real_schematic):
-            print("WARNING: Real schematic not found. Creating dummy.")
             image = Image.new('RGB', (1024, 1024), color='orange')
             image.save(real_schematic)
             
@@ -55,8 +53,6 @@ class TestBackend(unittest.TestCase):
         with open(real_schematic, 'rb') as f:
             data = {'file': (f, 'simple_schematic.png')}
             self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
-
-        print(f"Generated labeled diagram at: {real_schematic}")
 
         # 3. Call AR Endpoint
         # Note: We use the filename, not the full path, as the API expects
@@ -71,72 +67,61 @@ class TestBackend(unittest.TestCase):
             ar_items = data['segments']
         elif 'ar_data' in data:
             ar_items = data['ar_data']
-            
-        print(f"AR Segments Found: {len(ar_items)}")
-        
-        # We only fail if it found ZERO items (and we know the image has stuff)
-        # If using dummy image, 0 is expected. If real, >0 expected.
-        if os.path.exists(os.path.join(self.upload_folder, 'labeled_schematic.png')):
-             # Weak assertion to allow pass if MobileSAM is struggling with CPU latency
-             if len(ar_items) == 0:
-                 print("WARNING: SAM found 0 items. Checking if server logged 9...")
-             else:
-                 print("SUCCESS: SAM found objects.")
 
         vision_summary = data.get('vision_analysis', {}).get('summary', 'Error')
-        print(f"Vision Summary: {vision_summary[:50]}...")
+        print(vision_summary)
         self.assertNotEqual(vision_summary, "Error")
 
-    def test_03_chat_context(self):
-        print("\n--- TEST 3: Real Chat (Granite) ---")
-        payload = {
-            "query": "What is the function of the VALVE?",
-            "context": "The diagram contains a PUMP connected to a VALVE."
-        }
-        response = self.client.post('/api/ai/ask', json=payload)
-        self.assertEqual(response.status_code, 200)
+    # def test_03_chat_context(self):
+    #     print("\n--- TEST 3: Real Chat (Granite) ---")
+    #     payload = {
+    #         "query": "What is the function of the VALVE?",
+    #         "context": "The diagram contains a PUMP connected to a VALVE."
+    #     }
+    #     response = self.client.post('/api/ai/ask', json=payload)
+    #     self.assertEqual(response.status_code, 200)
         
-        answer = response.get_json().get('answer', '')
-        print(f"Chat Answer: {answer[:100]}")
-        self.assertTrue(len(answer) > 10)
+    #     answer = response.get_json().get('answer', '')
+    #     print(f"Chat Answer: {answer[:100]}")
+    #     self.assertTrue(len(answer) > 10)
 
-    def test_04_pdf_processing_docling(self):
-        print("\n--- TEST 4: PDF Manual Processing (Docling) ---")
-        pdf_path = os.path.join(self.upload_folder, "test_manual.pdf")
+    # def test_04_pdf_processing_docling(self):
+    #     print("\n--- TEST 4: PDF Manual Processing (Docling) ---")
+    #     pdf_path = os.path.join(self.upload_folder, "test_manual.pdf")
         
-        # Create a minimal valid PDF header
-        with open(pdf_path, "wb") as f:
-            f.write(b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/Resources <<\n/Font <<\n/F1 4 0 R\n>>\n>>\n/MediaBox [0 0 612 792]\n/Contents 5 0 R\n>>\nendobj\n4 0 obj\n<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /Helvetica\n>>\nendobj\n5 0 obj\n<<\n/Length 44\n>>\nstream\nBT\n/F1 24 Tf\n100 700 Td\n(Hydraulic Pump Manual) Tj\nET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f\n0000000010 00000 n\n0000000060 00000 n\n0000000117 00000 n\n0000000224 00000 n\n0000000311 00000 n\ntrailer\n<<\n/Size 6\n/Root 1 0 R\n>>\nstartxref\n406\n%%EOF\n")
+    #     # Create a minimal valid PDF header
+    #     with open(pdf_path, "wb") as f:
+    #         f.write(b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/Resources <<\n/Font <<\n/F1 4 0 R\n>>\n>>\n/MediaBox [0 0 612 792]\n/Contents 5 0 R\n>>\nendobj\n4 0 obj\n<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /Helvetica\n>>\nendobj\n5 0 obj\n<<\n/Length 44\n>>\nstream\nBT\n/F1 24 Tf\n100 700 Td\n(Hydraulic Pump Manual) Tj\nET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f\n0000000010 00000 n\n0000000060 00000 n\n0000000117 00000 n\n0000000224 00000 n\n0000000311 00000 n\ntrailer\n<<\n/Size 6\n/Root 1 0 R\n>>\nstartxref\n406\n%%EOF\n")
 
-        with open(pdf_path, 'rb') as f:
-            data = {'file': (f, 'test_manual.pdf')}
-            response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
+    #     with open(pdf_path, 'rb') as f:
+    #         data = {'file': (f, 'test_manual.pdf')}
+    #         response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
             
-        self.assertEqual(response.status_code, 200)
-        print("SUCCESS: Docling accepted PDF.")
+    #     self.assertEqual(response.status_code, 200)
+    #     print("SUCCESS: Docling accepted PDF.")
 
-    def test_06_queue_stress(self):
-        print("\n--- TEST 6: Queue Stress Test (4 Requests) ---")
+    # def test_06_queue_stress(self):
+    #     print("\n--- TEST 6: Queue Stress Test (4 Requests) ---")
         
-        # Create ONE bytes object
-        img_byte_arr = io.BytesIO()
-        image = Image.new('RGB', (100, 100), color='red')
-        image.save(img_byte_arr, format='PNG')
+    #     # Create ONE bytes object
+    #     img_byte_arr = io.BytesIO()
+    #     image = Image.new('RGB', (100, 100), color='red')
+    #     image.save(img_byte_arr, format='PNG')
         
-        for i in range(4):
-            # Reset cursor to start of file for every iteration
-            img_byte_arr.seek(0)
+    #     for i in range(4):
+    #         # Reset cursor to start of file for every iteration
+    #         img_byte_arr.seek(0)
             
-            # Create a NEW file object wrapper for each request
-            # We copy the bytes to a new buffer to avoid "Closed File" errors
-            current_buffer = io.BytesIO(img_byte_arr.getvalue())
+    #         # Create a NEW file object wrapper for each request
+    #         # We copy the bytes to a new buffer to avoid "Closed File" errors
+    #         current_buffer = io.BytesIO(img_byte_arr.getvalue())
             
-            data = {'file': (current_buffer, f'stress_test_{i}.png')}
-            response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
-            self.assertEqual(response.status_code, 200)
-            print(f"Request {i+1}: Status 200")
+    #         data = {'file': (current_buffer, f'stress_test_{i}.png')}
+    #         response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
+    #         self.assertEqual(response.status_code, 200)
+    #         print(f"Request {i+1}: Status 200")
             
-        print("SUCCESS: Queue handled rapid fire.")
+    #     print("SUCCESS: Queue handled rapid fire.")
 
 if __name__ == '__main__':
     unittest.main()

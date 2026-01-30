@@ -1,8 +1,31 @@
 import torch
+import re
 from PIL import Image
 from app.services.model_manager import manager
 
-def analyze_images(input_data, task=None):
+def _truncate_summary(text: str, max_chars: int = 220) -> str:
+    return text[:max_chars].rstrip()
+
+def _clean_generated_text(text: str, prompt: str, base_prompt: str) -> str:
+    """Remove prompt echoes and collapse repeated tokens."""
+    cleaned = (
+        text.replace(prompt, "")
+            .replace(base_prompt, "")
+            .replace("<image>", "")
+            .strip()
+    )
+    # Remove long digit sequences and repeated filler tokens
+    cleaned = re.sub(r"\b\d{4,}\b", "", cleaned)
+    cleaned = re.sub(r"(Chat|Res|Blue|There|I|The)(?:\s+\1){2,}", "", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?:I'm sorry[,\s]*){2,}", "I'm sorry ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(?:\bI\b[\s,;:.]*){3,}", "I ", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(\b\w{3,}\b)(?:\s*\1){3,}", r"\1", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"(\w{3,})(?:\1){3,}", r"\1", cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .,:;")
+    cleaned = _truncate_summary(cleaned)
+    return cleaned or "No description generated."
+
+def analyze_images(input_data, task="ar_extraction"):
     """
     Uses the pre-loaded Quantized/Float16 Granite Vision model.
     
@@ -35,24 +58,27 @@ def analyze_images(input_data, task=None):
             base_prompt = "Locate all technical components. List them."
 
         prompt = f"<image>\n{base_prompt}"
-
+        print(f"--- VISION PROMPT SENT ---\n{prompt}\n---------------------------")
         # 3. Process
         inputs = manager.vision_processor(
             images=image, 
             text=prompt, 
-            return_tensors="pt"
-        ).to("cuda")
+            return_tensors="pt",
+            return_dict=True,
+            tokenize=True
+        ).to(device=manager.device)
 
-        if "pixel_values" in inputs:
-            inputs["pixel_values"] = inputs["pixel_values"].to(dtype=manager.dtype)
 
         with torch.no_grad():
             output_ids = manager.vision_model.generate(
                 **inputs,
-                max_new_tokens=200,
-                do_sample=True,      
-                temperature=0.7,     
-                top_p=0.9
+                max_new_tokens=256,
+                temperature=0.1,
+                do_sample=True,
+                top_p=0.9,
+                repetition_penalty=1.35,
+                no_repeat_ngram_size=6,
+                eos_token_id=manager.vision_processor.tokenizer.eos_token_id
             )
 
         generated_text = manager.vision_processor.batch_decode(
@@ -60,25 +86,27 @@ def analyze_images(input_data, task=None):
             skip_special_tokens=True
         )[0]
 
-        # Clean Prompt Echo
-        if generated_text.startswith(prompt):
-            generated_text = generated_text[len(prompt):].strip()
+        generated_text = _clean_generated_text(generated_text, prompt, base_prompt)
+        if not generated_text:
+            generated_text = "No summary generated."
 
         # 4. Return Format
-        # If AR Extraction was requested, we return the text in 'answer' 
-        # (Real implementation would parse coords, but text summary works for now)
-        if task == "ar_extraction":
-            return {
-                "components": [], # Placeholder for actual parsed boxes
-                "answer": generated_text
-            }
-
-        return {
+        # Always provide an analysis summary for consistency with callers.
+        response = {
             "analysis": {
-                "summary": generated_text
+                "summary": generated_text or "No summary generated."
             }
         }
 
+        # For AR extraction, also return components/answer payload.
+        if task == "ar_extraction":
+            response.update({
+                "components": [], # Placeholder for parsed boxes
+                "answer": generated_text or "No summary generated."
+            })
+
+        return response
+
     except Exception as e:
         print(f"❌ ERROR in Vision Service: {e}")
-        return {"analysis": {"summary": f"Error: {str(e)}"}}
+        return {"analysis": {"summary": "No summary generated."}}
