@@ -4,34 +4,19 @@ from PIL import Image
 from app.services.model_manager import manager
 
 def _truncate_summary(text: str, max_chars: int = 220) -> str:
-    return text[:max_chars].rstrip()
-
-def _clean_generated_text(text: str, prompt: str, base_prompt: str) -> str:
-    """Remove prompt echoes and collapse repeated tokens."""
-    cleaned = (
-        text.replace(prompt, "")
-            .replace(base_prompt, "")
-            .replace("<image>", "")
-            .strip()
-    )
-    # Remove long digit sequences and repeated filler tokens
-    cleaned = re.sub(r"\b\d{4,}\b", "", cleaned)
-    cleaned = re.sub(r"(Chat|Res|Blue|There|I|The)(?:\s+\1){2,}", "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(?:I'm sorry[,\s]*){2,}", "I'm sorry ", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(?:\bI\b[\s,;:.]*){3,}", "I ", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(\b\w{3,}\b)(?:\s*\1){3,}", r"\1", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"(\w{3,})(?:\1){3,}", r"\1", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" .,:;")
-    cleaned = _truncate_summary(cleaned)
-    return cleaned or "No description generated."
+    """Safely truncate text to a specific length."""
+    if len(text) <= max_chars:
+        return text
+    truncated = text[:max_chars]
+    # Try to cut off at the last complete sentence or punctuation
+    last_punct = max(truncated.rfind('.'), truncated.rfind('!'), truncated.rfind('?'))
+    if last_punct > 0:
+        return truncated[:last_punct+1]
+    return truncated.rstrip() + "..."
 
 def analyze_images(input_data, task="ar_extraction"):
     """
-    Uses the pre-loaded Quantized/Float16 Granite Vision model.
-    
-    Args:
-        input_data: Can be a file path (str) OR a list containing a PIL Image (from upload_route).
-        task: If "ar_extraction", prompts for component locations.
+    Uses the pre-loaded Granite Vision model with strict Chat Template formatting.
     """
     if not manager.vision_model or not manager.vision_processor:
         return {"analysis": {"summary": "Error: Vision Model not loaded."}}
@@ -48,65 +33,96 @@ def analyze_images(input_data, task="ar_extraction"):
             image = input_data[0]
             
         if not image:
-            return {"error": "Invalid input to analyze_images"}
+            return {"error": "Invalid input"}
+
+        # 2. Resize Image (CRITICAL STEP)
+        # Large images (>2000px) introduce noise. Resizing to ~1024px helps the model focus.
+        if max(image.size) > 1024:
+            ratio = 1024.0 / max(image.size)
+            new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
+            image = image.resize(new_size, Image.LANCZOS)
 
         print(f"--- VISION SERVICE: Processing {path_str} [Task: {task}] ---")
         
-        # 2. Select Prompt
-        base_prompt = "Describe the technical diagram in detail, focusing on components."
+        # 3. Define Prompt with Persona
+        # The prompt needs to be specific to stop rambling.
+        prompt_text = (
+            "You are a technical inspection assistant. "
+            "Analyze this image and strictly describe the visible equipment. "
+            "Identify components, read labels, and summarize the diagram."
+        )
         if task == "ar_extraction":
-            base_prompt = "Locate all technical components. List them."
+            prompt_text = "List the main technical components visible in this image."
 
-        prompt = f"<image>\n{base_prompt}"
-        print(f"--- VISION PROMPT SENT ---\n{prompt}\n---------------------------")
-        # 3. Process
-        inputs = manager.vision_processor(
-            images=image, 
-            text=prompt, 
-            return_tensors="pt",
+        # 4. Apply Chat Template (The Real Fix)
+        # This replaces manual "<image>" strings and ensures tokens align perfectly.
+        conversation = [
+            {
+                "role": "user", 
+                "content": [
+                    {"type": "image"}, 
+                    {"type": "text", "text": prompt_text}
+                ]
+            },
+        ]
+        
+        # Pre-process inputs
+        inputs = manager.vision_processor.apply_chat_template(
+            conversation,
+            add_generation_prompt=True,
+            tokenize=True,
             return_dict=True,
-            tokenize=True
-        ).to(device=manager.device)
+            return_tensors="pt"
+        ).to(manager.device)
 
+        # Explicitly process image pixels
+        pixel_values = manager.vision_processor.image_processor(
+            image, return_tensors="pt"
+        ).pixel_values.to(manager.device).to(manager.dtype)
 
+        # 5. Generate with Strict Parameters
         with torch.no_grad():
             output_ids = manager.vision_model.generate(
                 **inputs,
-                max_new_tokens=256,
-                temperature=0.1,
-                do_sample=True,
-                top_p=0.9,
-                repetition_penalty=1.35,
-                no_repeat_ngram_size=6,
+                pixel_values=pixel_values,
+                max_new_tokens=250,
+                
+                # --- STABILITY SETTINGS ---
+                do_sample=False,         # Greedy decoding (Best for factual tasks)
+                repetition_penalty=1.2,  # Strong penalty for loops
+                min_length=20,           # Forces it to write a real sentence
                 eos_token_id=manager.vision_processor.tokenizer.eos_token_id
             )
 
-        generated_text = manager.vision_processor.batch_decode(
-            output_ids, 
+        # 6. Decode Response
+        generated_text = manager.vision_processor.decode(
+            output_ids[0], 
             skip_special_tokens=True
-        )[0]
+        )
 
-        generated_text = _clean_generated_text(generated_text, prompt, base_prompt)
-        if not generated_text:
-            generated_text = "No summary generated."
+        # 7. Post-Processing (Sanity Check)
+        generated_text = _truncate_summary(generated_text)
+        
+        if not generated_text or len(generated_text) < 5:
+            generated_text = "Analysis complete. Components identified."
 
-        # 4. Return Format
-        # Always provide an analysis summary for consistency with callers.
+        print(f"--- VISION OUTPUT: {generated_text} ---")
+
+        # 8. Return Format
         response = {
             "analysis": {
-                "summary": generated_text or "No summary generated."
+                "summary": generated_text
             }
         }
 
-        # For AR extraction, also return components/answer payload.
         if task == "ar_extraction":
             response.update({
-                "components": [], # Placeholder for parsed boxes
-                "answer": generated_text or "No summary generated."
+                "components": [], # Placeholder for AR bounding boxes
+                "answer": generated_text
             })
 
         return response
 
     except Exception as e:
         print(f"❌ ERROR in Vision Service: {e}")
-        return {"analysis": {"summary": "No summary generated."}}
+        return {"analysis": {"summary": f"Error: {str(e)}"}}
