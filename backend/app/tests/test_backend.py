@@ -11,7 +11,7 @@ import requests
 # Now this import will work because Python can see the 'app' folder
 from app import create_app 
 import io
-from PIL import Image
+from PIL import Image, ImageDraw
 import json
 import time
 
@@ -26,20 +26,20 @@ class TestBackend(unittest.TestCase):
         if not os.path.exists(self.upload_folder):
             os.makedirs(self.upload_folder)
 
-    # def test_01_upload_endpoint(self):
-    #     print("\n--- TEST 1: Uploading File ---")
-    #     # Create a dummy image
-    #     img_byte_arr = io.BytesIO()
-    #     image = Image.new('RGB', (100, 100), color='blue')
-    #     image.save(img_byte_arr, format='PNG')
-    #     img_byte_arr.seek(0)
+    def test_01_upload_endpoint(self):
+        print("\n--- TEST 1: Uploading File ---")
+        # Create a dummy image
+        img_byte_arr = io.BytesIO()
+        image = Image.new('RGB', (100, 100), color='blue')
+        image.save(img_byte_arr, format='PNG')
+        img_byte_arr.seek(0)
 
-    #     data = {'file': (img_byte_arr, 'test_image.png')}
-    #     response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
+        data = {'file': (img_byte_arr, 'test_image.png')}
+        response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
         
-    #     self.assertEqual(response.status_code, 200)
-    #     self.assertIn('status', response.get_json())
-    #     print("SUCCESS: Upload returned 200 OK.")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('status', response.get_json())
+        print("SUCCESS: Upload returned 200 OK.")
 
     def test_02_real_ar_and_vision(self):
         """Uploads an image, triggers AR+Vision, and asserts summary exists."""
@@ -47,7 +47,11 @@ class TestBackend(unittest.TestCase):
         # Create or reuse a simple image
         real_schematic = os.path.join(self.upload_folder, 'simple_schematic.png')
         if not os.path.exists(real_schematic):
-            image = Image.new('RGB', (512, 512), color='orange')
+            # Create an image with actual content (a rectangle and text) for the model to see
+            image = Image.new('RGB', (512, 512), color='white')
+            draw = ImageDraw.Draw(image)
+            draw.rectangle([100, 100, 400, 300], outline="black", width=5)
+            draw.text((120, 120), "Main Unit", fill="black")
             image.save(real_schematic)
 
         # Upload via API to get stored_name
@@ -73,33 +77,33 @@ class TestBackend(unittest.TestCase):
         # Keep test output minimal
         print(vision_summary)
 
-    # def test_03_chat_context(self):
-    #     print("\n--- TEST 3: Real Chat (Granite) ---")
-    #     payload = {
-    #         "query": "What is the function of the VALVE?",
-    #         "context": "The diagram contains a PUMP connected to a VALVE."
-    #     }
-    #     response = self.client.post('/api/ai/ask', json=payload)
-    #     self.assertEqual(response.status_code, 200)
+    def test_03_chat_context(self):
+        print("\n--- TEST 3: Real Chat (Granite) ---")
+        payload = {
+            "query": "What is the function of the VALVE?",
+            "context": "The diagram contains a PUMP connected to a VALVE."
+        }
+        response = self.client.post('/api/ai/ask', json=payload)
+        self.assertEqual(response.status_code, 200)
         
-    #     answer = response.get_json().get('answer', '')
-    #     print(f"Chat Answer: {answer[:100]}")
-    #     self.assertTrue(len(answer) > 10)
+        answer = response.get_json().get('answer', '')
+        print(f"Chat Answer: {answer[:100]}")
+        self.assertTrue(len(answer) > 10)
 
-    # def test_04_pdf_processing_docling(self):
-    #     print("\n--- TEST 4: PDF Manual Processing (Docling) ---")
-    #     pdf_path = os.path.join(self.upload_folder, "test_manual.pdf")
+    def test_04_pdf_processing_docling(self):
+        print("\n--- TEST 4: PDF Manual Processing (Docling) ---")
+        pdf_path = os.path.join(self.upload_folder, "test_manual.pdf")
         
-    #     # Create a minimal valid PDF header
-    #     with open(pdf_path, "wb") as f:
-    #         f.write(b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/Resources <<\n/Font <<\n/F1 4 0 R\n>>\n>>\n/MediaBox [0 0 612 792]\n/Contents 5 0 R\n>>\nendobj\n4 0 obj\n<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /Helvetica\n>>\nendobj\n5 0 obj\n<<\n/Length 44\n>>\nstream\nBT\n/F1 24 Tf\n100 700 Td\n(Hydraulic Pump Manual) Tj\nET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f\n0000000010 00000 n\n0000000060 00000 n\n0000000117 00000 n\n0000000224 00000 n\n0000000311 00000 n\ntrailer\n<<\n/Size 6\n/Root 1 0 R\n>>\nstartxref\n406\n%%EOF\n")
+        # Create a minimal valid PDF header
+        with open(pdf_path, "wb") as f:
+            f.write(b"%PDF-1.4\n1 0 obj\n<<\n/Type /Catalog\n/Pages 2 0 R\n>>\nendobj\n2 0 obj\n<<\n/Type /Pages\n/Kids [3 0 R]\n/Count 1\n>>\nendobj\n3 0 obj\n<<\n/Type /Page\n/Parent 2 0 R\n/Resources <<\n/Font <<\n/F1 4 0 R\n>>\n>>\n/MediaBox [0 0 612 792]\n/Contents 5 0 R\n>>\nendobj\n4 0 obj\n<<\n/Type /Font\n/Subtype /Type1\n/BaseFont /Helvetica\n>>\nendobj\n5 0 obj\n<<\n/Length 44\n>>\nstream\nBT\n/F1 24 Tf\n100 700 Td\n(Hydraulic Pump Manual) Tj\nET\nendstream\nendobj\nxref\n0 6\n0000000000 65535 f\n0000000010 00000 n\n0000000060 00000 n\n0000000117 00000 n\n0000000224 00000 n\n0000000311 00000 n\ntrailer\n<<\n/Size 6\n/Root 1 0 R\n>>\nstartxref\n406\n%%EOF\n")
 
-    #     with open(pdf_path, 'rb') as f:
-    #         data = {'file': (f, 'test_manual.pdf')}
-    #         response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
+        with open(pdf_path, 'rb') as f:
+            data = {'file': (f, 'test_manual.pdf')}
+            response = self.client.post('/api/upload/', data=data, content_type='multipart/form-data')
             
-    #     self.assertEqual(response.status_code, 200)
-    #     print("SUCCESS: Docling accepted PDF.")
+        self.assertEqual(response.status_code, 200)
+        print("SUCCESS: Docling accepted PDF.")
 
     # def test_06_queue_stress(self):
     #     print("\n--- TEST 6: Queue Stress Test (4 Requests) ---")
