@@ -11,6 +11,7 @@ import UploadScreen from './src/screens/UploadScreen';
 import ChatScreen from './src/screens/ChatScreen';
 import SettingsScreen from './src/screens/SettingsScreen';
 import DocumentScreen from './src/screens/DocumentScreen';
+import ARScreen from './src/screens/ARScreen';
 
 const Stack = createStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -58,7 +59,9 @@ export default function App() {
           <Stack.Screen name="Home" component={TabNavigator} options={{ headerShown: false }} />
           <Stack.Screen name="Scan" component={CameraScreen} />
           <Stack.Screen name="Upload" component={UploadScreen} />
-          <Stack.Screen name="DocView" component={DocumentScreen} options={{ title: 'Document Analysis' }} />
+          <Stack.Screen name="DocumentScreen" component={DocumentScreen} options={{ title: 'Document Analysis' }} />
+          <Stack.Screen name="ARScreen" component={ARScreen} options={{ title: 'AR Visualization' }} />
+          <Stack.Screen name="Chat" component={ChatScreen} options={{ headerShown: false }} />
         </Stack.Navigator>
       </NavigationContainer>
     </HistoryProvider>
