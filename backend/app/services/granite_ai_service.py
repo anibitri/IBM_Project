@@ -339,6 +339,15 @@ class AIService:
         Returns:
             Dictionary with insights
         """
+        
+
+        if not any([vision_analysis, ar_components, text_content]):
+            return {
+                "status": "ok",
+                "insights": ["No insights available because no data was provided."],
+                "insight_type": "general",
+            }
+        
         print(f"💡 Generating insights: {insight_type}")
         
         context_str = self._build_context_string(

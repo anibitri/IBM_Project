@@ -1,8 +1,9 @@
 
-os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
+
 
 import torch
 import os
+os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
 import logging
 from typing import Optional
 
@@ -244,10 +245,11 @@ class ModelManager:
             print("\n📐 Loading SAM (AR Model)...")
             self._log_vram("Before SAM load")
 
-            self.ar_model = SAM('sam2_l.pt')
+            self.ar_model = SAM('mobile_sam.pt')
 
             # Determine SAM device based on remaining VRAM
-            ar_device = self._get_ar_device()
+            # ar_device = self._get_ar_device()
+            ar_device = "cpu"  # Force CPU for stability in this example
             self.ar_model.to(ar_device)
 
             self._log_vram("After SAM load")

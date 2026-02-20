@@ -14,7 +14,7 @@ os.environ['GRANITE_MOCK'] = "0"
 # 2. IMPORT APP FACTORY
 # ============================================================
 
-from app import create_app
+from app.app import create_app
 
 # ============================================================
 # 3. CREATE APP INSTANCE

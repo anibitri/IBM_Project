@@ -78,6 +78,9 @@ def create_app() -> Flask:
     
     # Register static file serving
     _register_static_routes(app)
+
+    # Register health and status routes
+    _register_health_routes(app)
     
     # Log startup info
     _log_startup_info(app)
@@ -302,26 +305,26 @@ def _register_static_routes(app: Flask):
 # 10. HEALTH AND STATUS ROUTES
 # ============================================================
 
-def _register_static_routes(app: Flask):
+def _register_health_routes(app: Flask):
     """Register static file serving and health routes"""
     
-    @app.route('/static/uploads/<path:filename>')
-    def serve_upload(filename):
-        """Serve uploaded files to the frontend"""
-        uploads_dir = os.path.join(
-            os.path.abspath(os.path.dirname(__file__)),
-            'static', 'uploads'
-        )
-        return send_from_directory(uploads_dir, filename)
+    # @app.route('/static/uploads/<path:filename>')
+    # def serve_upload(filename):
+    #     """Serve uploaded files to the frontend"""
+    #     uploads_dir = os.path.join(
+    #         os.path.abspath(os.path.dirname(__file__)),
+    #         'static', 'uploads'
+    #     )
+    #     return send_from_directory(uploads_dir, filename)
     
-    @app.route('/static/<path:path>')
-    def serve_static(path):
-        """Serve general static files"""
-        static_dir = os.path.join(
-            os.path.abspath(os.path.dirname(__file__)),
-            'static'
-        )
-        return send_from_directory(static_dir, path)
+    # @app.route('/static/<path:path>')
+    # def serve_static(path):
+    #     """Serve general static files"""
+    #     static_dir = os.path.join(
+    #         os.path.abspath(os.path.dirname(__file__)),
+    #         'static'
+    #     )
+    #     return send_from_directory(static_dir, path)
     
     @app.route('/api/health', methods=['GET'])
     def health_check():
