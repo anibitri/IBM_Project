@@ -1,47 +1,69 @@
-*.aux
-*.log
-*.out
-*.toc
-*.fls
-*.fdb_latexmk
-*.synctex.gz
+### `.gitignore` (Root)
 
-*.pt
-
-.DS_Store
-frontend/.DS_Store
-.vscode/
-
-.env
-
+# Dependencies
 node_modules/
+web/node_modules/
+mobile/node_modules/
+shared/node_modules/
 
-.expo/
-
-ios/
-android/
-
-backend/static/uploads/*
+# Python
 backend/__pycache__/
-backend/*.pyc
-backend/app/__pycache__/
-backend/app/services/__pycache__/
-backend/app/services/*.pyc
-backend/routes/__pycache__/
-backend/routes/*.pyc
-backend/app/static/
-mobile_sam.pt
-*.png
-.DS_Store
+backend/**/__pycache__/
+backend/.pytest_cache/
+*.pyc
+*.pyo
+*.pyd
+.Python
 
-__pycache__/
+# Environment
+.env
+.env.local
+*.env
 
+# Build outputs
+web/build/
+web/dist/
+mobile/.expo/
+mobile/dist/
+
+# IDE
+.vscode/
+.idea/
 *.swp
+*.swo
+*~
 
-.bib
-.bbl
+# OS
+.DS_Store
+Thumbs.db
 
+# Uploads
+backend/static/uploads/*
+!backend/static/uploads/.gitkeep
 
-venv/
-deliverables/RequirementsDesign.bbl
-deliverables/references.bib
+# Model weights (too large for git)
+backend/*.pt
+backend/*.pth
+
+# Logs
+*.log
+npm-debug.log*
+
+# Deliverables
+deliverables/img/*
+deliverables/noted.md
+*.tex
+*.synctex.gz
+*.bbl
+*.bib
+*.png
+
+# Mobile
+mobile/.expo/*
+mobile/android/*
+mobile/ios/*
+.expo/*
+
+# Misc
+backend/static/*
+*.DS_Store
