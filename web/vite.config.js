@@ -6,6 +6,10 @@ export default defineConfig({
   server: {
     port: 3000,
     open: true,
+    proxy: {
+      '/api': 'http://localhost:4200',
+      '/static': 'http://localhost:4200',
+    },
   },
   build: {
     outDir: 'build',

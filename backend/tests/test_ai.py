@@ -175,6 +175,7 @@ class TestAIServiceSummarizeComponents:
     def test_has_summary_key(self):
         comps  = [{'id': 'c0', 'label': 'RAM', 'description': 'Memory', 'confidence': 0.85}]
         result = self.ai.summarize_components(components=comps)
+        print(result)
         assert 'summary' in result
 
     def test_empty_components_returns_error(self):

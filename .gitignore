@@ -66,4 +66,6 @@ mobile/ios/*
 
 # Misc
 backend/static/*
+backend/app/static/*
 *.DS_Store
+backend/venv/*

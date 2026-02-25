@@ -51,16 +51,22 @@ def create_app() -> Flask:
     app = Flask(__name__)
     
     # CORS - Allow React frontend to communicate
+    allowed_origins = [
+        "http://localhost:3000",   # React dev server
+        "http://localhost:8081",   # Expo dev server
+        "http://localhost:19006",  # Expo web
+        "http://127.0.0.1:3000",
+    ]
     CORS(app, resources={
         r"/api/*": {
-            "origins": [
-                "http://localhost:3000",   # React dev server
-                "http://localhost:8081",   # Expo dev server
-                "http://localhost:19006",  # Expo web
-                "http://127.0.0.1:3000",
-            ],
+            "origins": allowed_origins,
             "methods": ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
             "allow_headers": ["Content-Type", "Authorization"]
+        },
+        r"/static/*": {
+            "origins": allowed_origins,
+            "methods": ["GET", "OPTIONS"],
+            "allow_headers": ["Content-Type"]
         }
     })
     
@@ -282,22 +288,19 @@ def _register_blueprints(app: Flask):
 def _register_static_routes(app: Flask):
     """Register static file serving routes"""
     
+    # Base dir = backend/ (two levels up from app/, matching upload_route.py)
+    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
+
     @app.route('/static/uploads/<path:filename>')
     def serve_upload(filename):
         """Serve uploaded files to the frontend"""
-        uploads_dir = os.path.join(
-            os.path.abspath(os.path.dirname(__file__)),
-            'static', 'uploads'
-        )
+        uploads_dir = os.path.join(base_dir, 'static', 'uploads')
         return send_from_directory(uploads_dir, filename)
     
     @app.route('/static/<path:path>')
     def serve_static(path):
         """Serve general static files"""
-        static_dir = os.path.join(
-            os.path.abspath(os.path.dirname(__file__)),
-            'static'
-        )
+        static_dir = os.path.join(base_dir, 'static')
         return send_from_directory(static_dir, path)
 
 

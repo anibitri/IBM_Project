@@ -34,7 +34,9 @@ class ARService:
         self.edge_exclude_margin = 0.03
 
         # Containment removal parameters
-        self.container_min_area_ratio = 0.25
+        self.container_min_area_ratio = 0.55
+        self.container_min_children = 5
+        self.nesting_size_ratio = 1.8
         
         # Debug mode
         self.debug_complexity = False  # Set to True to see rejection reasons
@@ -302,19 +304,24 @@ class ARService:
             return True
     
     def _remove_overlaps(self, segments: List[Dict], img_area: float = None) -> List[Dict]:
-        """Remove overlapping boxes using NMS + containment removal"""
+        """Remove overlapping boxes using nesting-aware NMS.
+        
+        Preserves nested (encapsulated) components: if a small box is clearly
+        inside a larger one and their sizes differ significantly, both are kept.
+        Only true duplicates (similar-sized, high-IoU boxes) are suppressed.
+        """
         if not segments:
             return []
         
         segments = sorted(segments, key=lambda x: x['confidence'], reverse=True)
         
-        # Step 1: Remove boxes that are clearly background containers
-        # ONLY remove if the box is large (>25% of image) AND contains 2+ other boxes
-        non_containers = []
+        # Step 1: Remove near-full-image background boxes only
+        # Only discard a box if it covers >55% of the image AND contains
+        # many other detections (clearly just the page/canvas background).
+        non_background = []
         for i, seg in enumerate(segments):
-            is_container = False
+            is_background = False
             
-            # Only consider containment removal for large boxes
             if img_area and seg['area_pixels'] > img_area * self.container_min_area_ratio:
                 contained_count = 0
                 for j, other in enumerate(segments):
@@ -323,35 +330,77 @@ class ARService:
                     if self._contains(seg['box_pixels'], other['box_pixels']):
                         contained_count += 1
                 
-                if contained_count >= 3:
-                    is_container = True
+                if contained_count >= self.container_min_children:
+                    is_background = True
                     if self.debug_complexity:
                         ratio = seg['area_pixels'] / img_area if img_area else 0
-                        # print(f"   🗑️ Removing container box: {seg['box_pixels']} (contains {contained_count} others, area_ratio={ratio:.2f})")
+                        print(f"   🗑️ Removing background box: {seg['box_pixels']} (contains {contained_count} others, area_ratio={ratio:.2f})")
             
-            if not is_container:
-                non_containers.append(seg)
+            if not is_background:
+                non_background.append(seg)
         
-        # If containment removal eliminated everything, fall back to original
-        if not non_containers:
-            non_containers = segments
+        if not non_background:
+            non_background = segments
         
-        # Step 2: Standard NMS on remaining boxes
+        # Step 2: Nesting-aware NMS
+        # If two boxes overlap but one is nested inside the other (encapsulation),
+        # keep both. Only suppress when boxes are similar in size (true duplicates).
         kept = []
-        for seg in non_containers:
+        for seg in non_background:
             should_keep = True
             for kept_seg in kept:
                 iou = self._calculate_iou(seg['box_pixels'], kept_seg['box_pixels'])
                 if iou > self.iou_threshold:
-                    should_keep = False
-                    if self.debug_complexity:
-                        print(f"   🗑️ NMS removed box {seg['box_pixels']} (IoU={iou:.2f} with {kept_seg['box_pixels']})")
-                    break
+                    # High overlap — but is this nesting or duplication?
+                    if self._is_nested(seg['box_pixels'], kept_seg['box_pixels']):
+                        # Encapsulation: keep both boxes
+                        continue
+                    else:
+                        # True duplicate: suppress the lower-confidence one
+                        should_keep = False
+                        if self.debug_complexity:
+                            print(f"   🗑️ NMS removed box {seg['box_pixels']} (IoU={iou:.2f} with {kept_seg['box_pixels']})")
+                        break
             
             if should_keep:
                 kept.append(seg)
         
         return kept
+    
+    def _is_nested(self, box1: List[float], box2: List[float]) -> bool:
+        """Return True if one box is nested inside the other (encapsulation).
+        
+        Two conditions must hold:
+          1. The boxes differ significantly in size (ratio >= nesting_size_ratio).
+          2. The smaller box is geometrically contained within the larger one
+             (with a pixel tolerance).
+        """
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        
+        if min(area1, area2) == 0:
+            return False
+        
+        size_ratio = max(area1, area2) / min(area1, area2)
+        if size_ratio < self.nesting_size_ratio:
+            # Similar-sized boxes → not nesting, just overlap
+            return False
+        
+        # Determine outer/inner
+        if area1 >= area2:
+            outer, inner = box1, box2
+        else:
+            outer, inner = box2, box1
+        
+        margin = 20.0  # pixel tolerance for imprecise detections
+        is_contained = (
+            outer[0] <= inner[0] + margin and
+            outer[1] <= inner[1] + margin and
+            outer[2] >= inner[2] - margin and
+            outer[3] >= inner[3] - margin
+        )
+        
+        return is_contained
     
     def _contains(self, outer: List[float], inner: List[float], margin: float = 10.0) -> bool:
         """Check if outer box fully contains inner box (with margin tolerance)"""
