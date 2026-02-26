@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { backend } from '../api/backend';
 
 const DocumentContext = createContext(null);
@@ -30,6 +30,10 @@ export const DocumentProvider = ({ children }) => {
   const [pendingQuestion, setPendingQuestion] = useState(null);
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+
+  // Ref to always have current chatHistory without stale closures
+  const chatHistoryRef = useRef(chatHistory);
+  useEffect(() => { chatHistoryRef.current = chatHistory; }, [chatHistory]);
 
   // Persist history whenever it changes
   useEffect(() => {
@@ -90,7 +94,6 @@ export const DocumentProvider = ({ children }) => {
   const askQuestion = useCallback(async (query) => {
     if (!document) throw new Error('No document loaded');
 
-    setLoading(true);
     setError(null);
 
     try {
@@ -102,7 +105,8 @@ export const DocumentProvider = ({ children }) => {
         components: document.ar?.components || [],
       };
 
-      const recentHistory = chatHistory.slice(-10);
+      // Use ref to get current history (avoids stale closure)
+      const recentHistory = chatHistoryRef.current.slice(-10);
       const result = await backend.askQuestion(query, context, recentHistory);
 
       addMessage('assistant', result.answer);
@@ -110,10 +114,8 @@ export const DocumentProvider = ({ children }) => {
     } catch (err) {
       setError(err.message || 'Failed to get answer');
       throw err;
-    } finally {
-      setLoading(false);
     }
-  }, [document, chatHistory, addMessage]);
+  }, [document, addMessage]);
 
   const askAboutComponent = useCallback((component) => {
     const question = `Tell me about the "${component.label}" component. What is its function, and how does it relate to the other components in this diagram?`;
@@ -170,6 +172,10 @@ export const DocumentProvider = ({ children }) => {
     setCurrentImageIndex(0);
   }, []);
 
+  const clearError = useCallback(() => {
+    setError(null);
+  }, []);
+
   const value = {
     document,
     loading,
@@ -187,6 +193,7 @@ export const DocumentProvider = ({ children }) => {
     consumePendingQuestion,
     addMessage,
     clearChat,
+    clearError,
     clearDocument,
     restoreSession,
     removeSession,

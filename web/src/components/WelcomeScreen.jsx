@@ -1,18 +1,25 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useState } from 'react';
 import { useDocumentContext } from '@ar-viewer/shared';
 
 export default function WelcomeScreen() {
-  const { uploadAndProcess, loading, error } = useDocumentContext();
+  const { uploadAndProcess, loading, error, clearError } = useDocumentContext();
+  const [dragActive, setDragActive] = useState(false);
 
   const handleDrag = useCallback((e) => {
     e.preventDefault();
     e.stopPropagation();
+    if (e.type === 'dragenter' || e.type === 'dragover') {
+      setDragActive(true);
+    } else if (e.type === 'dragleave') {
+      setDragActive(false);
+    }
   }, []);
 
   const handleDrop = useCallback(
     (e) => {
       e.preventDefault();
       e.stopPropagation();
+      setDragActive(false);
       if (e.dataTransfer.files && e.dataTransfer.files[0]) {
         uploadAndProcess(e.dataTransfer.files[0]);
       }
@@ -69,7 +76,7 @@ export default function WelcomeScreen() {
         </div>
 
         <div
-          className="upload-zone"
+          className={`upload-zone${dragActive ? ' drag-active' : ''}`}
           onDragEnter={handleDrag}
           onDragLeave={handleDrag}
           onDragOver={handleDrag}
@@ -108,6 +115,12 @@ export default function WelcomeScreen() {
               <line x1="12" y1="16" x2="12.01" y2="16" strokeWidth={2} />
             </svg>
             <span>{error}</span>
+            <button className="error-dismiss" onClick={clearError} title="Dismiss">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <line x1="18" y1="6" x2="6" y2="18" />
+                <line x1="6" y1="6" x2="18" y2="18" />
+              </svg>
+            </button>
           </div>
         )}
 

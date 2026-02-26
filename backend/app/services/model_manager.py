@@ -130,6 +130,7 @@ class ModelManager:
         self.chat_model = None
         self.chat_tokenizer = None
         self.ar_model = None
+        self.ar_device = "cpu"
 
     # ============================================================
     # 5. MODEL LOADING
@@ -232,33 +233,40 @@ class ModelManager:
 
     def _load_ar_model(self):
         """
-        Load SAM model for AR segmentation.
+        Load SAM2-L model for AR segmentation.
+        
+        Why SAM2-L over MobileSAM:
+        - Significantly better mask quality on structured diagrams
+        - Tighter bounding boxes reduce post-processing burden
+        - Higher-quality stability/confidence scores
+        - Same ultralytics API, no code changes needed downstream
         
         Device strategy:
         - Checks remaining VRAM after vision + chat are loaded
-        - If > 2GB free: loads on GPU for faster inference
+        - If > 2.5GB free: loads on GPU for faster inference
         - Otherwise: loads on CPU to avoid OOM errors
         """
         try:
             from ultralytics import SAM
 
-            print("\n📐 Loading SAM (AR Model)...")
-            self._log_vram("Before SAM load")
+            print("\n📐 Loading SAM2-L (AR Model)...")
+            self._log_vram("Before SAM2 load")
 
-            self.ar_model = SAM('mobile_sam.pt')
+            self.ar_model = SAM('sam2_l.pt')
 
             # Determine SAM device based on remaining VRAM
-            # ar_device = self._get_ar_device()
-            ar_device = "cpu"  # Force CPU for stability in this example
-            self.ar_model.to(ar_device)
+            # self.ar_device = self._get_ar_device()
+            self.ar_device = "cpu"
+            self.ar_model.to(self.ar_device)
 
-            self._log_vram("After SAM load")
-            print(f"   ✅ SAM loaded on {ar_device.upper()}")
+            self._log_vram("After SAM2 load")
+            print(f"   ✅ SAM2-L loaded on {self.ar_device.upper()}")
 
         except Exception as e:
-            print(f"   ❌ SAM load failed: {e}")
-            logger.exception("SAM model load failed")
+            print(f"   ❌ SAM2 load failed: {e}")
+            logger.exception("SAM2 model load failed")
             self.ar_model = None
+            self.ar_device = "cpu"
 
     # ============================================================
     # 6. HELPER METHODS
@@ -326,7 +334,7 @@ class ModelManager:
         print("\n📦 MODEL STATUS:")
         print(f"   Vision Model  : {'✅ Loaded' if self.vision_model else '❌ Failed'}")
         print(f"   Chat Model    : {'✅ Loaded' if self.chat_model else '❌ Failed'}")
-        print(f"   SAM (AR)      : {'✅ Loaded' if self.ar_model else '❌ Failed'}")
+        print(f"   SAM2-L (AR)   : {'✅ Loaded on ' + self.ar_device.upper() if self.ar_model else '❌ Failed'}")
 
         if torch.cuda.is_available():
             used = self._get_used_vram_gb()
@@ -355,11 +363,8 @@ class ModelManager:
             },
             'ar': {
                 'loaded': self.ar_model is not None,
-                'device': 'cuda' if (
-                    self.ar_model is not None and 
-                    torch.cuda.is_available() and 
-                    self._get_free_vram_gb() > 2.5
-                ) else 'cpu'
+                'model': 'SAM2-L',
+                'device': self.ar_device
             },
             'hardware': {
                 'device': self.device,

@@ -7,6 +7,8 @@ export default function DiagramPanel() {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryHeight, setSummaryHeight] = useState(160);
   const [zoom, setZoom] = useState(1);
+  const [hoveredId, setHoveredId] = useState(null);
+  const [showLabels, setShowLabels] = useState(true);
   const imageRef = useRef(null);
   const summaryDragging = useRef(false);
   const summaryStartY = useRef(0);
@@ -156,11 +158,19 @@ export default function DiagramPanel() {
                       const width = comp.width * imageSize.width;
                       const height = comp.height * imageSize.height;
                       const isSelected = selectedComponent?.id === comp.id;
+                      const isHovered = hoveredId === comp.id;
+                      const labelText = comp.label || comp.id;
+                      const labelWidth = Math.min(Math.max(labelText.length * 7 + 12, 40), width + 40);
+                      const labelHeight = 18;
+                      const labelX = x + (width - labelWidth) / 2;
+                      const labelY = y - labelHeight - 3;
 
                       return (
                         <g
                           key={comp.id}
                           onClick={() => handleComponentClick(comp)}
+                          onMouseEnter={() => setHoveredId(comp.id)}
+                          onMouseLeave={() => setHoveredId(null)}
                           className="component-overlay"
                         >
                           <rect
@@ -168,17 +178,38 @@ export default function DiagramPanel() {
                             y={y}
                             width={width}
                             height={height}
-                            fill={isSelected ? 'rgba(99,178,238,0.08)' : 'none'}
-                            stroke={isSelected ? '#63b2ee' : '#4a90d9'}
-                            strokeWidth={isSelected ? 3 : 2}
+                            fill={isSelected ? 'rgba(99,178,238,0.12)' : isHovered ? 'rgba(74,144,217,0.06)' : 'none'}
+                            stroke={isSelected ? '#63b2ee' : isHovered ? '#5ba0e8' : '#4a90d9'}
+                            strokeWidth={isSelected ? 3 : isHovered ? 2.5 : 1.5}
+                            rx="3"
                             className="component-box"
                           />
-                          <circle
-                            cx={comp.center_x * imageSize.width}
-                            cy={comp.center_y * imageSize.height}
-                            r={isSelected ? 5 : 3}
-                            fill={isSelected ? '#63b2ee' : '#4a90d9'}
-                          />
+                          {(showLabels || isSelected || isHovered) && labelText && labelText !== 'Unknown' && (
+                            <>
+                              <rect
+                                x={labelX}
+                                y={Math.max(0, labelY)}
+                                width={labelWidth}
+                                height={labelHeight}
+                                rx="3"
+                                fill={isSelected ? '#63b2ee' : '#4a90d9'}
+                                opacity="0.92"
+                                className="component-label-bg"
+                              />
+                              <text
+                                x={labelX + labelWidth / 2}
+                                y={Math.max(0, labelY) + 13}
+                                textAnchor="middle"
+                                fill="#fff"
+                                fontSize="11"
+                                fontWeight="600"
+                                fontFamily="Inter, sans-serif"
+                                className="component-label-text"
+                              >
+                                {labelText}
+                              </text>
+                            </>
+                          )}
                         </g>
                       );
                     })}
@@ -204,6 +235,14 @@ export default function DiagramPanel() {
               <span className="zoom-label">{Math.round(zoom * 100)}%</span>
               <button className="zoom-btn" onClick={zoomOut} title="Zoom out">&minus;</button>
               <button className="zoom-btn" onClick={zoomReset} title="Reset zoom" style={{ fontSize: 11 }}>1:1</button>
+              <button
+                className={`zoom-btn ${showLabels ? 'active' : ''}`}
+                onClick={() => setShowLabels(!showLabels)}
+                title={showLabels ? 'Hide labels' : 'Show labels'}
+                style={{ fontSize: 11, marginTop: 4 }}
+              >
+                {showLabels ? 'Aa' : 'Aa'}
+              </button>
             </div>
           )}
         </div>
