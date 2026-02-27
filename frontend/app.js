@@ -3,6 +3,7 @@ import { NavigationContainer } from '@react-navigation/native';
 import { createStackNavigator } from '@react-navigation/stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { colors } from './src/styles/theme';
 // Context & Screens
 import { HistoryProvider } from './src/context/HistoryContext';
 import HomeScreen from './src/screens/HomeScreen';
@@ -21,12 +22,16 @@ function TabNavigator() {
     <Tab.Navigator
       screenOptions={({ route }) => ({
         headerShown: false,
-        tabBarActiveTintColor: 'tomato',
-        tabBarInactiveTintColor: 'gray',
+        tabBarActiveTintColor: colors.tabActive,
+        tabBarInactiveTintColor: colors.tabInactive,
+        tabBarStyle: {
+          backgroundColor: colors.surface,
+          borderTopColor: colors.borderLight,
+          borderTopWidth: 1,
+        },
         tabBarIcon: ({ focused, color, size }) => {
           let iconName;
 
-          // FIX: Check for 'HomeMain' instead of 'Home'
           if (route.name === 'HomeMain') {
             iconName = focused ? 'home' : 'home-outline';
           } else if (route.name === 'Chat') {
@@ -55,13 +60,21 @@ export default function App() {
   return (
     <HistoryProvider>
       <NavigationContainer>
-        <Stack.Navigator>
+        <Stack.Navigator
+          screenOptions={{
+            headerStyle: { backgroundColor: colors.background, shadowColor: 'transparent', elevation: 0 },
+            headerTintColor: colors.primary,
+            headerTitleStyle: { color: colors.textPrimary, fontWeight: '700' },
+            headerBackTitleVisible: false,
+            cardStyle: { backgroundColor: colors.background },
+          }}
+        >
           <Stack.Screen name="Home" component={TabNavigator} options={{ headerShown: false }} />
           <Stack.Screen name="Scan" component={CameraScreen} />
           <Stack.Screen name="Upload" component={UploadScreen} />
           <Stack.Screen name="DocumentScreen" component={DocumentScreen} options={{ title: 'Document Analysis' }} />
-          <Stack.Screen name="ARScreen" component={ARScreen} options={{ title: 'AR Visualization' }} />
-          <Stack.Screen name="Chat" component={ChatScreen} options={{ headerShown: false }} />
+          <Stack.Screen name="ARScreen" component={ARScreen} options={{ title: 'AR Visualization', headerShown: false }} />
+          <Stack.Screen name="ChatFull" component={ChatScreen} options={{ headerShown: false }} />
         </Stack.Navigator>
       </NavigationContainer>
     </HistoryProvider>

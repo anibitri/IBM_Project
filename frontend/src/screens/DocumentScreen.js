@@ -9,6 +9,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Clipboard from 'expo-clipboard';
 import axios from 'axios';
 import Pdf from 'react-native-pdf';
+import { colors, shadows, radii } from '../styles/theme';
 
 const DEV_MOCK = true; 
 const API_HOST = Platform.select({ android: 'http://10.0.2.2:4200', ios: 'http://localhost:4200', default: 'http://localhost:4200' });
@@ -18,7 +19,7 @@ const DocumentPreview = ({ displayImage, isPDF, safePdfUri, hasARData }) => (
     {displayImage ? (
       isPDF && !displayImage.startsWith('http') ? ( <Pdf source={{ uri: safePdfUri, cache: false }} style={styles.pdfViewer} trustAllCerts={false} /> ) : ( <Image source={{ uri: displayImage }} style={styles.thumbnail} resizeMode="contain" /> )
     ) : (
-      <View style={styles.placeholder}><Ionicons name="document-text-outline" size={60} color="#ccc" /><Text style={{ color: '#999', marginTop: 10 }}>No Preview</Text></View>
+      <View style={styles.placeholder}><Ionicons name="document-text-outline" size={60} color={colors.borderLight} /><Text style={{ color: colors.textPlaceholder, marginTop: 10 }}>No Preview</Text></View>
     )}
     {hasARData && <View style={styles.badge}><Text style={styles.badgeText}>AR Ready</Text></View>}
   </View>
@@ -39,15 +40,15 @@ const PreviewCarousel = ({ previews, selectedIndex, onSelect }) => (
 );
 
 const DocumentActions = ({ item, hasARData, isPDF, onAnalyze, onLaunchAR, onOpenFullPdf }) => {
-  if (item.status === 'analyzing') return ( <View style={[styles.card, { alignItems: 'center', paddingVertical: 20, marginBottom: 20 }]}><ActivityIndicator size="large" color="#5856D6" /><Text style={styles.analyzingText}>Analyzing Document...</Text></View> );
-  if (item.status === 'failed') return ( <View style={styles.actionSection}><View style={styles.errorBox}><Ionicons name="alert-circle" size={40} color="#FF3B30" /><Text style={styles.errorTitle}>Analysis Failed</Text><Text style={styles.errorText}>{item.error}</Text></View><TouchableOpacity style={styles.retryBtn} onPress={onAnalyze}><Text style={styles.retryText}>Retry Analysis</Text></TouchableOpacity></View> );
+  if (item.status === 'analyzing') return ( <View style={[styles.card, { alignItems: 'center', paddingVertical: 20, marginBottom: 20 }]}><ActivityIndicator size="large" color={colors.primary} /><Text style={styles.analyzingText}>Analyzing Document...</Text></View> );
+  if (item.status === 'failed') return ( <View style={styles.actionSection}><View style={styles.errorBox}><Ionicons name="alert-circle" size={40} color={colors.error} /><Text style={styles.errorTitle}>Analysis Failed</Text><Text style={styles.errorText}>{item.error}</Text></View><TouchableOpacity style={styles.retryBtn} onPress={onAnalyze}><Text style={styles.retryText}>Retry Analysis</Text></TouchableOpacity></View> );
   if (item.status === 'completed') return (
       <View style={styles.actionSection}>
-        {hasARData ? ( <TouchableOpacity style={styles.arButton} onPress={onLaunchAR}><Ionicons name="cube-outline" size={24} color="#fff" style={{ marginRight: 10 }} /><Text style={styles.arButtonText}>Launch AR Visualization</Text></TouchableOpacity> ) : ( <View style={[styles.card, { marginBottom: 15 }]}><Text style={{ color: '#666', fontStyle: 'italic' }}>No AR components detected on this page.</Text></View> )}
-        {isPDF && ( <TouchableOpacity style={styles.pdfButton} onPress={onOpenFullPdf}><Ionicons name="book-outline" size={20} color="#007AFF" style={{ marginRight: 8 }} /><Text style={styles.pdfButtonText}>Read Full PDF</Text></TouchableOpacity> )}
+        {hasARData ? ( <TouchableOpacity style={styles.arButton} onPress={onLaunchAR}><Ionicons name="cube-outline" size={24} color={colors.textOnPrimary} style={{ marginRight: 10 }} /><Text style={styles.arButtonText}>Launch AR Visualization</Text></TouchableOpacity> ) : ( <View style={[styles.card, { marginBottom: 15 }]}><Text style={{ color: colors.textMuted, fontStyle: 'italic' }}>No AR components detected on this page.</Text></View> )}
+        {isPDF && ( <TouchableOpacity style={styles.pdfButton} onPress={onOpenFullPdf}><Ionicons name="book-outline" size={20} color={colors.secondary} style={{ marginRight: 8 }} /><Text style={styles.pdfButtonText}>Read Full PDF</Text></TouchableOpacity> )}
       </View>
     );
-  return ( <View style={styles.actionSection}><TouchableOpacity style={styles.analyzeBtn} onPress={onAnalyze}><Ionicons name="scan-outline" size={20} color="#fff" style={{ marginRight: 8 }} /><Text style={styles.analyzeBtnText}>Analyze Document</Text></TouchableOpacity></View> );
+  return ( <View style={styles.actionSection}><TouchableOpacity style={styles.analyzeBtn} onPress={onAnalyze}><Ionicons name="scan-outline" size={20} color={colors.textOnPrimary} style={{ marginRight: 8 }} /><Text style={styles.analyzeBtnText}>Analyze Document</Text></TouchableOpacity></View> );
 };
 
 const DocumentDetails = ({ item }) => (
@@ -72,23 +73,23 @@ const ChatOverlay = ({ onClose, onExpand, messages, inputText, setInputText, onS
           {/* NEW: Expand to full screen chat */}
           {onExpand && (
             <TouchableOpacity onPress={onExpand} style={{marginRight: 15}}>
-              <Ionicons name="expand-outline" size={24} color="#007AFF" />
+              <Ionicons name="expand-outline" size={24} color={colors.primary} />
             </TouchableOpacity>
           )}
-          <TouchableOpacity onPress={onClose}><Ionicons name="close-circle" size={28} color="#999" /></TouchableOpacity>
+          <TouchableOpacity onPress={onClose}><Ionicons name="close-circle" size={28} color={colors.textPlaceholder} /></TouchableOpacity>
         </View>
       </View>
       <ScrollView style={styles.chatScroll} ref={scrollViewRef} onContentSizeChange={() => scrollViewRef.current?.scrollToEnd({ animated: true })}>
         {messages.map(msg => (
           <View key={msg.id} style={[styles.msgBubble, msg.sender === 'user' ? styles.userBubble : styles.botBubble]}>
-            <Text style={[styles.msgText, msg.sender === 'user' ? { color: '#fff' } : { color: '#333' }]}>{msg.text}</Text>
+            <Text style={[styles.msgText, msg.sender === 'user' ? { color: colors.textOnPrimary } : { color: colors.textSecondary }]}>{msg.text}</Text>
           </View>
         ))}
       </ScrollView>
       <View style={styles.chatInputContainer}>
-        <TouchableOpacity style={styles.pasteButton} onPress={handlePasteQuestion}><Ionicons name="clipboard-outline" size={20} color="#5856D6" /></TouchableOpacity>
-        <TextInput style={styles.chatInput} placeholder="Ask or paste text..." placeholderTextColor="#999" value={inputText} onChangeText={setInputText} onSubmitEditing={onSend} />
-        <TouchableOpacity style={styles.sendButton} onPress={onSend}><Ionicons name="send" size={18} color="#fff" /></TouchableOpacity>
+        <TouchableOpacity style={styles.pasteButton} onPress={handlePasteQuestion}><Ionicons name="clipboard-outline" size={20} color={colors.primary} /></TouchableOpacity>
+        <TextInput style={styles.chatInput} placeholder="Ask or paste text..." placeholderTextColor={colors.textPlaceholder} value={inputText} onChangeText={setInputText} onSubmitEditing={onSend} />
+        <TouchableOpacity style={styles.sendButton} onPress={onSend}><Ionicons name="send" size={18} color={colors.textOnPrimary} /></TouchableOpacity>
       </View>
     </View>
   );
@@ -102,7 +103,7 @@ const FullPdfModal = ({ visible, onClose, safePdfUri, title, isChatOpen, setIsCh
         <TouchableOpacity onPress={onClose} style={styles.fullPdfCloseBtn}><Text style={styles.fullPdfCloseText}>Done</Text></TouchableOpacity>
       </View>
       <Pdf source={{ uri: safePdfUri, cache: false }} style={styles.fullPdfViewer} trustAllCerts={false} />
-      {!isChatOpen && <TouchableOpacity style={styles.fab} onPress={() => setIsChatOpen(true)}><Ionicons name="chatbubble-ellipses" size={24} color="#fff" /></TouchableOpacity>}
+      {!isChatOpen && <TouchableOpacity style={styles.fab} onPress={() => setIsChatOpen(true)}><Ionicons name="chatbubble-ellipses" size={24} color={colors.textOnPrimary} /></TouchableOpacity>}
       {isChatOpen && <ChatOverlay onClose={() => setIsChatOpen(false)} onExpand={onExpand} messages={messages} inputText={inputText} setInputText={setInputText} onSend={onSend} scrollViewRef={scrollViewRef} />}
     </SafeAreaView>
   </Modal>
@@ -130,9 +131,9 @@ export default function DocumentScreen({ route, navigation }) {
   }, [item?.messages]);
 
   useEffect(() => { if (!item && navigation.canGoBack()) navigation.goBack(); }, [item, navigation]);
-  useLayoutEffect(() => { navigation.setOptions({ headerRight: () => ( <TouchableOpacity onPress={handleDelete} style={{ marginRight: 15 }}><Ionicons name="trash-outline" size={24} color="#FF3B30" /></TouchableOpacity> ), title: item ? (item.name || 'Document') : 'Loading...', }); }, [navigation, item]);
+  useLayoutEffect(() => { navigation.setOptions({ headerRight: () => ( <TouchableOpacity onPress={handleDelete} style={{ marginRight: 15 }}><Ionicons name="trash-outline" size={24} color={colors.error} /></TouchableOpacity> ), title: item ? (item.name || 'Document') : 'Loading...', }); }, [navigation, item]);
 
-  if (!item) return ( <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator size="large" color="#5856D6" /></View> );
+  if (!item) return ( <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}><ActivityIndicator size="large" color={colors.primary} /></View> );
 
   const activePreview = item.previews ? item.previews[selectedPreviewIndex] : null;
   const displayImage = activePreview ? activePreview.imageUrl : (item.uri || item.imageUrl);
@@ -169,7 +170,7 @@ export default function DocumentScreen({ route, navigation }) {
   const expandToFullChat = () => {
     setIsChatOpen(false);
     setIsFullPdfOpen(false); // Close modal if open
-    navigation.navigate('Chat', { chatId: itemId });
+    navigation.navigate('ChatFull', { chatId: itemId });
   };
 
   const handleLaunchAR = () => { navigation.navigate('ARScreen', { imageUri: displayImage, arElements: activeArElements, itemId: item.id }); };
@@ -190,7 +191,7 @@ export default function DocumentScreen({ route, navigation }) {
         <View style={{ height: 80 }} /> 
       </ScrollView>
 
-      {!isChatOpen && <TouchableOpacity style={styles.fab} onPress={() => setIsChatOpen(true)}><Ionicons name="chatbubble-ellipses" size={24} color="#fff" /></TouchableOpacity>}
+      {!isChatOpen && <TouchableOpacity style={styles.fab} onPress={() => setIsChatOpen(true)}><Ionicons name="chatbubble-ellipses" size={24} color={colors.textOnPrimary} /></TouchableOpacity>}
       {isChatOpen && <ChatOverlay onClose={() => setIsChatOpen(false)} onExpand={expandToFullChat} messages={messages} inputText={inputText} setInputText={setInputText} onSend={handleSendMessage} scrollViewRef={scrollViewRef} />}
 
       <FullPdfModal visible={isFullPdfOpen} onClose={() => setIsFullPdfOpen(false)} safePdfUri={safePdfUri} title={item.name} isChatOpen={isChatOpen} setIsChatOpen={setIsChatOpen} messages={messages} inputText={inputText} setInputText={setInputText} onSend={handleSendMessage} onExpand={expandToFullChat} scrollViewRef={scrollViewRef} />
@@ -199,17 +200,17 @@ export default function DocumentScreen({ route, navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, padding: 20, backgroundColor: '#F2F4F8' },
-  imageContainer: { height: 350, backgroundColor: '#E1E4E8', borderRadius: 12, marginBottom: 15, overflow: 'hidden', borderWidth: 1, borderColor: '#ddd' },
-  thumbnail: { width: '100%', height: '100%' }, pdfViewer: { flex: 1, width: '100%', height: '100%', backgroundColor: '#E1E4E8' },
-  placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center' }, badge: { position: 'absolute', top: 10, right: 10, backgroundColor: '#34C759', padding: 6, borderRadius: 6 }, badgeText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
-  carouselContainer: { marginBottom: 20 }, carouselTitle: { fontSize: 14, fontWeight: '600', color: '#666', marginBottom: 8 }, thumbnailWrap: { width: 70, height: 70, borderRadius: 8, marginRight: 10, overflow: 'hidden', borderWidth: 2, borderColor: 'transparent' }, thumbnailActive: { borderColor: '#5856D6' }, miniThumb: { width: '100%', height: '100%' }, miniBadge: { position: 'absolute', top: 4, right: 4, width: 10, height: 10, borderRadius: 5, backgroundColor: '#34C759', borderWidth: 1, borderColor: '#fff' },
-  actionSection: { marginBottom: 20 }, analyzeBtn: { flexDirection: 'row', backgroundColor: '#5856D6', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center' }, analyzeBtnText: { color: '#fff', fontSize: 18, fontWeight: 'bold' }, arButton: { flexDirection: 'row', backgroundColor: '#007AFF', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', marginBottom: 12 }, arButtonText: { color: '#fff', fontSize: 18, fontWeight: 'bold' }, pdfButton: { flexDirection: 'row', backgroundColor: '#e6f0ff', padding: 16, borderRadius: 12, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: '#007AFF' }, pdfButtonText: { color: '#007AFF', fontSize: 16, fontWeight: 'bold' },
-  errorBox: { alignItems: 'center', marginBottom: 15, padding: 15, backgroundColor: '#ffebeb', borderRadius: 12 }, errorTitle: { fontSize: 18, fontWeight: 'bold', color: '#FF3B30', marginTop: 5 }, errorText: { textAlign: 'center', color: '#333', marginTop: 5 }, retryBtn: { padding: 16, backgroundColor: '#FF3B30', borderRadius: 12, alignItems: 'center' }, retryText: { color: '#fff', fontWeight: 'bold', fontSize: 16 }, analyzingText: { marginTop: 10, fontSize: 16, fontWeight: '600', color: '#333' },
-  section: { marginBottom: 20 }, sectionTitle: { fontSize: 18, fontWeight: '700', marginBottom: 10, color: '#1A1A1A' }, card: { backgroundColor: '#fff', borderRadius: 12, padding: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5 }, summaryText: { fontSize: 15, lineHeight: 22, color: '#333' }, detailText: { marginBottom: 5, color:'#333' },
-  fab: { position: 'absolute', bottom: 30, right: 20, backgroundColor: '#5856D6', width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.3, shadowOffset: {width: 0, height: 4}, elevation: 5 },
-  chatOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '60%', backgroundColor: '#F2F4F8', borderTopLeftRadius: 20, borderTopRightRadius: 20, shadowColor: '#000', shadowOffset: {width: 0, height: -5}, shadowOpacity: 0.2, shadowRadius: 10, elevation: 10 },
-  chatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderColor: '#ddd' }, chatTitle: { fontSize: 16, fontWeight: 'bold', color: '#333' }, chatScroll: { flex: 1, padding: 15 }, msgBubble: { padding: 12, borderRadius: 16, marginBottom: 10, maxWidth: '80%' }, userBubble: { backgroundColor: '#5856D6', alignSelf: 'flex-end', borderBottomRightRadius: 4 }, botBubble: { backgroundColor: '#E1E4E8', alignSelf: 'flex-start', borderBottomLeftRadius: 4 }, msgText: { fontSize: 15, lineHeight: 20 },
-  chatInputContainer: { flexDirection: 'row', padding: 10, backgroundColor: '#fff', borderTopWidth: 1, borderColor: '#ddd', paddingBottom: Platform.OS === 'ios' ? 25 : 10 }, pasteButton: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10, marginRight: 5 }, chatInput: { flex: 1, backgroundColor: '#F2F4F8', borderRadius: 20, paddingHorizontal: 15, fontSize: 15, maxHeight: 100, color: '#333' }, sendButton: { backgroundColor: '#5856D6', width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginLeft: 10, alignSelf: 'flex-end' },
-  fullPdfContainer: { flex: 1, backgroundColor: '#000' }, fullPdfHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, backgroundColor: '#111' }, fullPdfTitle: { color: '#fff', fontSize: 16, fontWeight: '600', flex: 1, marginRight: 15 }, fullPdfCloseBtn: { backgroundColor: '#333', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 8 }, fullPdfCloseText: { color: '#fff', fontWeight: 'bold' }, fullPdfViewer: { flex: 1, width: '100%', backgroundColor: '#222' }
+  container: { flexGrow: 1, padding: 20, backgroundColor: colors.background },
+  imageContainer: { height: 350, backgroundColor: colors.chatBotBubble, borderRadius: radii.md, marginBottom: 15, overflow: 'hidden', borderWidth: 1, borderColor: colors.border },
+  thumbnail: { width: '100%', height: '100%' }, pdfViewer: { flex: 1, width: '100%', height: '100%', backgroundColor: colors.chatBotBubble },
+  placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center' }, badge: { position: 'absolute', top: 10, right: 10, backgroundColor: colors.success, padding: 6, borderRadius: 6 }, badgeText: { color: colors.textOnPrimary, fontSize: 12, fontWeight: 'bold' },
+  carouselContainer: { marginBottom: 20 }, carouselTitle: { fontSize: 14, fontWeight: '600', color: colors.textMuted, marginBottom: 8 }, thumbnailWrap: { width: 70, height: 70, borderRadius: radii.sm, marginRight: 10, overflow: 'hidden', borderWidth: 2, borderColor: 'transparent' }, thumbnailActive: { borderColor: colors.primary }, miniThumb: { width: '100%', height: '100%' }, miniBadge: { position: 'absolute', top: 4, right: 4, width: 10, height: 10, borderRadius: 5, backgroundColor: colors.success, borderWidth: 1, borderColor: colors.surface },
+  actionSection: { marginBottom: 20 }, analyzeBtn: { flexDirection: 'row', backgroundColor: colors.primary, padding: 16, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center' }, analyzeBtnText: { color: colors.textOnPrimary, fontSize: 18, fontWeight: 'bold' }, arButton: { flexDirection: 'row', backgroundColor: colors.primaryLight, padding: 16, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center', marginBottom: 12 }, arButtonText: { color: colors.textOnPrimary, fontSize: 18, fontWeight: 'bold' }, pdfButton: { flexDirection: 'row', backgroundColor: colors.secondaryLight, padding: 16, borderRadius: radii.md, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: colors.secondary }, pdfButtonText: { color: colors.secondary, fontSize: 16, fontWeight: 'bold' },
+  errorBox: { alignItems: 'center', marginBottom: 15, padding: 15, backgroundColor: '#ffebeb', borderRadius: radii.md }, errorTitle: { fontSize: 18, fontWeight: 'bold', color: colors.error, marginTop: 5 }, errorText: { textAlign: 'center', color: colors.textSecondary, marginTop: 5 }, retryBtn: { padding: 16, backgroundColor: colors.error, borderRadius: radii.md, alignItems: 'center' }, retryText: { color: colors.textOnPrimary, fontWeight: 'bold', fontSize: 16 }, analyzingText: { marginTop: 10, fontSize: 16, fontWeight: '600', color: colors.textSecondary },
+  section: { marginBottom: 20 }, sectionTitle: { fontSize: 18, fontWeight: '700', marginBottom: 10, color: colors.textPrimary }, card: { backgroundColor: colors.surface, borderRadius: radii.md, padding: 16, ...shadows.card }, summaryText: { fontSize: 15, lineHeight: 22, color: colors.textSecondary }, detailText: { marginBottom: 5, color: colors.textSecondary },
+  fab: { position: 'absolute', bottom: 30, right: 20, backgroundColor: colors.primary, width: 60, height: 60, borderRadius: 30, justifyContent: 'center', alignItems: 'center', ...shadows.fab },
+  chatOverlay: { position: 'absolute', bottom: 0, left: 0, right: 0, height: '60%', backgroundColor: colors.background, borderTopLeftRadius: radii.xl, borderTopRightRadius: radii.xl, shadowColor: '#000', shadowOffset: {width: 0, height: -5}, shadowOpacity: 0.2, shadowRadius: 10, elevation: 10 },
+  chatHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 15, borderBottomWidth: 1, borderColor: colors.border }, chatTitle: { fontSize: 16, fontWeight: 'bold', color: colors.textSecondary }, chatScroll: { flex: 1, padding: 15 }, msgBubble: { padding: 12, borderRadius: radii.lg, marginBottom: 10, maxWidth: '80%' }, userBubble: { backgroundColor: colors.chatUserBubble, alignSelf: 'flex-end', borderBottomRightRadius: 4 }, botBubble: { backgroundColor: colors.chatBotBubble, alignSelf: 'flex-start', borderBottomLeftRadius: 4 }, msgText: { fontSize: 15, lineHeight: 20 },
+  chatInputContainer: { flexDirection: 'row', padding: 10, backgroundColor: colors.surface, borderTopWidth: 1, borderColor: colors.border, paddingBottom: Platform.OS === 'ios' ? 25 : 10 }, pasteButton: { justifyContent: 'center', alignItems: 'center', paddingHorizontal: 10, marginRight: 5 }, chatInput: { flex: 1, backgroundColor: colors.background, borderRadius: radii.xl, paddingHorizontal: 15, fontSize: 15, maxHeight: 100, color: colors.textSecondary }, sendButton: { backgroundColor: colors.primary, width: 40, height: 40, borderRadius: 20, justifyContent: 'center', alignItems: 'center', marginLeft: 10, alignSelf: 'flex-end' },
+  fullPdfContainer: { flex: 1, backgroundColor: '#000' }, fullPdfHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 15, backgroundColor: '#111' }, fullPdfTitle: { color: colors.textOnPrimary, fontSize: 16, fontWeight: '600', flex: 1, marginRight: 15 }, fullPdfCloseBtn: { backgroundColor: '#333', paddingHorizontal: 15, paddingVertical: 8, borderRadius: radii.sm }, fullPdfCloseText: { color: colors.textOnPrimary, fontWeight: 'bold' }, fullPdfViewer: { flex: 1, width: '100%', backgroundColor: '#222' }
 });

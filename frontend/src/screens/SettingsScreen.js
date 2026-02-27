@@ -3,8 +3,8 @@ import {
   View, Text, StyleSheet, ScrollView, Switch, TouchableOpacity, Alert, SafeAreaView 
 } from 'react-native';
 
-// 1. Import the hook
 import { useHistory } from '../context/HistoryContext';
+import { colors, radii, shadows } from '../styles/theme';
 
 export default function SettingsScreen({ navigation }) {
   
@@ -77,7 +77,7 @@ export default function SettingsScreen({ navigation }) {
               <Text style={styles.rowTitle}>Notifications</Text>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#34C759" }}
+              trackColor={{ false: "#767577", true: colors.success }}
               onValueChange={toggleSwitch}
               value={notificationsEnabled}
             />
@@ -89,7 +89,7 @@ export default function SettingsScreen({ navigation }) {
               <Text style={styles.rowTitle}>Dark Mode</Text>
             </View>
             <Switch
-              trackColor={{ false: "#767577", true: "#34C759" }}
+              trackColor={{ false: "#767577", true: colors.success }}
               onValueChange={toggleDarkMode}
               value={darkMode}
             />
@@ -115,23 +115,23 @@ export default function SettingsScreen({ navigation }) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F2F2F7' },
+  container: { flex: 1, backgroundColor: colors.background },
   scrollContent: { paddingBottom: 40 },
   header: { padding: 20 },
-  headerTitle: { fontSize: 32, fontWeight: '700', color: '#000' },
-  profileCard: { backgroundColor: '#fff', flexDirection: 'row', alignItems: 'center', padding: 16, marginHorizontal: 16, marginBottom: 24, borderRadius: 12 },
-  profileImageContainer: { width: 60, height: 60, borderRadius: 30, backgroundColor: '#E5E5EA', justifyContent: 'center', alignItems: 'center', marginRight: 16 },
+  headerTitle: { fontSize: 32, fontWeight: '700', color: colors.textPrimary },
+  profileCard: { backgroundColor: colors.surface, flexDirection: 'row', alignItems: 'center', padding: 16, marginHorizontal: 16, marginBottom: 24, borderRadius: radii.md, ...shadows.card },
+  profileImageContainer: { width: 60, height: 60, borderRadius: 30, backgroundColor: colors.background, justifyContent: 'center', alignItems: 'center', marginRight: 16 },
   profilePlaceholder: { fontSize: 30 },
   profileInfo: { flex: 1 },
-  profileName: { fontSize: 18, fontWeight: '600', color: '#000' },
-  profileEmail: { fontSize: 14, color: '#8E8E93' },
-  section: { backgroundColor: '#fff', marginHorizontal: 16, marginBottom: 24, borderRadius: 12, overflow: 'hidden' },
-  sectionHeader: { fontSize: 13, fontWeight: '600', color: '#8E8E93', marginBottom: 8, marginLeft: 16, marginTop: 16 },
-  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, backgroundColor: '#fff' },
+  profileName: { fontSize: 18, fontWeight: '600', color: colors.textPrimary },
+  profileEmail: { fontSize: 14, color: colors.textPlaceholder },
+  section: { backgroundColor: colors.surface, marginHorizontal: 16, marginBottom: 24, borderRadius: radii.md, overflow: 'hidden', ...shadows.card },
+  sectionHeader: { fontSize: 13, fontWeight: '600', color: colors.textPlaceholder, marginBottom: 8, marginLeft: 16, marginTop: 16 },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 16, backgroundColor: colors.surface },
   rowLeft: { flexDirection: 'row', alignItems: 'center' },
   rowIcon: { fontSize: 20, marginRight: 12, width: 24, textAlign: 'center' },
-  rowTitle: { fontSize: 16, color: '#000' },
-  rowArrow: { fontSize: 18, color: '#C7C7CC', fontWeight: 'bold' },
-  divider: { height: 1, backgroundColor: '#E5E5EA', marginLeft: 52 },
-  versionText: { textAlign: 'center', color: '#8E8E93', fontSize: 13 },
+  rowTitle: { fontSize: 16, color: colors.textPrimary },
+  rowArrow: { fontSize: 18, color: colors.border, fontWeight: 'bold' },
+  divider: { height: 1, backgroundColor: colors.divider, marginLeft: 52 },
+  versionText: { textAlign: 'center', color: colors.textPlaceholder, fontSize: 13 },
 });

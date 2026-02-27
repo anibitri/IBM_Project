@@ -4,6 +4,7 @@ import DocumentPicker from 'react-native-document-picker';
 import { request, PERMISSIONS, RESULTS } from 'react-native-permissions';
 import { useHistory } from '../context/HistoryContext';
 import axios from 'axios';
+import { colors, shadows, radii } from '../styles/theme';
 
 // --- CONFIGURATION ---
 const DEV_MOCK = true;
@@ -225,20 +226,20 @@ export default function UploadScreen({ navigation }) {
 // 3. STYLES
 // ==========================================
 const styles = StyleSheet.create({
-  container: { flexGrow: 1, padding: 20, backgroundColor: '#F2F4F8' },
-  title: { fontSize: 28, fontWeight: '800', color: '#1A1A1A', marginTop: 20 },
-  subtitle: { fontSize: 16, color: '#666', marginTop: 10, marginBottom: 30, lineHeight: 22 },
+  container: { flexGrow: 1, padding: 20, backgroundColor: colors.background },
+  title: { fontSize: 28, fontWeight: '800', color: colors.textPrimary, marginTop: 20 },
+  subtitle: { fontSize: 16, color: colors.textMuted, marginTop: 10, marginBottom: 30, lineHeight: 22 },
   
-  card: { backgroundColor: '#fff', borderRadius: 16, padding: 20, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10, elevation: 2 },
-  uploadBox: { borderStyle: 'dashed', borderWidth: 2, borderColor: '#D1D1D6', borderRadius: 12, height: 150, justifyContent: 'center', alignItems: 'center', backgroundColor: '#FAFAFA' },
+  card: { backgroundColor: colors.surface, borderRadius: radii.lg, padding: 20, ...shadows.card },
+  uploadBox: { borderStyle: 'dashed', borderWidth: 2, borderColor: colors.border, borderRadius: radii.md, height: 150, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.surfaceAlt },
   uploadIcon: { fontSize: 40, marginBottom: 10 },
-  uploadText: { fontSize: 16, color: '#333', fontWeight: '500' },
+  uploadText: { fontSize: 16, color: colors.textSecondary, fontWeight: '500' },
   
-  analyzeBtn: { backgroundColor: '#007AFF', borderRadius: 12, paddingVertical: 16, alignItems: 'center', marginTop: 20 },
-  disabledBtn: { backgroundColor: '#A1A1A1' },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
+  analyzeBtn: { backgroundColor: colors.primary, borderRadius: radii.md, paddingVertical: 16, alignItems: 'center', marginTop: 20 },
+  disabledBtn: { backgroundColor: colors.textPlaceholder },
+  btnText: { color: colors.textOnPrimary, fontSize: 16, fontWeight: '700' },
   
-  infoBox: { marginTop: 30, padding: 20, backgroundColor: '#E3F2FD', borderRadius: 12 },
-  infoTitle: { fontSize: 16, fontWeight: '700', color: '#0D47A1', marginBottom: 8 },
-  infoText: { fontSize: 14, color: '#1565C0', lineHeight: 20 },
+  infoBox: { marginTop: 30, padding: 20, backgroundColor: colors.primaryFaded, borderRadius: radii.md },
+  infoTitle: { fontSize: 16, fontWeight: '700', color: colors.primary, marginBottom: 8 },
+  infoText: { fontSize: 14, color: colors.primaryLight, lineHeight: 20 },
 });

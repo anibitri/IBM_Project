@@ -6,6 +6,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { useHistory } from '../context/HistoryContext';
+import { colors, radii } from '../styles/theme';
 
 const { height: SCREEN_HEIGHT, width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -144,8 +145,8 @@ const InteractiveDiagramViewer = ({ imageUri, arElements, onBoxPress, selectedEl
       {/* Instructions overlay */}
       <View style={styles.instructionsOverlay}>
         <Text style={styles.instructionText}>
-          <Ionicons name="hand-left" size={14} color="#64C8FF" /> Pinch to zoom • 
-          <Ionicons name="move" size={14} color="#64C8FF" /> Drag to pan
+          <Ionicons name="hand-left" size={14} color={colors.primaryLight} /> Pinch to zoom • 
+          <Ionicons name="move" size={14} color={colors.primaryLight} /> Drag to pan
         </Text>
       </View>
 
@@ -187,9 +188,9 @@ const InteractiveDiagramViewer = ({ imageUri, arElements, onBoxPress, selectedEl
                     height: el.height * imageSize.height,
                     backgroundColor: isSelected 
                       ? 'rgba(255, 183, 77, 0.35)' 
-                      : 'rgba(100, 200, 255, 0.2)',
+                      : colors.primaryFaded,
                     borderWidth: 2,
-                    borderColor: isSelected ? '#FFB74D' : '#64C8FF',
+                    borderColor: isSelected ? '#FFB74D' : colors.primary,
                     borderRadius: 6,
                     justifyContent: 'center',
                     alignItems: 'center',
@@ -232,7 +233,7 @@ const InteractiveDiagramViewer = ({ imageUri, arElements, onBoxPress, selectedEl
 const ZoomControls = ({ onZoomIn, onZoomOut, onReset, currentZoom }) => (
   <View style={styles.zoomControls}>
     <TouchableOpacity style={styles.zoomButton} onPress={onZoomOut}>
-      <Ionicons name="remove" size={22} color="#fff" />
+      <Ionicons name="remove" size={22} color={colors.textOnPrimary} />
     </TouchableOpacity>
     
     <View style={styles.zoomIndicator}>
@@ -240,11 +241,11 @@ const ZoomControls = ({ onZoomIn, onZoomOut, onReset, currentZoom }) => (
     </View>
     
     <TouchableOpacity style={styles.zoomButton} onPress={onZoomIn}>
-      <Ionicons name="add" size={22} color="#fff" />
+      <Ionicons name="add" size={22} color={colors.textOnPrimary} />
     </TouchableOpacity>
     
     <TouchableOpacity style={[styles.zoomButton, styles.resetButton]} onPress={onReset}>
-      <Ionicons name="refresh" size={18} color="#fff" />
+      <Ionicons name="refresh" size={18} color={colors.textOnPrimary} />
     </TouchableOpacity>
   </View>
 );
@@ -282,7 +283,7 @@ const ComponentInfoCard = ({ selectedElement, onOpenChat, onClose }) => {
     >
       <View style={styles.infoCardHeader}>
         <View style={styles.componentIconContainer}>
-          <Ionicons name="cube-outline" size={24} color="#64C8FF" />
+          <Ionicons name="cube-outline" size={24} color={colors.primaryLight} />
         </View>
         <View style={{ flex: 1, marginLeft: 12 }}>
           <Text style={styles.infoCardLabel}>SELECTED COMPONENT</Text>
@@ -303,7 +304,7 @@ const ComponentInfoCard = ({ selectedElement, onOpenChat, onClose }) => {
           style={[styles.actionButton, styles.primaryAction]} 
           onPress={onOpenChat}
         >
-          <Ionicons name="chatbubbles" size={18} color="#fff" />
+          <Ionicons name="chatbubbles" size={18} color={colors.textOnPrimary} />
           <Text style={styles.actionButtonText}>Ask Questions</Text>
         </TouchableOpacity>
       </View>
@@ -352,10 +353,10 @@ const ChatInterface = ({
           <Text style={styles.chatHeaderTitle}>{title}</Text>
         </View>
         <TouchableOpacity onPress={onExpand} style={styles.chatHeaderButton}>
-          <Ionicons name="expand-outline" size={22} color="#64C8FF" />
+          <Ionicons name="expand-outline" size={22} color={colors.primaryLight} />
         </TouchableOpacity>
         <TouchableOpacity onPress={onClose} style={styles.chatHeaderButton}>
-          <Ionicons name="close" size={22} color="#8B92A0" />
+          <Ionicons name="close" size={22} color={colors.textTertiary} />
         </TouchableOpacity>
       </View>
 
@@ -376,7 +377,7 @@ const ChatInterface = ({
           >
             {msg.sender === 'bot' && (
               <View style={styles.botAvatar}>
-                <Ionicons name="sparkles" size={14} color="#64C8FF" />
+                <Ionicons name="sparkles" size={14} color={colors.primaryLight} />
               </View>
             )}
             <View style={msg.sender === 'user' ? styles.userBubbleContent : styles.botBubbleContent}>
@@ -393,7 +394,7 @@ const ChatInterface = ({
         {isTyping && (
           <View style={[styles.messageBubble, styles.botMessage]}>
             <View style={styles.botAvatar}>
-              <Ionicons name="sparkles" size={14} color="#64C8FF" />
+              <Ionicons name="sparkles" size={14} color={colors.primaryLight} />
             </View>
             <View style={styles.typingIndicator}>
               <View style={styles.typingDot} />
@@ -421,7 +422,7 @@ const ChatInterface = ({
             onPress={onSend}
             disabled={!inputText.trim()}
           >
-            <Ionicons name="send" size={18} color="#fff" />
+            <Ionicons name="send" size={18} color={colors.textOnPrimary} />
           </TouchableOpacity>
         </View>
       </View>
@@ -431,7 +432,7 @@ const ChatInterface = ({
 
 const QuickHelpButton = ({ onPress }) => (
   <TouchableOpacity style={styles.helpFab} onPress={onPress}>
-    <Ionicons name="help-circle" size={28} color="#fff" />
+    <Ionicons name="help-circle" size={28} color={colors.textOnPrimary} />
   </TouchableOpacity>
 );
 
@@ -467,7 +468,7 @@ export default function ARScreen({ route, navigation }) {
   if (!imageUri || imageUri.toLowerCase().includes('.pdf')) {
     return (
       <View style={[styles.container, styles.errorContainer]}>
-        <Ionicons name="alert-circle-outline" size={64} color="#FF6B6B" />
+        <Ionicons name="alert-circle-outline" size={64} color={colors.error} />
         <Text style={styles.errorTitle}>Unsupported Format</Text>
         <Text style={styles.errorText}>
           Interactive visualization requires PNG or JPG images.{'\n'}PDF files are not supported.
@@ -523,7 +524,7 @@ export default function ARScreen({ route, navigation }) {
 
   const expandToFullChat = () => {
     setIsChatOpen(false);
-    navigation.navigate('Chat', { chatId: itemId });
+    navigation.navigate('ChatFull', { chatId: itemId });
   };
 
   const showQuickHelp = () => {
@@ -557,7 +558,7 @@ export default function ARScreen({ route, navigation }) {
         {/* Header */}
         <View style={styles.headerBar}>
           <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backButton}>
-            <Ionicons name="chevron-back" size={26} color="#fff" />
+            <Ionicons name="chevron-back" size={26} color={colors.textOnPrimary} />
           </TouchableOpacity>
           <View style={{ flex: 1, alignItems: 'center' }}>
             <Text style={styles.headerTitle}>Interactive Diagram</Text>
@@ -625,15 +626,15 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 100,
     alignSelf: 'center',
-    backgroundColor: 'rgba(100, 200, 255, 0.15)',
+    backgroundColor: colors.primaryFaded,
     paddingHorizontal: 16,
     paddingVertical: 8,
-    borderRadius: 20,
+    borderRadius: radii.xl,
     zIndex: 5,
   },
 
   instructionText: {
-    color: '#64C8FF',
+    color: colors.primaryLight,
     fontSize: 13,
     fontWeight: '500',
   },
@@ -650,7 +651,7 @@ const styles = StyleSheet.create({
     bottom: -25,
     left: 0,
     right: 0,
-    backgroundColor: 'rgba(100, 200, 255, 0.9)',
+    backgroundColor: colors.primary,
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 4,
@@ -658,7 +659,7 @@ const styles = StyleSheet.create({
   },
 
   componentLabelText: {
-    color: '#fff',
+    color: colors.textOnPrimary,
     fontSize: 11,
     fontWeight: '600',
   },
@@ -684,11 +685,11 @@ const styles = StyleSheet.create({
     right: 20,
     flexDirection: 'column',
     backgroundColor: 'rgba(26, 31, 38, 0.95)',
-    borderRadius: 16,
+    borderRadius: radii.lg,
     padding: 8,
     gap: 8,
     borderWidth: 1,
-    borderColor: 'rgba(100, 200, 255, 0.2)',
+    borderColor: colors.primaryFaded,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
@@ -700,7 +701,7 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: '#64C8FF',
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -712,13 +713,13 @@ const styles = StyleSheet.create({
   zoomIndicator: {
     paddingVertical: 8,
     paddingHorizontal: 12,
-    backgroundColor: 'rgba(100, 200, 255, 0.1)',
-    borderRadius: 12,
+    backgroundColor: colors.primaryFaded,
+    borderRadius: radii.md,
     alignItems: 'center',
   },
 
   zoomText: {
-    color: '#64C8FF',
+    color: colors.primaryLight,
     fontSize: 13,
     fontWeight: '700',
   },
@@ -731,16 +732,16 @@ const styles = StyleSheet.create({
     paddingBottom: 16,
     backgroundColor: 'rgba(15, 20, 25, 0.95)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(100, 200, 255, 0.1)',
+    borderBottomColor: colors.primaryFaded,
   },
   headerTitle: {
-    color: '#fff',
+    color: colors.textOnPrimary,
     fontSize: 18,
     fontWeight: '700',
     letterSpacing: 0.5,
   },
   headerSubtitle: {
-    color: '#64C8FF',
+    color: colors.primaryLight,
     fontSize: 12,
     fontWeight: '500',
     marginTop: 2,
@@ -749,7 +750,7 @@ const styles = StyleSheet.create({
     width: 40,
     height: 40,
     borderRadius: 20,
-    backgroundColor: 'rgba(100, 200, 255, 0.1)',
+    backgroundColor: colors.primaryFaded,
     justifyContent: 'center',
     alignItems: 'center',
   },
@@ -760,10 +761,10 @@ const styles = StyleSheet.create({
     left: 16,
     right: 16,
     backgroundColor: '#1A1F26',
-    borderRadius: 20,
+    borderRadius: radii.xl,
     padding: 16,
     borderWidth: 1,
-    borderColor: 'rgba(100, 200, 255, 0.2)',
+    borderColor: colors.primaryFaded,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.3,
@@ -778,13 +779,13 @@ const styles = StyleSheet.create({
   componentIconContainer: {
     width: 48,
     height: 48,
-    borderRadius: 12,
-    backgroundColor: 'rgba(100, 200, 255, 0.1)',
+    borderRadius: radii.md,
+    backgroundColor: colors.primaryFaded,
     justifyContent: 'center',
     alignItems: 'center',
   },
   infoCardLabel: {
-    color: '#64C8FF',
+    color: colors.primaryLight,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1,
@@ -819,13 +820,13 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: radii.md,
   },
   primaryAction: {
-    backgroundColor: '#64C8FF',
+    backgroundColor: colors.primary,
   },
   actionButtonText: {
-    color: '#fff',
+    color: colors.textOnPrimary,
     fontSize: 15,
     fontWeight: '600',
     marginLeft: 8,
@@ -861,17 +862,17 @@ const styles = StyleSheet.create({
     paddingHorizontal: 20,
     paddingVertical: 16,
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(100, 200, 255, 0.1)',
+    borderBottomColor: colors.primaryFaded,
   },
   chatHeaderLabel: {
-    color: '#64C8FF',
+    color: colors.primaryLight,
     fontSize: 11,
     fontWeight: '700',
     letterSpacing: 1,
     marginBottom: 2,
   },
   chatHeaderTitle: {
-    color: '#fff',
+    color: colors.textOnPrimary,
     fontSize: 16,
     fontWeight: '600',
   },
@@ -879,7 +880,7 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: 'rgba(100, 200, 255, 0.1)',
+    backgroundColor: colors.primaryFaded,
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 8,
@@ -905,17 +906,17 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 16,
-    backgroundColor: 'rgba(100, 200, 255, 0.15)',
+    backgroundColor: colors.primaryFaded,
     justifyContent: 'center',
     alignItems: 'center',
     marginRight: 8,
   },
   userBubbleContent: {
     maxWidth: '75%',
-    backgroundColor: '#64C8FF',
+    backgroundColor: colors.primary,
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 20,
+    borderRadius: radii.xl,
     borderBottomRightRadius: 4,
   },
   botBubbleContent: {
@@ -923,11 +924,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#242B34',
     paddingHorizontal: 16,
     paddingVertical: 12,
-    borderRadius: 20,
+    borderRadius: radii.xl,
     borderBottomLeftRadius: 4,
   },
   userMessageText: {
-    color: '#fff',
+    color: colors.textOnPrimary,
     fontSize: 15,
     lineHeight: 22,
   },
@@ -952,14 +953,14 @@ const styles = StyleSheet.create({
     backgroundColor: '#242B34',
     paddingHorizontal: 20,
     paddingVertical: 16,
-    borderRadius: 20,
+    borderRadius: radii.xl,
     borderBottomLeftRadius: 4,
   },
   typingDot: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#64C8FF',
+    backgroundColor: colors.primaryLight,
     marginHorizontal: 3,
   },
   chatInputWrapper: {
@@ -968,7 +969,7 @@ const styles = StyleSheet.create({
     paddingBottom: Platform.OS === 'ios' ? 32 : 16,
     backgroundColor: '#1A1F26',
     borderTopWidth: 1,
-    borderTopColor: 'rgba(100, 200, 255, 0.1)',
+    borderTopColor: colors.primaryFaded,
   },
   chatInputContainer: {
     flexDirection: 'row',
@@ -978,11 +979,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 8,
     borderWidth: 1,
-    borderColor: 'rgba(100, 200, 255, 0.15)',
+    borderColor: colors.primaryFaded,
   },
   chatInput: {
     flex: 1,
-    color: '#fff',
+    color: colors.textOnPrimary,
     fontSize: 15,
     maxHeight: 100,
     paddingVertical: 8,
@@ -991,13 +992,13 @@ const styles = StyleSheet.create({
     width: 36,
     height: 36,
     borderRadius: 18,
-    backgroundColor: '#64C8FF',
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
     marginLeft: 8,
   },
   sendButtonDisabled: {
-    backgroundColor: 'rgba(100, 200, 255, 0.3)',
+    backgroundColor: colors.primaryFaded,
   },
 
   helpFab: {
@@ -1007,10 +1008,10 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 28,
-    backgroundColor: '#64C8FF',
+    backgroundColor: colors.primary,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#64C8FF',
+    shadowColor: colors.primary,
     shadowOpacity: 0.4,
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 12,
@@ -1023,7 +1024,7 @@ const styles = StyleSheet.create({
     padding: 32,
   },
   errorTitle: {
-    color: '#FF6B6B',
+    color: colors.error,
     fontSize: 24,
     fontWeight: '700',
     marginTop: 16,
@@ -1037,13 +1038,13 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   errorButton: {
-    backgroundColor: '#64C8FF',
+    backgroundColor: colors.primary,
     paddingHorizontal: 32,
     paddingVertical: 14,
-    borderRadius: 12,
+    borderRadius: radii.md,
   },
   errorButtonText: {
-    color: '#fff',
+    color: colors.textOnPrimary,
     fontSize: 16,
     fontWeight: '600',
   },

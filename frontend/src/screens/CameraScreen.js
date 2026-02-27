@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, Button, StyleSheet, TouchableOpacity, PermissionAndroid, Platform } from 'react-native';
 import { Camera, useCameraDevices } from 'react-native-vision-camera';
+import { colors, radii } from '../styles/theme';
 
-export default function CameraScreen( ) {
+export default function CameraScreen({ navigation }) {
     const [permission, setPermission] = useState(false);
     const devices = useCameraDevices();
     const device = devices.back;
@@ -41,9 +42,9 @@ const styles = StyleSheet.create({
     bottom: 50,
     left: '25%',
     right: '25%',
-    backgroundColor: '#007AFF',
+    backgroundColor: colors.primary,
     padding: 15,
-    borderRadius: 10,
+    borderRadius: radii.md,
   },
-  text: { color: '#fff', textAlign: 'center' },
+  text: { color: colors.textOnPrimary, textAlign: 'center', fontWeight: '700', fontSize: 16 },
 });

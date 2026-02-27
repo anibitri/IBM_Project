@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text } from 'react-native';
 import { ARKit } from 'react-native-arkit';
+import { colors } from '../styles/theme';
 
 export default function ARView() {
     return (
@@ -13,7 +14,7 @@ export default function ARView() {
             text="Scanning..."
             position={{ x: 0, y: 0.1, z: -0.5 }}
             font={{ size: 0.1, depth: 0.02 }}
-            color="#007AFF"
+            color={colors.primary}
         />
         </ARKit>
     );
