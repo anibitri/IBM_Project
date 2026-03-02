@@ -20,7 +20,7 @@ export default function UploadScreen({ navigation }) {
   const handleImagePicker = async () => {
     try {
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: false,
         quality: 1,
       });
@@ -48,11 +48,12 @@ export default function UploadScreen({ navigation }) {
         copyToCacheDirectory: true,
       });
 
-      if (result.type === 'success') {
+      if (!result.canceled && result.assets && result.assets.length > 0) {
+        const asset = result.assets[0];
         const file = {
-          uri: result.uri,
-          type: result.mimeType || 'application/pdf',
-          name: result.name,
+          uri: asset.uri,
+          type: asset.mimeType || 'application/pdf',
+          name: asset.name || 'document',
         };
         await uploadAndProcess(file);
         navigation.navigate('Diagram');

@@ -1,9 +1,20 @@
 import axios from 'axios';
 
 const getBaseURL = () => {
-  if (typeof navigator !== 'undefined' && navigator.product === 'ReactNative') {
-    return 'http://10.0.2.2:4200/api';
+  // Web browser — use relative path (Vite proxy handles /api -> backend)
+  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
+    return '/api';
   }
+  // React Native — detect platform via user agent or global constants
+  try {
+    // eslint-disable-next-line no-undef
+    const isAndroid = typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent || '');
+    if (isAndroid) {
+      // Android emulator uses 10.0.2.2 to reach host
+      return 'http://10.0.2.2:4200/api';
+    }
+  } catch { /* ignore */ }
+  // iOS simulator / default
   return 'http://localhost:4200/api';
 };
 

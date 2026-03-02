@@ -840,28 +840,208 @@ class ARService:
         
         return label if label else None
     
-    def analyze_component_relationships(self, components: List[Dict]) -> Dict:
-        """Analyze spatial relationships between components"""
+    def analyze_component_relationships(self, components: List[Dict], image_path: str = None) -> Dict:
+        """Analyze relationships between components using spatial + vision analysis.
+        
+        Two strategies combined:
+        1. Spatial proximity (fast, always available)
+        2. Vision-based connection detection (accurate, uses Granite Vision)
+        """
         if len(components) < 2:
             return {'connections': [], 'groups': []}
         
-        connections = []
-        
+        # ── Strategy 1: Spatial proximity ──
+        proximity_connections = []
         for i, comp1 in enumerate(components):
             for comp2 in components[i+1:]:
                 dist = self._distance(comp1, comp2)
-                
                 if dist < self.proximity_threshold:
-                    connections.append({
+                    proximity_connections.append({
                         'from': comp1['id'],
                         'to': comp2['id'],
+                        'type': 'proximity',
                         'distance': float(dist)
                     })
+        
+        # ── Strategy 2: Vision-based connection detection ──
+        vision_connections = []
+        if image_path and manager.vision_model is not None and manager.vision_processor is not None:
+            vision_connections = self._detect_connections_with_vision(components, image_path)
+        
+        # ── Merge: union of both, prefer vision when both exist ──
+        connections = self._merge_connections(proximity_connections, vision_connections)
+        
+        print(f"   🔗 Connections: {len(proximity_connections)} proximity, {len(vision_connections)} vision, {len(connections)} merged")
         
         return {
             'connections': connections,
             'groups': []
         }
+    
+    def _detect_connections_with_vision(self, components: List[Dict], image_path: str) -> List[Dict]:
+        """Use Granite Vision to detect lines/arrows/connections in the diagram."""
+        try:
+            img = Image.open(image_path).convert("RGB")
+            
+            if max(img.size) > 800:
+                ratio = 800.0 / max(img.size)
+                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+                img = img.resize(new_size, Image.LANCZOS)
+            
+            # Build a component map for the prompt
+            comp_names = [f"- {c['label'] or c['id']}" for c in components[:20]]
+            comp_list_str = "\n".join(comp_names)
+            
+            prompt = (
+                "This is a technical diagram. The following components/elements are present:\n"
+                f"{comp_list_str}\n\n"
+                "List ALL visible connections, lines, or arrows between these components. "
+                "For each connection, state ONLY the source and target using the exact names above. "
+                "Format each connection on its own line as: SOURCE -> TARGET\n"
+                "If no connections are visible, reply: NONE"
+            )
+            
+            chat_text = f"<|user|>\n<image>\n{prompt}\n<|assistant|>\n"
+            
+            inputs = manager.vision_processor(
+                images=[img],
+                text=chat_text,
+                return_tensors="pt"
+            )
+            
+            device = manager.vision_model.device
+            target_dtype = getattr(manager, "vision_compute_dtype", manager.dtype)
+            
+            processed_inputs = {}
+            for k, v in inputs.items():
+                if k == "pixel_values":
+                    if not torch.isfinite(v).all():
+                        v = torch.nan_to_num(v)
+                    processed_inputs[k] = v.to(device, dtype=target_dtype)
+                elif k == "input_ids":
+                    processed_inputs[k] = v.to(device)
+                elif v.dtype in [torch.float32, torch.float64]:
+                    processed_inputs[k] = v.to(device, dtype=target_dtype)
+                else:
+                    processed_inputs[k] = v.to(device)
+            
+            with torch.no_grad():
+                output_ids = manager.vision_model.generate(
+                    **processed_inputs,
+                    max_new_tokens=300,
+                    do_sample=False,
+                    temperature=1.0,
+                )
+            
+            prompt_len = processed_inputs.get("input_ids", torch.empty(1, 0)).shape[1]
+            if output_ids.shape[1] <= prompt_len:
+                return []
+            
+            new_tokens = output_ids[:, prompt_len:]
+            response = manager.vision_processor.batch_decode(
+                new_tokens, skip_special_tokens=True
+            )[0].strip()
+            
+            for noise in ['<|end_of_text|>', '<fim_prefix>', '<|system|>', '<|user|>', '<|assistant|>']:
+                response = response.replace(noise, '')
+            
+            print(f"   🔍 Vision connections response: {response[:200]}")
+            
+            if 'NONE' in response.upper() and len(response) < 20:
+                return []
+            
+            return self._parse_vision_connections(response, components)
+        
+        except Exception as e:
+            print(f"   ⚠️ Vision connection detection failed: {e}")
+            return []
+    
+    def _parse_vision_connections(self, text: str, components: List[Dict]) -> List[Dict]:
+        """Parse 'SOURCE -> TARGET' lines from vision output and map to component IDs."""
+        import re
+        
+        # Build lookup: lowercase label/id -> component id
+        label_to_id = {}
+        for c in components:
+            if c.get('label'):
+                label_to_id[c['label'].lower().strip()] = c['id']
+            label_to_id[c['id'].lower()] = c['id']
+        
+        connections = []
+        seen = set()
+        
+        # Match patterns like "Source -> Target", "Source → Target", "Source - Target", "Source to Target"
+        arrow_pattern = re.compile(r'(.+?)\s*(?:->|→|--|—|=>|to)\s*(.+)', re.IGNORECASE)
+        
+        for line in text.splitlines():
+            line = line.strip(' -•*·0123456789.)')
+            if not line:
+                continue
+            
+            match = arrow_pattern.match(line)
+            if not match:
+                continue
+            
+            src_text = match.group(1).strip().lower().strip('"\'')
+            tgt_text = match.group(2).strip().lower().strip('"\'')
+            
+            # Fuzzy match to component labels
+            src_id = self._fuzzy_match_component(src_text, label_to_id)
+            tgt_id = self._fuzzy_match_component(tgt_text, label_to_id)
+            
+            if src_id and tgt_id and src_id != tgt_id:
+                pair = tuple(sorted([src_id, tgt_id]))
+                if pair not in seen:
+                    seen.add(pair)
+                    connections.append({
+                        'from': src_id,
+                        'to': tgt_id,
+                        'type': 'vision',
+                        'distance': float(self._distance(
+                            next(c for c in components if c['id'] == src_id),
+                            next(c for c in components if c['id'] == tgt_id)
+                        ))
+                    })
+        
+        return connections
+    
+    def _fuzzy_match_component(self, text: str, label_to_id: Dict[str, str]) -> Optional[str]:
+        """Match text to the closest component label."""
+        # Exact match
+        if text in label_to_id:
+            return label_to_id[text]
+        
+        # Substring match: find the label that best contains/is contained in text
+        best_id = None
+        best_score = 0
+        for label, comp_id in label_to_id.items():
+            if label.startswith('component_'):
+                continue  # Skip IDs, prefer label matches
+            # Check if either contains the other
+            if label in text or text in label:
+                overlap = len(label) if label in text else len(text)
+                score = overlap / max(len(label), len(text))
+                if score > best_score and score > 0.4:
+                    best_score = score
+                    best_id = comp_id
+        
+        return best_id
+    
+    def _merge_connections(self, proximity: List[Dict], vision: List[Dict]) -> List[Dict]:
+        """Merge proximity and vision connections. Vision connections take priority."""
+        merged = {}
+        
+        # Add proximity connections first
+        for conn in proximity:
+            pair = tuple(sorted([conn['from'], conn['to']]))
+            merged[pair] = conn
+        
+        # Vision connections override proximity
+        for conn in vision:
+            pair = tuple(sorted([conn['from'], conn['to']]))
+            merged[pair] = conn  # Overwrites proximity if same pair
+        
+        return list(merged.values())
     
     def _distance(self, comp1: Dict, comp2: Dict) -> float:
         """Calculate center-to-center distance"""

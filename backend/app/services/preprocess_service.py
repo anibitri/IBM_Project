@@ -318,7 +318,7 @@ class PreprocessService:
                         )
                         
                         if ar_components:
-                            relationships = ar_service.analyze_component_relationships(ar_components)
+                            relationships = ar_service.analyze_component_relationships(ar_components, image_path=img_path)
                             all_ar_components.extend(ar_components)
                     
                     except Exception as e:
@@ -485,7 +485,7 @@ class PreprocessService:
                     )
                     
                     if ar_components:
-                        relationships = ar_service.analyze_component_relationships(ar_components)
+                        relationships = ar_service.analyze_component_relationships(ar_components, image_path=file_path)
                     
                     ar_result = {
                         'status': 'success',

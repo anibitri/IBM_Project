@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -10,6 +10,7 @@ import {
 } from 'react-native';
 import { useDocumentContext } from '@ar-viewer/shared';
 import AROverlay from '../components/AROverlay';
+import CameraARView from '../components/CameraARView';
 import { colors, spacing, typography } from '../styles/theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -18,13 +19,20 @@ export default function DiagramScreen({ navigation }) {
   const { document, clearDocument } = useDocumentContext();
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+  const [cameraMode, setCameraMode] = useState(false);
+
+  useEffect(() => {
+    if (!document) {
+      navigation.replace('Upload');
+    }
+  }, [document, navigation]);
 
   if (!document) {
-    navigation.replace('Upload');
     return null;
   }
 
   const components = document.ar?.components || [];
+  const connections = document.ar?.relationships?.connections || [];
   const imageUrl = document.file?.url || '';
 
   const handleImageLoad = (event) => {
@@ -42,19 +50,41 @@ export default function DiagramScreen({ navigation }) {
       <ScrollView style={styles.scrollView}>
         {/* Image with AR Overlay */}
         <View style={styles.imageContainer}>
-          <Image
-            source={{ uri: imageUrl }}
-            style={styles.image}
-            resizeMode="contain"
-            onLoad={handleImageLoad}
-          />
-          <AROverlay
-            components={components}
-            imageDimensions={imageDimensions}
-            selectedComponent={selectedComponent}
-            onComponentPress={setSelectedComponent}
-          />
+          {cameraMode ? (
+            <CameraARView
+              components={components}
+              selectedComponent={selectedComponent}
+              onComponentPress={setSelectedComponent}
+              imageDimensions={imageDimensions}
+            />
+          ) : (
+            <>
+              <Image
+                source={{ uri: imageUrl }}
+                style={styles.image}
+                resizeMode="contain"
+                onLoad={handleImageLoad}
+              />
+              <AROverlay
+                components={components}
+                connections={connections}
+                imageDimensions={imageDimensions}
+                selectedComponent={selectedComponent}
+                onComponentPress={setSelectedComponent}
+              />
+            </>
+          )}
         </View>
+
+        {/* Camera toggle */}
+        <TouchableOpacity
+          style={[styles.cameraToggle, cameraMode && styles.cameraToggleActive]}
+          onPress={() => setCameraMode((v) => !v)}
+        >
+          <Text style={[styles.cameraToggleText, cameraMode && { color: colors.white }]}>
+            {cameraMode ? '🖼️ Diagram View' : '📷 Camera AR'}
+          </Text>
+        </TouchableOpacity>
 
         {/* AI Summary */}
         <View style={styles.summaryContainer}>
@@ -255,5 +285,26 @@ const styles = StyleSheet.create({
     ...typography.caption,
     color: colors.text,
     fontWeight: '600',
+  },
+  cameraToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    margin: spacing.md,
+    marginTop: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 12,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  cameraToggleActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  cameraToggleText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: colors.text,
   },
 });

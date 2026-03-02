@@ -67,7 +67,7 @@ def generate_ar_overlay():
         # Step 3: Analyze relationships
         relationships = {}
         if components:
-            relationships = ar_service.analyze_component_relationships(components)
+            relationships = ar_service.analyze_component_relationships(components, image_path=resolved_path)
         
         logger.info(f"✅ Extracted {len(components)} AR components")
         

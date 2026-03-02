@@ -4,7 +4,6 @@
     "slug": "ar-diagram-viewer",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
@@ -14,14 +13,18 @@
     "assetBundlePatterns": ["**/*"],
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.arviewer.app"
+      "bundleIdentifier": "com.arviewer.app",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera for AR diagram overlay"
+      }
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#667eea"
       },
-      "package": "com.arviewer.app"
+      "package": "com.arviewer.app",
+      "permissions": ["android.permission.CAMERA"]
     },
     "web": {
       "favicon": "./assets/favicon.png"

@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -16,8 +16,13 @@ export default function ComponentsScreen({ navigation }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('confidence'); // confidence | label | position
 
+  useEffect(() => {
+    if (!document) {
+      navigation.replace('Upload');
+    }
+  }, [document, navigation]);
+
   if (!document) {
-    navigation.replace('Upload');
     return null;
   }
 

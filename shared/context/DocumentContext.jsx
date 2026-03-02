@@ -6,7 +6,11 @@ const DocumentContext = createContext(null);
 const HISTORY_KEY = 'ar-viewer-history';
 const MAX_HISTORY = 20;
 
+// Platform-safe storage: localStorage on web, no-op on React Native
+const hasLocalStorage = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+
 function loadHistory() {
+  if (!hasLocalStorage) return [];
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     return raw ? JSON.parse(raw) : [];
@@ -16,6 +20,7 @@ function loadHistory() {
 }
 
 function saveHistory(history) {
+  if (!hasLocalStorage) return;
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
   } catch { /* quota exceeded */ }

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useDocumentContext } from '@ar-viewer/shared';
+import ARDiagramViewer from './ARDiagramViewer';
 
 export default function DiagramPanel() {
   const { document: doc, selectedComponent, setSelectedComponent, currentImageIndex, setCurrentImageIndex } = useDocumentContext();
@@ -9,6 +10,7 @@ export default function DiagramPanel() {
   const [zoom, setZoom] = useState(1);
   const [hoveredId, setHoveredId] = useState(null);
   const [showLabels, setShowLabels] = useState(true);
+  const [viewMode, setViewMode] = useState('2d');
   const imageRef = useRef(null);
   const summaryDragging = useRef(false);
   const summaryStartY = useRef(0);
@@ -19,15 +21,17 @@ export default function DiagramPanel() {
   const isPdf = doc?.type === 'pdf' && images.length > 0;
   const totalPages = isPdf ? images.length : 1;
 
-  // Current page's components and image URL
-  let components, imageUrl;
+  // Current page's components, connections, and image URL
+  let components, connections, imageUrl;
   if (isPdf && images.length > 0) {
     const currentPage = images[currentImageIndex] || images[0];
     components = currentPage?.ar_components || [];
+    connections = currentPage?.relationships?.connections || [];
     const imgPath = currentPage?.image_path || '';
     imageUrl = imgPath ? `/static/uploads/${imgPath.split('uploads/').pop()}` : null;
   } else {
     components = doc?.ar?.components || [];
+    connections = doc?.ar?.relationships?.connections || [];
     imageUrl = doc?.file?.url || null;
   }
 
@@ -131,117 +135,164 @@ export default function DiagramPanel() {
   return (
     <div className="diagram-panel">
       <div className="diagram-main">
-        <div className="diagram-container" onWheel={handleWheel}>
-          <div
-            className="diagram-wrapper"
-            style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
-          >
-            {imageUrl ? (
-              <>
-                <img
-                  ref={imageRef}
-                  src={imageUrl}
-                  alt="Technical Diagram"
-                  className="diagram-image"
-                />
-                {imageSize.width > 0 && (
-                  <svg
-                    className="diagram-overlay"
-                    style={{
-                      width: imageSize.width,
-                      height: imageSize.height,
-                    }}
-                  >
-                    {components.map((comp) => {
-                      const x = comp.x * imageSize.width;
-                      const y = comp.y * imageSize.height;
-                      const width = comp.width * imageSize.width;
-                      const height = comp.height * imageSize.height;
-                      const isSelected = selectedComponent?.id === comp.id;
-                      const isHovered = hoveredId === comp.id;
-                      const labelText = comp.label || comp.id;
-                      const labelWidth = Math.min(Math.max(labelText.length * 7 + 12, 40), width + 40);
-                      const labelHeight = 18;
-                      const labelX = x + (width - labelWidth) / 2;
-                      const labelY = y - labelHeight - 3;
-
-                      return (
-                        <g
-                          key={comp.id}
-                          onClick={() => handleComponentClick(comp)}
-                          onMouseEnter={() => setHoveredId(comp.id)}
-                          onMouseLeave={() => setHoveredId(null)}
-                          className="component-overlay"
-                        >
-                          <rect
-                            x={x}
-                            y={y}
-                            width={width}
-                            height={height}
-                            fill={isSelected ? 'rgba(99,178,238,0.12)' : isHovered ? 'rgba(74,144,217,0.06)' : 'none'}
-                            stroke={isSelected ? '#63b2ee' : isHovered ? '#5ba0e8' : '#4a90d9'}
-                            strokeWidth={isSelected ? 3 : isHovered ? 2.5 : 1.5}
-                            rx="3"
-                            className="component-box"
+        <div className={`diagram-container${viewMode === '3d' ? ' ar-active' : ''}`} onWheel={viewMode === '2d' ? handleWheel : undefined}>
+          {viewMode === '2d' ? (
+            <div
+              className="diagram-wrapper"
+              style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
+            >
+              {imageUrl ? (
+                <>
+                  <img
+                    ref={imageRef}
+                    src={imageUrl}
+                    alt="Technical Diagram"
+                    className="diagram-image"
+                  />
+                  {imageSize.width > 0 && (
+                    <svg
+                      className="diagram-overlay"
+                      style={{
+                        width: imageSize.width,
+                        height: imageSize.height,
+                      }}
+                    >
+                      {/* Connection lines between components */}
+                      {connections.map((conn, i) => {
+                        const fromComp = components.find((c) => c.id === conn.from);
+                        const toComp = components.find((c) => c.id === conn.to);
+                        if (!fromComp || !toComp) return null;
+                        const x1 = (fromComp.x + fromComp.width / 2) * imageSize.width;
+                        const y1 = (fromComp.y + fromComp.height / 2) * imageSize.height;
+                        const x2 = (toComp.x + toComp.width / 2) * imageSize.width;
+                        const y2 = (toComp.y + toComp.height / 2) * imageSize.height;
+                        return (
+                          <line
+                            key={`conn-${i}`}
+                            x1={x1} y1={y1} x2={x2} y2={y2}
+                            stroke="#2e5a88"
+                            strokeWidth="1.5"
+                            strokeDasharray="5,3"
+                            opacity="0.7"
                           />
-                          {(showLabels || isSelected || isHovered) && labelText && labelText !== 'Unknown' && (
-                            <>
-                              <rect
-                                x={labelX}
-                                y={Math.max(0, labelY)}
-                                width={labelWidth}
-                                height={labelHeight}
-                                rx="3"
-                                fill={isSelected ? '#63b2ee' : '#4a90d9'}
-                                opacity="0.92"
-                                className="component-label-bg"
-                              />
-                              <text
-                                x={labelX + labelWidth / 2}
-                                y={Math.max(0, labelY) + 13}
-                                textAnchor="middle"
-                                fill="#fff"
-                                fontSize="11"
-                                fontWeight="600"
-                                fontFamily="Inter, sans-serif"
-                                className="component-label-text"
-                              >
-                                {labelText}
-                              </text>
-                            </>
-                          )}
-                        </g>
-                      );
-                    })}
-                  </svg>
-                )}
-              </>
-            ) : (
-              <div className="no-image">
-                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <rect x="3" y="3" width="18" height="18" rx="2" />
-                  <circle cx="8.5" cy="8.5" r="1.5" />
-                  <path d="M21 15l-5-5L5 21" />
-                </svg>
-                <p>No diagram available</p>
-              </div>
-            )}
-          </div>
+                        );
+                      })}
+                      {components.map((comp) => {
+                        const x = comp.x * imageSize.width;
+                        const y = comp.y * imageSize.height;
+                        const width = comp.width * imageSize.width;
+                        const height = comp.height * imageSize.height;
+                        const isSelected = selectedComponent?.id === comp.id;
+                        const isHovered = hoveredId === comp.id;
+                        const labelText = comp.label || comp.id;
+                        const labelWidth = Math.min(Math.max(labelText.length * 7 + 12, 40), width + 40);
+                        const labelHeight = 18;
+                        const labelX = x + (width - labelWidth) / 2;
+                        const labelY = y - labelHeight - 3;
+                        // Hide label if box is large enough that text inside is already readable
+                        const boxArea = width * height;
+                        const hideLabel = boxArea > (imageSize.width * imageSize.height * 0.008);
 
-          {/* Zoom controls */}
+                        return (
+                          <g
+                            key={comp.id}
+                            onClick={() => handleComponentClick(comp)}
+                            onMouseEnter={() => setHoveredId(comp.id)}
+                            onMouseLeave={() => setHoveredId(null)}
+                            className="component-overlay"
+                          >
+                            <rect
+                              x={x}
+                              y={y}
+                              width={width}
+                              height={height}
+                              fill={isSelected ? 'rgba(99,178,238,0.12)' : isHovered ? 'rgba(74,144,217,0.06)' : 'none'}
+                              stroke={isSelected ? '#63b2ee' : isHovered ? '#5ba0e8' : '#4a90d9'}
+                              strokeWidth={isSelected ? 3 : isHovered ? 2.5 : 1.5}
+                              rx="3"
+                              className="component-box"
+                            />
+                            {(!hideLabel || isSelected || isHovered) && (showLabels || isSelected || isHovered) && labelText && labelText !== 'Unknown' && (
+                              <>
+                                <rect
+                                  x={labelX}
+                                  y={Math.max(0, labelY)}
+                                  width={labelWidth}
+                                  height={labelHeight}
+                                  rx="3"
+                                  fill={isSelected ? '#63b2ee' : '#4a90d9'}
+                                  opacity="0.92"
+                                  className="component-label-bg"
+                                />
+                                <text
+                                  x={labelX + labelWidth / 2}
+                                  y={Math.max(0, labelY) + 13}
+                                  textAnchor="middle"
+                                  fill="#fff"
+                                  fontSize="11"
+                                  fontWeight="600"
+                                  fontFamily="Inter, sans-serif"
+                                  className="component-label-text"
+                                >
+                                  {labelText}
+                                </text>
+                              </>
+                            )}
+                          </g>
+                        );
+                      })}
+                    </svg>
+                  )}
+                </>
+              ) : (
+                <div className="no-image">
+                  <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <rect x="3" y="3" width="18" height="18" rx="2" />
+                    <circle cx="8.5" cy="8.5" r="1.5" />
+                    <path d="M21 15l-5-5L5 21" />
+                  </svg>
+                  <p>No diagram available</p>
+                </div>
+              )}
+            </div>
+          ) : (
+            imageUrl && (
+              <ARDiagramViewer
+                imageUrl={imageUrl}
+                components={components}
+                connections={connections}
+                selectedComponent={selectedComponent}
+                onComponentClick={handleComponentClick}
+              />
+            )
+          )}
+
+          {/* View controls */}
           {imageUrl && (
             <div className="zoom-controls">
-              <button className="zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
-              <span className="zoom-label">{Math.round(zoom * 100)}%</span>
-              <button className="zoom-btn" onClick={zoomOut} title="Zoom out">&minus;</button>
-              <button className="zoom-btn" onClick={zoomReset} title="Reset zoom" style={{ fontSize: 11 }}>1:1</button>
+              {viewMode === '2d' && (
+                <>
+                  <button className="zoom-btn" onClick={zoomIn} title="Zoom in">+</button>
+                  <span className="zoom-label">{Math.round(zoom * 100)}%</span>
+                  <button className="zoom-btn" onClick={zoomOut} title="Zoom out">&minus;</button>
+                  <button className="zoom-btn" onClick={zoomReset} title="Reset zoom" style={{ fontSize: 11 }}>1:1</button>
+                  <button
+                    className={`zoom-btn ${showLabels ? 'active' : ''}`}
+                    onClick={() => setShowLabels(!showLabels)}
+                    title={showLabels ? 'Hide labels' : 'Show labels'}
+                    style={{ fontSize: 11, marginTop: 4 }}
+                  >
+                    Aa
+                  </button>
+                </>
+              )}
               <button
-                className={`zoom-btn ${showLabels ? 'active' : ''}`}
-                onClick={() => setShowLabels(!showLabels)}
-                title={showLabels ? 'Hide labels' : 'Show labels'}
-                style={{ fontSize: 11, marginTop: 4 }}
+                className={`zoom-btn ${viewMode === '3d' ? 'active' : ''}`}
+                onClick={() => setViewMode((v) => v === '2d' ? '3d' : '2d')}
+                title={viewMode === '2d' ? 'Switch to 3D AR view' : 'Switch to 2D flat view'}
+                style={{ fontSize: 11, marginTop: 4, fontWeight: 700 }}
               >
-                {showLabels ? 'Aa' : 'Aa'}
+                {viewMode === '2d' ? 'AR' : '2D'}
               </button>
             </div>
           )}
