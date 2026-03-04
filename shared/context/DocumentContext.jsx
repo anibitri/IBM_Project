@@ -45,12 +45,48 @@ export const DocumentProvider = ({ children }) => {
     saveHistory(recentSessions);
   }, [recentSessions]);
 
+  // Derive a short contextual session name from the AI summary or components
+  const _deriveSessionName = useCallback((doc) => {
+    // Try to extract a meaningful name from AI summary
+    const summary = doc?.ai_summary || '';
+    if (summary) {
+      // Clean prompt artifacts first
+      let text = summary;
+      const markers = ['Summary:', 'Analysis:', 'Provide a clear'];
+      for (const m of markers) {
+        const idx = text.lastIndexOf(m);
+        if (idx !== -1) text = text.slice(idx + m.length);
+      }
+      text = text.replace(/^\s+/, '');
+      // Take the first meaningful sentence/phrase (up to ~50 chars)
+      const firstSentence = text.split(/[.\n]/).find(s => s.trim().length > 10);
+      if (firstSentence) {
+        let name = firstSentence.trim().replace(/\*+/g, '').substring(0, 50);
+        // Trim to last whole word if cut mid-word
+        if (name.length === 50) {
+          const lastSpace = name.lastIndexOf(' ');
+          if (lastSpace > 20) name = name.substring(0, lastSpace);
+        }
+        return name;
+      }
+    }
+    // Fallback: use component labels if available
+    const components = doc?.ar?.components || [];
+    if (components.length > 0) {
+      const labels = components.slice(0, 3).map(c => c.label).filter(Boolean);
+      if (labels.length > 0) return labels.join(', ');
+    }
+    // Last resort: filename without extension
+    const rawName = doc?.file?.original_name || doc?.file?.name || 'Untitled';
+    return rawName.replace(/\.[^.]+$/, '');
+  }, []);
+
   // Save current session to history
   const _saveCurrentToHistory = useCallback(() => {
     if (!document) return;
     const session = {
       id: document.storedName || Date.now().toString(),
-      fileName: document.file?.original_name || document.file?.name || 'Untitled',
+      fileName: _deriveSessionName(document),
       storedName: document.storedName,
       file: document.file,
       componentCount: document.ar?.componentCount || document.ar?.components?.length || 0,
@@ -64,7 +100,7 @@ export const DocumentProvider = ({ children }) => {
       const filtered = prev.filter((s) => s.id !== session.id);
       return [session, ...filtered].slice(0, MAX_HISTORY);
     });
-  }, [document, chatHistory]);
+  }, [document, chatHistory, _deriveSessionName]);
 
   const uploadAndProcess = useCallback(async (file) => {
     if (document) _saveCurrentToHistory();
@@ -108,6 +144,8 @@ export const DocumentProvider = ({ children }) => {
         text_excerpt: document.text_excerpt || '',
         vision: document.vision || {},
         components: document.ar?.components || [],
+        connections: document.ar?.connections || document.ar?.relationships?.connections || [],
+        stored_name: document.storedName || '',
       };
 
       // Use ref to get current history (avoids stale closure)
@@ -123,9 +161,26 @@ export const DocumentProvider = ({ children }) => {
   }, [document, addMessage]);
 
   const askAboutComponent = useCallback((component) => {
-    const question = `Tell me about the "${component.label}" component. What is its function, and how does it relate to the other components in this diagram?`;
+    // Find connections that involve this component
+    const connections = document?.ar?.connections || document?.ar?.relationships?.connections || [];
+    const related = connections
+      .filter(c => c.from === component.id || c.to === component.id)
+      .map(c => {
+        const otherLabel = c.from === component.id
+          ? (c.to_label || c.to)
+          : (c.from_label || c.from);
+        return otherLabel;
+      });
+
+    let question;
+    if (related.length > 0) {
+      const connList = related.join(', ');
+      question = `Tell me about the "${component.label}" component. It is connected to: ${connList}. What is its function, and how does it interact with these connected components?`;
+    } else {
+      question = `Tell me about the "${component.label}" component. What is its function, and how does it relate to the other components in this diagram?`;
+    }
     setPendingQuestion(question);
-  }, []);
+  }, [document]);
 
   const consumePendingQuestion = useCallback(() => {
     const q = pendingQuestion;

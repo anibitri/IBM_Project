@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useDocumentContext } from '@ar-viewer/shared';
 import ARDiagramViewer from './ARDiagramViewer';
+import { renderMarkdown } from './markdownUtils';
 
 export default function DiagramPanel() {
   const { document: doc, selectedComponent, setSelectedComponent, currentImageIndex, setCurrentImageIndex } = useDocumentContext();
@@ -8,6 +9,11 @@ export default function DiagramPanel() {
   const [summaryOpen, setSummaryOpen] = useState(false);
   const [summaryHeight, setSummaryHeight] = useState(160);
   const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef({ x: 0, y: 0 });
+  const isDragging = useRef(false);
+  const dragStart = useRef({ x: 0, y: 0, panX: 0, panY: 0 });
+  const didDrag = useRef(false);
   const [hoveredId, setHoveredId] = useState(null);
   const [showLabels, setShowLabels] = useState(true);
   const [viewMode, setViewMode] = useState('2d');
@@ -26,7 +32,7 @@ export default function DiagramPanel() {
   if (isPdf && images.length > 0) {
     const currentPage = images[currentImageIndex] || images[0];
     components = currentPage?.ar_components || [];
-    connections = currentPage?.relationships?.connections || [];
+    connections = currentPage?.ar_relationships?.connections || currentPage?.relationships?.connections || [];
     const imgPath = currentPage?.image_path || '';
     imageUrl = imgPath ? `/static/uploads/${imgPath.split('uploads/').pop()}` : null;
   } else {
@@ -35,9 +41,11 @@ export default function DiagramPanel() {
     imageUrl = doc?.file?.url || null;
   }
 
-  // Reset zoom on image change
+  // Reset zoom and pan on image change
   useEffect(() => {
     setZoom(1);
+    setPan({ x: 0, y: 0 });
+    panRef.current = { x: 0, y: 0 };
   }, [imageUrl]);
 
   useEffect(() => {
@@ -62,6 +70,8 @@ export default function DiagramPanel() {
   }, [imageUrl]);
 
   const handleComponentClick = (comp) => {
+    // Ignore click if user was dragging
+    if (didDrag.current) return;
     setSelectedComponent((prev) => (prev?.id === comp.id ? null : comp));
   };
 
@@ -78,14 +88,55 @@ export default function DiagramPanel() {
   // Zoom
   const zoomIn = () => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)));
   const zoomOut = () => setZoom((z) => Math.max(0.25, +(z - 0.25).toFixed(2)));
-  const zoomReset = () => setZoom(1);
+  const zoomReset = () => { setZoom(1); setPan({ x: 0, y: 0 }); panRef.current = { x: 0, y: 0 }; };
 
   const handleWheel = useCallback((e) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       if (e.deltaY < 0) setZoom((z) => Math.min(3, +(z + 0.1).toFixed(2)));
       else setZoom((z) => Math.max(0.25, +(z - 0.1).toFixed(2)));
+    } else if (zoom > 1) {
+      // Normal scroll → pan the diagram
+      e.preventDefault();
+      const newPan = {
+        x: panRef.current.x - e.deltaX,
+        y: panRef.current.y - e.deltaY,
+      };
+      panRef.current = newPan;
+      setPan(newPan);
     }
+  }, [zoom]);
+
+  // Pan handlers for dragging when zoomed
+  const handlePanMouseDown = useCallback((e) => {
+    if (zoom <= 1) return;
+    // Don't prevent default — let clicks through
+    isDragging.current = true;
+    didDrag.current = false;
+    dragStart.current = { x: e.clientX, y: e.clientY, panX: panRef.current.x, panY: panRef.current.y };
+  }, [zoom]);
+
+  useEffect(() => {
+    const handleMouseMove = (e) => {
+      if (!isDragging.current) return;
+      const dx = e.clientX - dragStart.current.x;
+      const dy = e.clientY - dragStart.current.y;
+      // Only start panning after a small drag threshold to distinguish from clicks
+      if (!didDrag.current && Math.abs(dx) < 4 && Math.abs(dy) < 4) return;
+      didDrag.current = true;
+      const newPan = { x: dragStart.current.panX + dx, y: dragStart.current.panY + dy };
+      panRef.current = newPan;
+      setPan(newPan);
+    };
+    const handleMouseUp = () => {
+      isDragging.current = false;
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
   }, []);
 
   // Resizable summary
@@ -123,11 +174,23 @@ export default function DiagramPanel() {
   const cleanSummary = (raw) => {
     if (!raw) return 'No summary available';
     let text = raw;
-    const markers = ['Provide a clear, structured analysis:', 'Summary:', 'Analysis:'];
+    // Strip any prompt fragments that leaked into the answer
+    const markers = [
+      'Provide a clear, structured analysis:',
+      'Provide a clear, concise answer:',
+      'Summary:',
+      'Analysis:',
+      'You are an expert technical analyst.',
+      'Task:',
+    ];
     for (const m of markers) {
       const idx = text.lastIndexOf(m);
       if (idx !== -1) text = text.slice(idx + m.length);
     }
+    // Strip context blocks that sometimes leak
+    text = text.replace(/^Context:\s*[\s\S]*?(?=\n\n|\n[A-Z])/i, '');
+    text = text.replace(/^Document Text:\s*[\s\S]*?(?=\n\n)/i, '');
+    text = text.replace(/^Visual Analysis:\s*[\s\S]*?(?=\n\n)/i, '');
     text = text.replace(/^[\s\n:]+/, '').replace(/[\s\n]+$/, '');
     return text || 'No summary available';
   };
@@ -139,7 +202,12 @@ export default function DiagramPanel() {
           {viewMode === '2d' ? (
             <div
               className="diagram-wrapper"
-              style={{ transform: `scale(${zoom})`, transformOrigin: 'center center' }}
+              style={{
+                transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
+                transformOrigin: 'center center',
+                cursor: zoom > 1 ? 'grab' : 'default',
+              }}
+              onMouseDown={handlePanMouseDown}
             >
               {imageUrl ? (
                 <>
@@ -157,26 +225,6 @@ export default function DiagramPanel() {
                         height: imageSize.height,
                       }}
                     >
-                      {/* Connection lines between components */}
-                      {connections.map((conn, i) => {
-                        const fromComp = components.find((c) => c.id === conn.from);
-                        const toComp = components.find((c) => c.id === conn.to);
-                        if (!fromComp || !toComp) return null;
-                        const x1 = (fromComp.x + fromComp.width / 2) * imageSize.width;
-                        const y1 = (fromComp.y + fromComp.height / 2) * imageSize.height;
-                        const x2 = (toComp.x + toComp.width / 2) * imageSize.width;
-                        const y2 = (toComp.y + toComp.height / 2) * imageSize.height;
-                        return (
-                          <line
-                            key={`conn-${i}`}
-                            x1={x1} y1={y1} x2={x2} y2={y2}
-                            stroke="#2e5a88"
-                            strokeWidth="1.5"
-                            strokeDasharray="5,3"
-                            opacity="0.7"
-                          />
-                        );
-                      })}
                       {components.map((comp) => {
                         const x = comp.x * imageSize.width;
                         const y = comp.y * imageSize.height;
@@ -189,9 +237,6 @@ export default function DiagramPanel() {
                         const labelHeight = 18;
                         const labelX = x + (width - labelWidth) / 2;
                         const labelY = y - labelHeight - 3;
-                        // Hide label if box is large enough that text inside is already readable
-                        const boxArea = width * height;
-                        const hideLabel = boxArea > (imageSize.width * imageSize.height * 0.008);
 
                         return (
                           <g
@@ -212,7 +257,7 @@ export default function DiagramPanel() {
                               rx="3"
                               className="component-box"
                             />
-                            {(!hideLabel || isSelected || isHovered) && (showLabels || isSelected || isHovered) && labelText && labelText !== 'Unknown' && (
+                            {(showLabels || isSelected || isHovered) && labelText && labelText !== 'Unknown' && (
                               <>
                                 <rect
                                   x={labelX}
@@ -263,6 +308,7 @@ export default function DiagramPanel() {
                 connections={connections}
                 selectedComponent={selectedComponent}
                 onComponentClick={handleComponentClick}
+                showLabels={showLabels}
               />
             )
           )}
@@ -276,16 +322,16 @@ export default function DiagramPanel() {
                   <span className="zoom-label">{Math.round(zoom * 100)}%</span>
                   <button className="zoom-btn" onClick={zoomOut} title="Zoom out">&minus;</button>
                   <button className="zoom-btn" onClick={zoomReset} title="Reset zoom" style={{ fontSize: 11 }}>1:1</button>
-                  <button
-                    className={`zoom-btn ${showLabels ? 'active' : ''}`}
-                    onClick={() => setShowLabels(!showLabels)}
-                    title={showLabels ? 'Hide labels' : 'Show labels'}
-                    style={{ fontSize: 11, marginTop: 4 }}
-                  >
-                    Aa
-                  </button>
                 </>
               )}
+              <button
+                className={`zoom-btn ${showLabels ? 'active' : ''}`}
+                onClick={() => setShowLabels(!showLabels)}
+                title={showLabels ? 'Hide labels' : 'Show labels'}
+                style={{ fontSize: 11, marginTop: 4 }}
+              >
+                Aa
+              </button>
               <button
                 className={`zoom-btn ${viewMode === '3d' ? 'active' : ''}`}
                 onClick={() => setViewMode((v) => v === '2d' ? '3d' : '2d')}
@@ -336,7 +382,7 @@ export default function DiagramPanel() {
           </button>
           {summaryOpen && (
             <div className="summary-content" style={{ maxHeight: summaryHeight }}>
-              <p>{cleanSummary(doc?.ai_summary)}</p>
+              <div className="summary-text">{renderMarkdown(cleanSummary(doc?.ai_summary))}</div>
             </div>
           )}
         </div>

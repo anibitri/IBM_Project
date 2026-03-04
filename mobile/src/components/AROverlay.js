@@ -1,6 +1,6 @@
 import React from 'react';
 import { View, StyleSheet, Dimensions } from 'react-native';
-import Svg, { Rect, G, Circle, Text as SvgText, Line } from 'react-native-svg';
+import Svg, { Rect, G, Circle, Text as SvgText } from 'react-native-svg';
 import { colors } from '../styles/theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
@@ -21,6 +21,7 @@ export default function AROverlay({
   imageDimensions,
   selectedComponent,
   onComponentPress,
+  showLabels = true,
 }) {
   if (!imageDimensions.width || !imageDimensions.height || components.length === 0) {
     return null;
@@ -40,29 +41,6 @@ export default function AROverlay({
   return (
     <View style={[styles.overlay, { width: displayWidth, height: displayHeight }]}>
       <Svg width={displayWidth} height={displayHeight}>
-        {/* ── Connection lines ─────────────────────────── */}
-        {connections.map((conn, idx) => {
-          const src = compMap[conn.from];
-          const dst = compMap[conn.to];
-          if (!src || !dst) return null;
-
-          const x1 = (src.x + src.width / 2) * displayWidth;
-          const y1 = (src.y + src.height / 2) * displayHeight;
-          const x2 = (dst.x + dst.width / 2) * displayWidth;
-          const y2 = (dst.y + dst.height / 2) * displayHeight;
-
-          return (
-            <Line
-              key={`conn-${idx}`}
-              x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke={colors.arBox}
-              strokeWidth={1.5}
-              strokeDasharray="6,4"
-              opacity={0.7}
-            />
-          );
-        })}
-
         {/* ── Components ───────────────────────────────── */}
         {components.map((comp) => {
           const x = comp.x * displayWidth;
@@ -74,7 +52,7 @@ export default function AROverlay({
 
           const labelText = (comp.label || '').substring(0, 20);
           const labelWidth = Math.min(labelText.length * 8 + 10, width);
-          const showLabel = labelText.length > 0 && (!hideLabel || isSelected);
+          const showLabel = labelText.length > 0 && (!hideLabel || isSelected) && (showLabels || isSelected);
 
           return (
             <G key={comp.id} onPress={() => onComponentPress(comp)}>

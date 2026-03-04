@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -7,6 +7,7 @@ import {
   Image,
   TouchableOpacity,
   Dimensions,
+  PanResponder,
 } from 'react-native';
 import { useDocumentContext } from '@ar-viewer/shared';
 import AROverlay from '../components/AROverlay';
@@ -20,6 +21,40 @@ export default function DiagramScreen({ navigation }) {
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
   const [cameraMode, setCameraMode] = useState(false);
+  const [showLabels, setShowLabels] = useState(true);
+
+  // Pan & zoom state
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const panRef = useRef({ x: 0, y: 0 });
+  const lastPinchDist = useRef(0);
+
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => false,
+      onMoveShouldSetPanResponder: (_, gs) => {
+        // Only capture gestures when zoomed in and the user is clearly dragging
+        return zoom > 1 && (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5);
+      },
+      onPanResponderGrant: () => {
+        panRef.current = { ...pan };
+      },
+      onPanResponderMove: (_, gs) => {
+        setPan({
+          x: panRef.current.x + gs.dx,
+          y: panRef.current.y + gs.dy,
+        });
+      },
+      onPanResponderRelease: () => {},
+    })
+  ).current;
+
+  // Reset pan when zoom resets
+  useEffect(() => {
+    if (zoom <= 1) {
+      setPan({ x: 0, y: 0 });
+    }
+  }, [zoom]);
 
   useEffect(() => {
     if (!document) {
@@ -58,7 +93,16 @@ export default function DiagramScreen({ navigation }) {
               imageDimensions={imageDimensions}
             />
           ) : (
-            <>
+            <View
+              {...panResponder.panHandlers}
+              style={{
+                transform: [
+                  { translateX: pan.x },
+                  { translateY: pan.y },
+                  { scale: zoom },
+                ],
+              }}
+            >
               <Image
                 source={{ uri: imageUrl }}
                 style={styles.image}
@@ -71,10 +115,42 @@ export default function DiagramScreen({ navigation }) {
                 imageDimensions={imageDimensions}
                 selectedComponent={selectedComponent}
                 onComponentPress={setSelectedComponent}
+                showLabels={showLabels}
               />
-            </>
+            </View>
           )}
         </View>
+
+        {/* Zoom & label controls */}
+        {!cameraMode && (
+          <View style={styles.zoomControls}>
+            <TouchableOpacity
+              style={styles.zoomBtn}
+              onPress={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
+            >
+              <Text style={styles.zoomBtnText}>+</Text>
+            </TouchableOpacity>
+            <Text style={styles.zoomLabel}>{Math.round(zoom * 100)}%</Text>
+            <TouchableOpacity
+              style={styles.zoomBtn}
+              onPress={() => setZoom((z) => Math.max(1, +(z - 0.25).toFixed(2)))}
+            >
+              <Text style={styles.zoomBtnText}>−</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.zoomBtn}
+              onPress={() => { setZoom(1); setPan({ x: 0, y: 0 }); }}
+            >
+              <Text style={[styles.zoomBtnText, { fontSize: 12 }]}>1:1</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.zoomBtn, showLabels && styles.zoomBtnActive]}
+              onPress={() => setShowLabels((v) => !v)}
+            >
+              <Text style={[styles.zoomBtnText, { fontSize: 12 }, showLabels && { color: colors.white }]}>Aa</Text>
+            </TouchableOpacity>
+          </View>
+        )
 
         {/* Camera toggle */}
         <TouchableOpacity
@@ -180,6 +256,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.white,
     padding: spacing.md,
     position: 'relative',
+    overflow: 'hidden',
   },
   image: {
     width: SCREEN_WIDTH - spacing.md * 2,
@@ -306,5 +383,39 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '600',
     color: colors.text,
+  },
+  zoomControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
+    gap: 8,
+  },
+  zoomBtn: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: colors.white,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomBtnActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  zoomBtnText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  zoomLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.textLight,
+    minWidth: 40,
+    textAlign: 'center',
   },
 });

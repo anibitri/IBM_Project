@@ -119,6 +119,8 @@ export default function WorkspaceView() {
   const isDragging = useRef(false);
   const containerRef = useRef(null);
 
+  const isPdf = doc?.type === 'pdf' && (doc?.images?.length > 0 || doc?.file?.extension === '.pdf');
+
   useEffect(() => {
     if (pendingQuestion && viewMode === 'diagram') {
       setViewMode('split');
@@ -208,6 +210,21 @@ export default function WorkspaceView() {
             </svg>
             Info
           </button>
+          {isPdf && (
+            <button
+              className={`mode-btn ${viewMode === 'pdf' ? 'active' : ''}`}
+              onClick={() => setViewMode('pdf')}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+                <polyline points="14 2 14 8 20 8" />
+                <line x1="16" y1="13" x2="8" y2="13" />
+                <line x1="16" y1="17" x2="8" y2="17" />
+                <polyline points="10 9 9 9 8 9" />
+              </svg>
+              PDF
+            </button>
+          )}
         </div>
       </div>
 
@@ -230,6 +247,15 @@ export default function WorkspaceView() {
         {viewMode === 'info' && (
           <div className="panel-wrapper">
             <DocumentInfoPanel />
+          </div>
+        )}
+        {viewMode === 'pdf' && isPdf && (
+          <div className="panel-wrapper pdf-viewer-panel">
+            <iframe
+              src={doc.file?.url || `/static/uploads/${doc.storedName}`}
+              title="PDF Viewer"
+              className="pdf-viewer-iframe"
+            />
           </div>
         )}
       </div>

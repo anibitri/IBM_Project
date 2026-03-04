@@ -100,7 +100,27 @@ export default function Sidebar({ isOpen, onToggle }) {
                   <div className="history-dot current"></div>
                   <div className="history-content">
                     <div className="history-title">
-                      {document.file?.original_name || document.file?.name || 'Current Document'}
+                      {document.ai_summary
+                        ? (() => {
+                            let text = document.ai_summary;
+                            const markers = ['Summary:', 'Analysis:', 'Provide a clear'];
+                            for (const m of markers) {
+                              const idx = text.lastIndexOf(m);
+                              if (idx !== -1) text = text.slice(idx + m.length);
+                            }
+                            text = text.replace(/^\s+/, '').replace(/\*+/g, '');
+                            const first = text.split(/[.\n]/).find(s => s.trim().length > 10);
+                            if (first) {
+                              let name = first.trim().substring(0, 50);
+                              if (name.length === 50) {
+                                const sp = name.lastIndexOf(' ');
+                                if (sp > 20) name = name.substring(0, sp);
+                              }
+                              return name;
+                            }
+                            return document.file?.original_name || 'Current Document';
+                          })()
+                        : document.file?.original_name || document.file?.name || 'Current Document'}
                     </div>
                     <div className="history-meta">
                       {components.length} components &middot; {chatHistory.length} messages

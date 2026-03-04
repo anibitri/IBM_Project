@@ -8,6 +8,12 @@ import torch
 from typing import List, Dict, Optional
 
 from app.services.model_manager import manager
+from app.services.prompt_builder import (
+    COMPONENT_LABEL_PROMPT,
+    build_connection_prompt,
+    clean_label,
+    make_unique_labels,
+)
 
 
 class ARService:
@@ -16,9 +22,10 @@ class ARService:
     def __init__(self):
         self.confidence_threshold = 0.35
         self.min_box_area = 1000
-        self.iou_threshold = 0.45
+        self.iou_threshold = 0.35
+        self.iomin_threshold = 0.70
         self.max_components = 50
-        self.proximity_threshold = 0.15
+        self.proximity_threshold = 0.05
 
         # Size Thresholds
         self.max_area_ratio = 0.85
@@ -42,6 +49,16 @@ class ARService:
         self.container_min_area_ratio = 0.55
         self.container_min_children = 5
         self.nesting_size_ratio = 1.8
+
+        # Text-region detection thresholds
+        self.text_edge_density_threshold = 0.12   # text has very dense edges
+        self.text_fill_ratio_threshold = 0.30     # text fills the box uniformly
+        self.text_max_height_px = 60              # standalone text is usually short
+        self.text_min_aspect_ratio = 2.0          # text regions are wide & short
+
+        # Empty-box detection
+        self.empty_box_max_variance = 18.0        # very low colour spread
+        self.empty_box_max_edge_density = 0.025   # almost no interior edges
         
         # Debug mode
         self.debug_complexity = False  # Set to True to see rejection reasons
@@ -63,7 +80,16 @@ class ARService:
                 print("⚠️ SAM model not loaded")
                 return []
             
-            results = manager.ar_model(image_path)
+            # If SAM is on CPU, check whether GPU has recovered
+            manager.try_restore_sam_to_gpu()
+            
+            # Run SAM with OOM protection
+            try:
+                results = manager.ar_model(image_path)
+            except torch.cuda.OutOfMemoryError:
+                print("⚠️ SAM CUDA OOM — switching to CPU")
+                manager.move_sam_to_cpu()
+                results = manager.ar_model(image_path)
             
             segments = self._extract_segments(results, img_width, img_height)
             print(f"   📦 Raw SAM detections: {len(segments)}")
@@ -79,6 +105,10 @@ class ARService:
             img_area = img_width * img_height
             unique = self._remove_overlaps(filtered, img_area=img_area)
             print(f"   ✓ After NMS: {len(unique)}")
+            
+            # Remove smaller box when it is mostly covered by a larger one
+            unique = self._remove_high_overlap_pairs(unique)
+            print(f"   ✓ After IoMin overlap pass: {len(unique)}")
             
             # Remove larger box when a smaller one is fully contained in it
             unique = self._remove_contained_duplicates(unique)
@@ -98,6 +128,11 @@ class ARService:
             components = self._label_components(components, image_path, hints)
             print(f"   ✓ Labeled components: {len(components)}")
 
+            # Post-label filter: remove components whose vision label
+            # reveals they are text/annotations rather than real components
+            components = self._filter_text_labels(components)
+            print(f"   ✓ After text-label filtering: {len(components)}")
+
             components = self._deduplicate_by_label(components)
             print(f"   ✓ Deduplicated by label: {len(components)}")
 
@@ -112,30 +147,66 @@ class ARService:
             traceback.print_exc()
             return []
         
-    def _deduplicate_by_label(self, components: List[Dict]) -> List[Dict]:
-        """Remove duplicate labels, keeping the highest-confidence instance"""
-        seen_labels = {}
-        
+    def _filter_text_labels(self, components: List[Dict]) -> List[Dict]:
+        """Remove components whose vision-generated label suggests they are
+        standalone text, titles, or annotations rather than real diagram
+        components.
+
+        Common false positives from text detection:
+        - 'Figure 1', 'Step 3', 'Note:', section headings
+        - Long descriptive phrases the model read verbatim
+        - Pure numeric strings
+        """
+        import re
+
+        _TEXT_PATTERNS = [
+            r'^(?:figure|fig\.?|step|note|caption|title|heading)\s*\d*',
+            r'^(?:section|chapter|part|appendix)\s',
+            r'^\d+[\.\)]\s',           # numbered list items: "1. " "2) "
+            r'^[ivxlcdm]+[\.\)]\s',    # roman numeral lists
+            r'^(?:source|ref|reference|see)\s*:',
+            r'^(?:input|output)\s*$',   # bare "Input" / "Output" text labels
+        ]
+
+        keep = []
         for comp in components:
-            label = (comp.get('label') or '').strip().lower()
-            if not label or label.startswith('component'):
-                # Always keep unlabeled components
-                seen_labels[comp['id']] = comp
-                continue
-            
-            if label=='unknown' or label=='unlabeled':
-                # Keep unknown components but don't use their label for deduplication
-                seen_labels[comp['id']] = comp
+            label = (comp.get('label') or '').strip()
+            if not label or label.lower() in ('unknown', 'unlabeled'):
+                keep.append(comp)
                 continue
 
-            if label not in seen_labels:
-                seen_labels[label] = comp
-            else:
-                existing = seen_labels[label]
-                if comp['confidence'] > existing['confidence']:
-                    seen_labels[label] = comp
-        
-        return list(seen_labels.values())
+            label_lower = label.lower()
+
+            # Reject if it matches a text/annotation pattern
+            matched = False
+            for pat in _TEXT_PATTERNS:
+                if re.match(pat, label_lower):
+                    matched = True
+                    break
+            if matched:
+                if self.debug_complexity:
+                    print(f"   🗑️ Text-label filter removed: '{label}'")
+                continue
+
+            # Reject very long labels (>5 words) — likely a sentence the
+            # model read from the image rather than a component name
+            if len(label.split()) > 5:
+                if self.debug_complexity:
+                    print(f"   🗑️ Long-label filter removed: '{label}'")
+                continue
+
+            keep.append(comp)
+
+        return keep
+
+    def _deduplicate_by_label(self, components: List[Dict]) -> List[Dict]:
+        """Assign unique labels – keep ALL components, append numeric suffix
+        to duplicates so the frontend can distinguish them."""
+        labels = [comp.get('label') or f"Component {i+1}" for i, comp in enumerate(components)]
+        unique_labels = make_unique_labels(labels)
+        for comp, new_label in zip(components, unique_labels):
+            comp['label'] = new_label
+        return components
     
     def _extract_segments(self, results, img_width: int, img_height: int) -> List[Dict]:
         """Extract bounding boxes from SAM results"""
@@ -342,53 +413,207 @@ class ARService:
     
     def _filter_by_visual_complexity(self, segments: List[Dict], img: Image.Image) -> List[Dict]:
         """
-        Filter out visually simple regions (likely background/grid artifacts).
+        Filter out visually simple regions (background/grid artifacts),
+        standalone text labels, and empty boxes.
         
         Large components are always kept — solid-coloured boxes (CPU, GPU, etc.)
         have low grayscale variance and few edges but are real components.
-        Only small detections are subjected to the complexity check.
+        Only small detections are subjected to the full complexity pipeline.
         """
         img_area = img.size[0] * img.size[1]
         # Components larger than this fraction of the image skip complexity checks
-        complexity_bypass_area = 0.015
+        # Raised from 0.015 → 0.04 so medium boxes still get checked
+        complexity_bypass_area = 0.04
         
         complex_segments = []
         
         for seg in segments:
             area_ratio = seg['area_pixels'] / img_area
+            x1, y1, x2, y2 = [int(c) for c in seg['box_pixels']]
+            crop = img.crop((x1, y1, x2, y2))
+            w_px = x2 - x1
+            h_px = y2 - y1
             
-            # Large components are always real — skip complexity check
+            # ── 1. Reject standalone text regions ──
+            if self._is_text_region(crop, w_px, h_px, area_ratio):
+                if self.debug_complexity:
+                    print(f"   🗑️ Text region rejected: [{x1},{y1},{x2},{y2}] {w_px}x{h_px}")
+                continue
+            
+            # ── 2. Reject empty / near-empty boxes ──
+            if self._is_empty_box(crop, area_ratio):
+                if self.debug_complexity:
+                    print(f"   🗑️ Empty box rejected: [{x1},{y1},{x2},{y2}]")
+                continue
+            
+            # ── 3. Large components skip remaining complexity checks ──
             if area_ratio >= complexity_bypass_area:
                 complex_segments.append(seg)
                 continue
             
-            x1, y1, x2, y2 = [int(c) for c in seg['box_pixels']]
-            crop = img.crop((x1, y1, x2, y2))
-            
-            # Get both metrics
+            # ── 4. Standard complexity check for small detections ──
             has_color_variance = self._has_sufficient_color_variance(crop)
             has_edges = self._has_sufficient_edges(crop)
             
-            # Pass if EITHER test passes (OR logic instead of AND)
             if has_color_variance or has_edges:
                 complex_segments.append(seg)
             elif self.debug_complexity:
                 print(f"   🗑️ Visual complexity fail: [{x1},{y1},{x2},{y2}] area_r={area_ratio:.4f}")
         
         return complex_segments
+
+    def _is_text_region(self, crop: Image.Image, w_px: int, h_px: int, area_ratio: float) -> bool:
+        """Detect standalone text labels, titles, or annotations.
+
+        Text regions are characterised by:
+        - High edge density (every character is an edge)
+        - High fill ratio (content distributed uniformly, no hollow interior)
+        - Typically short height or extreme width-to-height aspect ratio
+        - Small overall area (real component boxes are bigger)
+
+        Returns True if this crop looks like a text label rather than a
+        diagram component.
+        """
+        # Large boxes are rarely just text
+        if area_ratio > 0.05:
+            return False
+
+        aspect = max(w_px, h_px) / max(min(w_px, h_px), 1)
+
+        # ── Colour saturation guard ──
+        # Coloured shapes (circles, hexagons with fills) look like text
+        # in grayscale but are real diagram components.  Measure how much
+        # the R, G, B channels differ from each other in the interior.
+        rgb_arr = np.array(crop, dtype=np.float32)
+        rh, rw = rgb_arr.shape[:2]
+        my = max(int(rh * 0.2), 3)
+        mx = max(int(rw * 0.2), 3)
+        if rh > my * 2 + 2 and rw > mx * 2 + 2:
+            inner_rgb = rgb_arr[my:-my, mx:-mx]
+            channel_means = [float(np.mean(inner_rgb[:, :, c])) for c in range(3)]
+            channel_spread = float(np.std(channel_means))
+            # If the interior is distinctly coloured, this is NOT text
+            if channel_spread >= 5.0:
+                return False
+
+        gray = crop.convert('L')
+        arr = np.array(gray, dtype=np.float32)
+
+        # Edge density
+        dx = np.diff(arr, axis=1, prepend=arr[:, :1])
+        dy = np.diff(arr, axis=0, prepend=arr[:1, :])
+        edges = np.sqrt(dx ** 2 + dy ** 2)
+        edge_pixels = np.sum(edges > 10)
+        edge_density = edge_pixels / max(arr.size, 1)
+
+        # Fill ratio: fraction of non-background pixels.
+        # Background = the dominant border colour.
+        border_pixels = np.concatenate([arr[0, :], arr[-1, :], arr[:, 0], arr[:, -1]])
+        bg_val = float(np.median(border_pixels))
+        content_mask = np.abs(arr - bg_val) > 20
+        fill_ratio = np.sum(content_mask) / max(arr.size, 1)
+
+        # Heuristic rule set:
+        # A) Very high edge density + wide & short  →  text
+        if (edge_density > self.text_edge_density_threshold
+                and aspect >= self.text_min_aspect_ratio
+                and h_px <= self.text_max_height_px):
+            return True
+
+        # B) High edge density + high fill ratio + small area  →  text
+        #    Only applies to achromatic (grey/black/white) regions.
+        if (edge_density > self.text_edge_density_threshold
+                and fill_ratio > self.text_fill_ratio_threshold
+                and area_ratio < 0.015):
+            return True
+
+        # C) Extremely high edge density alone (dense paragraph/title block)
+        if edge_density > 0.25 and area_ratio < 0.03:
+            return True
+
+        return False
+
+    def _is_empty_box(self, crop: Image.Image, area_ratio: float) -> bool:
+        """Detect empty or near-empty boxes (uniform colour, no content).
+
+        Returns True if the box interior is essentially blank — very low
+        grayscale variance AND almost no edge activity AND no colour.
+
+        Important: coloured boxes (solid fills like red, blue, green) have
+        low *grayscale* variance but are real diagram components.  We check
+        the RGB colour range of the interior to avoid rejecting them.
+        """
+        # ── Colour guard: coloured fills are NOT empty ──
+        rgb_arr = np.array(crop)
+        h_px, w_px = rgb_arr.shape[:2]
+
+        # Use a proportional margin (10% of each dim, min 5px) so we clear
+        # dark borders / outlines and inspect the actual interior.
+        margin_y = max(int(h_px * 0.10), 5)
+        margin_x = max(int(w_px * 0.10), 5)
+
+        # Need enough room for an interior region
+        if h_px <= margin_y * 2 + 4 or w_px <= margin_x * 2 + 4:
+            return False  # too small to judge
+
+        inner_rgb = rgb_arr[margin_y:-margin_y, margin_x:-margin_x]
+        # Colour range: max peak-to-peak across R, G, B channels
+        color_range = max(int(np.ptp(inner_rgb[:, :, c])) for c in range(3))
+
+        # If the interior is colourful (> 80 range in any channel) it's a
+        # real component with a coloured fill, not an empty box.
+        if color_range > 80:
+            return False
+
+        # ── Grayscale checks (only reach here if box is NOT colourful) ──
+        gray = crop.convert('L')
+        arr = np.array(gray, dtype=np.float32)
+        stat = ImageStat.Stat(gray)
+        variance = stat.stddev[0]
+
+        dx = np.diff(arr, axis=1, prepend=arr[:, :1])
+        dy = np.diff(arr, axis=0, prepend=arr[:1, :])
+        edges = np.sqrt(dx ** 2 + dy ** 2)
+        edge_density = np.sum(edges > 8) / max(arr.size, 1)
+
+        # A truly empty box has low variance AND almost no edges inside
+        if variance < self.empty_box_max_variance and edge_density < self.empty_box_max_edge_density:
+            return True
+
+        # Also catch boxes that have a border outline but nothing inside
+        inner_gray = arr[margin_y:-margin_y, margin_x:-margin_x]
+        dx_i = np.diff(inner_gray, axis=1, prepend=inner_gray[:, :1])
+        dy_i = np.diff(inner_gray, axis=0, prepend=inner_gray[:1, :])
+        inner_edges = np.sqrt(dx_i ** 2 + dy_i ** 2)
+        inner_edge_density = np.sum(inner_edges > 8) / max(inner_gray.size, 1)
+        inner_var = float(np.std(inner_gray))
+
+        if inner_var < 8.0 and inner_edge_density < 0.008:
+            return True
+
+        return False
     
     def _has_sufficient_color_variance(self, crop: Image.Image) -> bool:
         """
         Check if region has enough color variation.
-        Lowered threshold: 15 instead of 100.
+        Checks both grayscale variance AND RGB colour range so that
+        solid-coloured fills (blue, red, green) pass even though their
+        grayscale variance is low.
         """
         try:
+            # Grayscale variance check
             gray = crop.convert('L')
             stat = ImageStat.Stat(gray)
-            variance = stat.stddev[0]
-            
-            # Tuned threshold
-            return variance > self.min_color_variance
+            if stat.stddev[0] > self.min_color_variance:
+                return True
+
+            # RGB colour check: if any channel has wide range, there's real colour
+            rgb_arr = np.array(crop)
+            for c in range(3):
+                if np.ptp(rgb_arr[:, :, c]) > 60:
+                    return True
+
+            return False
         
         except Exception as e:
             return True
@@ -480,6 +705,54 @@ class ARService:
                 kept.append(seg)
         
         return kept
+    
+    def _remove_high_overlap_pairs(self, segments: List[Dict]) -> List[Dict]:
+        """Remove boxes that are mostly covered by another larger box.
+        
+        Uses intersection-over-minimum-area (IoMin) instead of IoU.
+        IoMin catches cases where a small box is almost entirely inside a
+        bigger one but IoU is low because the bigger box is much larger.
+        When IoMin > threshold and the boxes are similar in size, the lower-
+        confidence one is dropped.
+        """
+        if len(segments) < 2:
+            return segments
+        
+        to_remove = set()
+        for i, seg_a in enumerate(segments):
+            if i in to_remove:
+                continue
+            for j, seg_b in enumerate(segments):
+                if j <= i or j in to_remove:
+                    continue
+                iomin = self._calculate_iomin(seg_a['box_pixels'], seg_b['box_pixels'])
+                if iomin > self.iomin_threshold:
+                    # High overlap — drop the lower-confidence one
+                    if seg_a['confidence'] >= seg_b['confidence']:
+                        to_remove.add(j)
+                    else:
+                        to_remove.add(i)
+                        break
+        
+        result = [s for i, s in enumerate(segments) if i not in to_remove]
+        return result
+    
+    def _calculate_iomin(self, box1: List[float], box2: List[float]) -> float:
+        """Intersection area / area of the smaller box."""
+        x1 = max(box1[0], box2[0])
+        y1 = max(box1[1], box2[1])
+        x2 = min(box1[2], box2[2])
+        y2 = min(box1[3], box2[3])
+        
+        if x2 <= x1 or y2 <= y1:
+            return 0.0
+        
+        inter = (x2 - x1) * (y2 - y1)
+        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+        min_area = min(area1, area2)
+        
+        return inter / min_area if min_area > 0 else 0.0
     
     def _remove_contained_duplicates(self, segments: List[Dict]) -> List[Dict]:
         """Remove the larger box when it contains MULTIPLE smaller ones.
@@ -658,7 +931,7 @@ class ARService:
         if manager.vision_model is None or manager.vision_processor is None:
             print("⚠️ Vision model not available for labeling")
             for i, comp in enumerate(components):
-                comp['label'] = hints[i] if i < len(hints) else f"Component {i+1}"
+                comp['label'] = f"Component {i+1}"
             return components
         
         try:
@@ -666,27 +939,42 @@ class ARService:
         except Exception as e:
             print(f"⚠️ Failed to load image for labeling: {e}")
             for i, comp in enumerate(components):
-                comp['label'] = hints[i] if i < len(hints) else f"Component {i+1}"
+                comp['label'] = f"Component {i+1}"
             return components
         
         # Calculate median area to detect outlier (too-small) components
         areas = [comp['area'] for comp in components]
         median_area = sorted(areas)[len(areas) // 2] if areas else 0
         
+        # Build a set of lowercase hint names for quick fallback matching
+        hint_set = {h.lower(): h for h in hints if h} if hints else {}
+
         labeled = []
+        img_w, img_h = img.size
         for i, comp in enumerate(components):
             try:
-                if i < len(hints) and hints[i]:
-                    comp['label'] = hints[i]
-                    comp['description'] = None
-                    labeled.append(comp)
-                    continue
-                
                 x1, y1, x2, y2 = comp['box_pixels']
-                crop = img.crop((int(x1), int(y1), int(x2), int(y2)))
+                box_w = x2 - x1
+                box_h = y2 - y1
+
+                # Pad the crop by 40% of box size so nearby text labels
+                # (e.g. "User Corrections" below a database symbol) are
+                # visible to the vision model.
+                pad_x = int(box_w * 0.4)
+                pad_y = int(box_h * 0.4)
+                cx1 = max(0, int(x1) - pad_x)
+                cy1 = max(0, int(y1) - pad_y)
+                cx2 = min(img_w, int(x2) + pad_x)
+                cy2 = min(img_h, int(y2) + pad_y)
+                crop = img.crop((cx1, cy1, cx2, cy2))
                 
                 label = self._query_vision_for_label(crop, comp['id'])
                 print(f"   🎯 Labeled {comp['id']} as '{label}'")
+
+                # If the vision model failed, try to find a matching hint
+                # based on spatial overlap or use a generic fallback
+                if not label and hint_set:
+                    label = f"Component {i+1}"
                 
                 # Post-label sanity check: reject tiny components whose label
                 # doesn't match any text visible in the diagram
@@ -717,12 +1005,7 @@ class ARService:
                 new_size = (int(crop_img.size[0] * ratio), int(crop_img.size[1] * ratio))
                 crop_img = crop_img.resize(new_size, Image.LANCZOS)
             
-            prompt = (
-                "What text or label is visible in this cropped region from a technical diagram? "
-                "Reply with ONLY the text/name you see, nothing else. "
-                "Maximum 3 words. No sentences. No explanations. "
-                "If no text is visible, reply: Unknown"
-            )
+            prompt = COMPONENT_LABEL_PROMPT
             
             chat_text = f"<|user|>\n<image>\n{prompt}\n<|assistant|>\n"
             
@@ -765,14 +1048,9 @@ class ARService:
                 )[0]
                 
                 label = label.strip()
-                for noise in ['<|end_of_text|>', '<fim_prefix>', '<|system|>', '<|user|>', '<|assistant|>']:
-                    label = label.replace(noise, '')
-                label = label.strip('.-:; ')
-                
-                # Extract actual name from verbose responses
-                label = self._clean_label(label)
-                
-                return label if label else None
+                # Use centralised prompt_builder cleaner
+                label = clean_label(label)
+                return label
             
             return None
         
@@ -841,42 +1119,95 @@ class ARService:
         return label if label else None
     
     def analyze_component_relationships(self, components: List[Dict], image_path: str = None) -> Dict:
-        """Analyze relationships between components using spatial + vision analysis.
-        
-        Two strategies combined:
-        1. Spatial proximity (fast, always available)
-        2. Vision-based connection detection (accurate, uses Granite Vision)
-        """
-        if len(components) < 2:
+        """Detect connections between components using spatial proximity and optional vision."""
+        if not components or len(components) < 2:
             return {'connections': [], 'groups': []}
-        
-        # ── Strategy 1: Spatial proximity ──
-        proximity_connections = []
-        for i, comp1 in enumerate(components):
-            for comp2 in components[i+1:]:
-                dist = self._distance(comp1, comp2)
-                if dist < self.proximity_threshold:
-                    proximity_connections.append({
-                        'from': comp1['id'],
-                        'to': comp2['id'],
-                        'type': 'proximity',
-                        'distance': float(dist)
-                    })
-        
-        # ── Strategy 2: Vision-based connection detection ──
+
+        # 1. Proximity-based connections (fast, always available)
+        #    Only very close / touching components count as connected.
+        proximity_connections = self._detect_proximity_connections(components)
+
+        # 2. Vision-based connections (slower but more accurate for arrows/lines)
         vision_connections = []
-        if image_path and manager.vision_model is not None and manager.vision_processor is not None:
-            vision_connections = self._detect_connections_with_vision(components, image_path)
-        
-        # ── Merge: union of both, prefer vision when both exist ──
-        connections = self._merge_connections(proximity_connections, vision_connections)
-        
-        print(f"   🔗 Connections: {len(proximity_connections)} proximity, {len(vision_connections)} vision, {len(connections)} merged")
-        
-        return {
-            'connections': connections,
-            'groups': []
-        }
+        if image_path and manager.vision_model is not None and len(components) <= 25:
+            try:
+                vision_connections = self._detect_connections_with_vision(components, image_path)
+            except Exception as e:
+                print(f"   ⚠️ Vision connection detection skipped: {e}")
+
+        # 3. Merge: only keep vision connections that are spatially plausible,
+        #    and proximity connections that are nearly touching.
+        all_connections = self._merge_connections(proximity_connections, vision_connections)
+
+        # 4. Build adjacency groups
+        groups = self._build_groups(components, all_connections)
+
+        return {'connections': all_connections, 'groups': groups}
+
+    def _detect_proximity_connections(self, components: List[Dict]) -> List[Dict]:
+        """Detect connections between components based on spatial proximity of edges."""
+        connections = []
+        seen = set()
+
+        for i, c1 in enumerate(components):
+            for j, c2 in enumerate(components):
+                if j <= i:
+                    continue
+
+                # Use edge-to-edge distance (not center-to-center)
+                dist = self._edge_distance(c1, c2)
+                if dist < self.proximity_threshold:
+                    pair = tuple(sorted([c1['id'], c2['id']]))
+                    if pair not in seen:
+                        seen.add(pair)
+                        connections.append({
+                            'from': c1['id'],
+                            'to': c2['id'],
+                            'from_label': c1.get('label', c1['id']),
+                            'to_label': c2.get('label', c2['id']),
+                            'type': 'proximity',
+                            'distance': float(dist),
+                        })
+
+        return connections
+
+    def _edge_distance(self, comp1: Dict, comp2: Dict) -> float:
+        """Shortest distance between the edges of two component bounding boxes (normalised coords)."""
+        x1_min, x1_max = comp1['x'], comp1['x'] + comp1['width']
+        y1_min, y1_max = comp1['y'], comp1['y'] + comp1['height']
+        x2_min, x2_max = comp2['x'], comp2['x'] + comp2['width']
+        y2_min, y2_max = comp2['y'], comp2['y'] + comp2['height']
+
+        dx = max(0, max(x1_min - x2_max, x2_min - x1_max))
+        dy = max(0, max(y1_min - y2_max, y2_min - y1_max))
+        return (dx ** 2 + dy ** 2) ** 0.5
+
+    def _build_groups(self, components: List[Dict], connections: List[Dict]) -> List[List[str]]:
+        """Build connected-component groups using union-find."""
+        parent: Dict[str, str] = {c['id']: c['id'] for c in components}
+
+        def find(x):
+            while parent[x] != x:
+                parent[x] = parent[parent[x]]
+                x = parent[x]
+            return x
+
+        def union(a, b):
+            ra, rb = find(a), find(b)
+            if ra != rb:
+                parent[ra] = rb
+
+        for conn in connections:
+            if conn['from'] in parent and conn['to'] in parent:
+                union(conn['from'], conn['to'])
+
+        groups_map: Dict[str, List[str]] = {}
+        for cid in parent:
+            root = find(cid)
+            groups_map.setdefault(root, []).append(cid)
+
+        # Only return groups with 2+ members
+        return [g for g in groups_map.values() if len(g) > 1]
     
     def _detect_connections_with_vision(self, components: List[Dict], image_path: str) -> List[Dict]:
         """Use Granite Vision to detect lines/arrows/connections in the diagram."""
@@ -888,18 +1219,8 @@ class ARService:
                 new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
                 img = img.resize(new_size, Image.LANCZOS)
             
-            # Build a component map for the prompt
-            comp_names = [f"- {c['label'] or c['id']}" for c in components[:20]]
-            comp_list_str = "\n".join(comp_names)
-            
-            prompt = (
-                "This is a technical diagram. The following components/elements are present:\n"
-                f"{comp_list_str}\n\n"
-                "List ALL visible connections, lines, or arrows between these components. "
-                "For each connection, state ONLY the source and target using the exact names above. "
-                "Format each connection on its own line as: SOURCE -> TARGET\n"
-                "If no connections are visible, reply: NONE"
-            )
+            # Build prompt with component positions for spatial reasoning
+            prompt = build_connection_prompt(components)
             
             chat_text = f"<|user|>\n<image>\n{prompt}\n<|assistant|>\n"
             
@@ -993,53 +1314,77 @@ class ARService:
                 pair = tuple(sorted([src_id, tgt_id]))
                 if pair not in seen:
                     seen.add(pair)
+                    src_comp = next(c for c in components if c['id'] == src_id)
+                    tgt_comp = next(c for c in components if c['id'] == tgt_id)
                     connections.append({
                         'from': src_id,
                         'to': tgt_id,
+                        'from_label': src_comp.get('label', src_id),
+                        'to_label': tgt_comp.get('label', tgt_id),
                         'type': 'vision',
-                        'distance': float(self._distance(
-                            next(c for c in components if c['id'] == src_id),
-                            next(c for c in components if c['id'] == tgt_id)
-                        ))
+                        'distance': float(self._distance(src_comp, tgt_comp)),
+                        'edge_distance': float(self._edge_distance(src_comp, tgt_comp)),
                     })
         
         return connections
     
     def _fuzzy_match_component(self, text: str, label_to_id: Dict[str, str]) -> Optional[str]:
-        """Match text to the closest component label."""
+        """Match text to the closest component label.
+        
+        Uses strict matching to avoid hallucinated connections:
+        - Exact match first
+        - Then requires high overlap (>= 0.75) between label and text
+        """
         # Exact match
         if text in label_to_id:
             return label_to_id[text]
         
-        # Substring match: find the label that best contains/is contained in text
+        # Strict substring match: only if one string fully contains the other
+        # AND the overlap ratio is very high
         best_id = None
         best_score = 0
         for label, comp_id in label_to_id.items():
             if label.startswith('component_'):
                 continue  # Skip IDs, prefer label matches
-            # Check if either contains the other
+            # Check if either fully contains the other
+            if label == text:
+                return comp_id
             if label in text or text in label:
-                overlap = len(label) if label in text else len(text)
-                score = overlap / max(len(label), len(text))
-                if score > best_score and score > 0.4:
+                shorter = min(len(label), len(text))
+                longer = max(len(label), len(text))
+                score = shorter / longer
+                if score > best_score and score >= 0.75:
                     best_score = score
                     best_id = comp_id
         
         return best_id
     
     def _merge_connections(self, proximity: List[Dict], vision: List[Dict]) -> List[Dict]:
-        """Merge proximity and vision connections. Vision connections take priority."""
+        """Merge proximity and vision connections.
+        
+        Strategy:
+        - Proximity connections (edge-distance < threshold) are kept as-is
+          since they represent nearly-touching / overlapping components.
+        - Vision connections are included only if the two components are
+          within a reasonable spatial range (edge-distance < 0.30), to
+          discard hallucinated long-range links the model might produce.
+        """
         merged = {}
         
-        # Add proximity connections first
+        # Add proximity connections (already filtered by tight threshold)
         for conn in proximity:
             pair = tuple(sorted([conn['from'], conn['to']]))
             merged[pair] = conn
         
-        # Vision connections override proximity
+        # Add vision connections only if spatially plausible
+        # (max edge distance 0.30 of image — roughly nearby components)
         for conn in vision:
             pair = tuple(sorted([conn['from'], conn['to']]))
-            merged[pair] = conn  # Overwrites proximity if same pair
+            if conn.get('edge_distance', 0) <= 0.30:
+                merged[pair] = conn  # Overwrites proximity if same pair
+            else:
+                print(f"   🗑️ Discarded vision connection {conn.get('from_label','?')} → "
+                      f"{conn.get('to_label','?')} (edge dist {conn.get('edge_distance', 0):.3f} too large)")
         
         return list(merged.values())
     

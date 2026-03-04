@@ -3,17 +3,6 @@ import { Canvas, useLoader } from '@react-three/fiber';
 import { OrbitControls, Html, Line } from '@react-three/drei';
 import * as THREE from 'three';
 
-/* ── Helper: should we hide the floating label? ── */
-function shouldHideLabel(comp, planeW, planeH) {
-  // If the component box is large enough that diagram text inside is readable,
-  // hide the overlay label to avoid duplication.
-  const boxW = comp.width * planeW;
-  const boxH = comp.height * planeH;
-  const area = boxW * boxH;
-  // Hide label when box area > threshold (text likely visible inside)
-  return area > 0.35;
-}
-
 /* ═══════════════════════════════════════════════════════════
    CONNECTION LINE — 3D line between two component centers
    ═══════════════════════════════════════════════════════════ */
@@ -47,7 +36,7 @@ function ConnectionLine({ from, to, components, planeW, planeH, baseY }) {
    DIAGRAM MESH — the image rendered as a textured 3D plane
    ═══════════════════════════════════════════════════════════ */
 
-function DiagramMesh({ imageUrl, components, connections, selectedId, onSelect }) {
+function DiagramMesh({ imageUrl, components, connections, selectedId, onSelect, showLabels }) {
   const texture = useLoader(THREE.TextureLoader, imageUrl);
   const aspect = texture.image ? texture.image.width / texture.image.height : 16 / 9;
   const W = 6;
@@ -75,19 +64,6 @@ function DiagramMesh({ imageUrl, components, connections, selectedId, onSelect }
         <lineBasicMaterial color="#4a90d9" transparent opacity={0.35} />
       </lineSegments>
 
-      {/* Connection lines between components */}
-      {connections.map((conn, i) => (
-        <ConnectionLine
-          key={`conn-${i}`}
-          from={conn.from}
-          to={conn.to}
-          components={components}
-          planeW={W}
-          planeH={H}
-          baseY={0}
-        />
-      ))}
-
       {/* Component bounding boxes + labels */}
       {components.map((comp) => (
         <ComponentMarker
@@ -97,6 +73,7 @@ function DiagramMesh({ imageUrl, components, connections, selectedId, onSelect }
           planeH={H}
           selected={selectedId === comp.id}
           onSelect={onSelect}
+          showLabels={showLabels}
         />
       ))}
     </group>
@@ -107,7 +84,7 @@ function DiagramMesh({ imageUrl, components, connections, selectedId, onSelect }
    COMPONENT MARKER — wireframe box + floating label
    ═══════════════════════════════════════════════════════════ */
 
-function ComponentMarker({ comp, planeW, planeH, selected, onSelect }) {
+function ComponentMarker({ comp, planeW, planeH, selected, onSelect, showLabels }) {
   const cx = (comp.x + comp.width / 2 - 0.5) * planeW;
   const cy = -(comp.y + comp.height / 2 - 0.5) * planeH;
   const w = comp.width * planeW;
@@ -120,8 +97,6 @@ function ComponentMarker({ comp, planeW, planeH, selected, onSelect }) {
 
   const color = selected ? '#FFB74D' : '#63b2ee';
   const labelText = comp.label || comp.id;
-  // Hide label if box is large enough that diagram text is already readable
-  const hideLabel = shouldHideLabel(comp, planeW, planeH);
 
   return (
     <group position={[cx, cy, 0.015]}>
@@ -145,8 +120,8 @@ function ComponentMarker({ comp, planeW, planeH, selected, onSelect }) {
         />
       </mesh>
 
-      {/* Floating label — only shown if box is too small to read diagram text, or if selected */}
-      {labelText && labelText !== 'Unknown' && (!hideLabel || selected) && (
+      {/* Floating label — shown when showLabels is on, or if selected */}
+      {labelText && labelText !== 'Unknown' && (showLabels || selected) && (
         <Html
           position={[0, h / 2 + 0.14, 0.05]}
           center
@@ -173,7 +148,7 @@ function ComponentMarker({ comp, planeW, planeH, selected, onSelect }) {
    SCENE — lighting, grid floor, fog (neutral) or transparent (camera)
    ═══════════════════════════════════════════════════════════ */
 
-function Scene({ imageUrl, components, connections, selectedId, onSelect }) {
+function Scene({ imageUrl, components, connections, selectedId, onSelect, showLabels }) {
   return (
     <>
       {/* Lighting */}
@@ -204,6 +179,7 @@ function Scene({ imageUrl, components, connections, selectedId, onSelect }) {
         connections={connections}
         selectedId={selectedId}
         onSelect={onSelect}
+        showLabels={showLabels}
       />
 
       {/* Orbit controls — rotate, zoom, pan around the diagram */}
@@ -249,6 +225,7 @@ export default function ARDiagramViewer({
   connections = [],
   selectedComponent,
   onComponentClick,
+  showLabels = true,
 }) {
   if (!imageUrl) return null;
 
@@ -265,6 +242,7 @@ export default function ARDiagramViewer({
             connections={connections}
             selectedId={selectedComponent?.id}
             onSelect={onComponentClick}
+            showLabels={showLabels}
           />
         </Suspense>
       </Canvas>

@@ -288,6 +288,7 @@ class PreprocessService:
         # Step 3: Process each extracted image through Vision + AR pipeline
         image_analyses = []
         all_ar_components = []
+        all_connections = []
         
         for img_info in extracted_images:
             img_path = img_info['path']
@@ -320,6 +321,7 @@ class PreprocessService:
                         if ar_components:
                             relationships = ar_service.analyze_component_relationships(ar_components, image_path=img_path)
                             all_ar_components.extend(ar_components)
+                            all_connections.extend(relationships.get('connections', []))
                     
                     except Exception as e:
                         logger.warning(f"AR extraction failed for page {page_num}: {e}")
@@ -363,7 +365,8 @@ class PreprocessService:
                     text_excerpt=text_excerpt,
                     vision={'analysis': {'summary': combined_vision_text}},
                     components=all_ar_components[:20],  # Limit to first 20 for token management
-                    context_type='general'
+                    context_type='general',
+                    connections=all_connections[:30],
                 )
                 
                 ai_summary = ai_result.get('answer', '')
@@ -399,6 +402,7 @@ class PreprocessService:
                 'status': 'success',
                 'components': all_ar_components,
                 'componentCount': len(all_ar_components),
+                'connections': all_connections,
                 'images_processed': len(image_analyses)
             },
             
@@ -491,6 +495,7 @@ class PreprocessService:
                         'status': 'success',
                         'components': ar_components,
                         'componentCount': len(ar_components),
+                        'connections': relationships.get('connections', []) if isinstance(relationships, dict) else [],
                         'relationships': relationships
                     }
                     
@@ -518,7 +523,8 @@ class PreprocessService:
                     ai_result = ai_service.analyze_context(
                         vision=vision_result,
                         components=ar_components,
-                        context_type=document_type
+                        context_type=document_type,
+                        connections=relationships.get('connections', []) if isinstance(relationships, dict) else [],
                     )
                     ai_summary = ai_result.get('answer', vision_summary)
                     logger.info("✓ AI summary generated")
