@@ -1,11 +1,11 @@
 import React from 'react';
-import { DocumentProvider } from '@ar-viewer/shared';
+import { MobileDocumentProvider } from './src/context/MobileDocumentContext';
 import AppNavigator from './src/navigation/AppNavigator';
 
 export default function App() {
   return (
-    <DocumentProvider>
+    <MobileDocumentProvider>
       <AppNavigator />
-    </DocumentProvider>
+    </MobileDocumentProvider>
   );
 }

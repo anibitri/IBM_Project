@@ -1,5 +1,6 @@
 import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { colors, spacing, typography } from '../styles/theme';
 
 export default function ComponentCard({ component, index, onPress }) {
@@ -29,9 +30,9 @@ export default function ComponentCard({ component, index, onPress }) {
       )}
 
       <View style={styles.meta}>
-        <Text style={styles.metaItem}>📍 {position}</Text>
+        <Text style={styles.metaItem}><Ionicons name="location-outline" size={14} color="#666" /> {position}</Text>
         <Text style={styles.metaItem}>
-          📏 {(component.width * 100).toFixed(1)}% × {(component.height * 100).toFixed(1)}%
+          <Ionicons name="resize-outline" size={14} color="#666" /> {(component.width * 100).toFixed(1)}% x {(component.height * 100).toFixed(1)}%
         </Text>
       </View>
     </TouchableOpacity>

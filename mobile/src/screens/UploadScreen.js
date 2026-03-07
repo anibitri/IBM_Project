@@ -8,9 +8,10 @@ import {
   ActivityIndicator,
   Alert,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import { useDocumentContext } from '@ar-viewer/shared';
+import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
 import { colors, spacing, typography } from '../styles/theme';
 
 export default function UploadScreen({ navigation }) {
@@ -97,7 +98,7 @@ export default function UploadScreen({ navigation }) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>📐 AR Diagram Viewer</Text>
+        <Text style={styles.title}>AR Diagram Viewer</Text>
         <Text style={styles.subtitle}>
           Upload technical diagrams for AI-powered analysis
         </Text>
@@ -123,7 +124,7 @@ export default function UploadScreen({ navigation }) {
             style={[styles.button, styles.buttonPrimary]}
             onPress={handleImagePicker}
           >
-            <Text style={styles.buttonIcon}>🖼️</Text>
+            <Ionicons name="images-outline" size={22} color="#fff" style={styles.buttonIcon} />
             <Text style={styles.buttonText}>Choose from Gallery</Text>
           </TouchableOpacity>
 
@@ -131,7 +132,7 @@ export default function UploadScreen({ navigation }) {
             style={[styles.button, styles.buttonSecondary]}
             onPress={handleCamera}
           >
-            <Text style={styles.buttonIcon}>📸</Text>
+            <Ionicons name="camera-outline" size={22} color="#fff" style={styles.buttonIcon} />
             <Text style={styles.buttonText}>Take Photo</Text>
           </TouchableOpacity>
 
@@ -139,7 +140,7 @@ export default function UploadScreen({ navigation }) {
             style={[styles.button, styles.buttonSecondary]}
             onPress={handleDocumentPicker}
           >
-            <Text style={styles.buttonIcon}>📄</Text>
+            <Ionicons name="document-outline" size={22} color="#fff" style={styles.buttonIcon} />
             <Text style={styles.buttonText}>Browse Files (PDF)</Text>
           </TouchableOpacity>
         </View>
@@ -147,7 +148,7 @@ export default function UploadScreen({ navigation }) {
 
       {error && (
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>❌ {error}</Text>
+          <Text style={styles.errorText}><Ionicons name="alert-circle-outline" size={16} color="#ff3b30" /> {error}</Text>
           <TouchableOpacity
             style={styles.retryButton}
             onPress={() => setPreview(null)}
@@ -233,7 +234,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   buttonSecondary: {
-    backgroundColor: colors.white,
+    backgroundColor: colors.secondary,
     borderWidth: 2,
     borderColor: colors.primary,
   },

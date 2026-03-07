@@ -14,182 +14,96 @@ import { colors, spacing, typography } from '../styles/theme';
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 /* ──────────────────────────────────────────────
-   Mock data — same components backend would return
+   Mock data — matches conftest.py System Architecture Diagram
    ────────────────────────────────────────────── */
 
 const MOCK_COMPONENTS = [
-  {
-    id: 'comp-1',
-    label: 'API Gateway',
-    x: 0.05,
-    y: 0.10,
-    width: 0.18,
-    height: 0.14,
-    confidence: 0.95,
-    center_x: 0.14,
-    center_y: 0.17,
-  },
-  {
-    id: 'comp-2',
-    label: 'Auth Service',
-    x: 0.30,
-    y: 0.08,
-    width: 0.16,
-    height: 0.12,
-    confidence: 0.91,
-    center_x: 0.38,
-    center_y: 0.14,
-  },
-  {
-    id: 'comp-3',
-    label: 'Database',
-    x: 0.55,
-    y: 0.12,
-    width: 0.20,
-    height: 0.16,
-    confidence: 0.88,
-    center_x: 0.65,
-    center_y: 0.20,
-  },
-  {
-    id: 'comp-4',
-    label: 'Message Queue',
-    x: 0.10,
-    y: 0.40,
-    width: 0.22,
-    height: 0.12,
-    confidence: 0.85,
-    center_x: 0.21,
-    center_y: 0.46,
-  },
-  {
-    id: 'comp-5',
-    label: 'Worker Service',
-    x: 0.40,
-    y: 0.38,
-    width: 0.18,
-    height: 0.14,
-    confidence: 0.82,
-    center_x: 0.49,
-    center_y: 0.45,
-  },
-  {
-    id: 'comp-6',
-    label: 'Cache Layer',
-    x: 0.65,
-    y: 0.42,
-    width: 0.16,
-    height: 0.10,
-    confidence: 0.79,
-    center_x: 0.73,
-    center_y: 0.47,
-  },
-  {
-    id: 'comp-7',
-    label: 'Load Balancer',
-    x: 0.25,
-    y: 0.65,
-    width: 0.20,
-    height: 0.12,
-    confidence: 0.93,
-    center_x: 0.35,
-    center_y: 0.71,
-  },
-  {
-    id: 'comp-8',
-    label: 'CDN',
-    x: 0.55,
-    y: 0.68,
-    width: 0.14,
-    height: 0.10,
-    confidence: 0.76,
-    center_x: 0.62,
-    center_y: 0.73,
-  },
+  { id: 'comp-1', label: 'CPU',     x: 0.100, y: 0.133, width: 0.250, height: 0.200, confidence: 0.96, center_x: 0.225, center_y: 0.233, color: '#4682B4' },
+  { id: 'comp-2', label: 'RAM',     x: 0.425, y: 0.133, width: 0.225, height: 0.133, confidence: 0.93, center_x: 0.538, center_y: 0.200, color: '#3CA050' },
+  { id: 'comp-3', label: 'Cache',   x: 0.425, y: 0.300, width: 0.150, height: 0.100, confidence: 0.89, center_x: 0.500, center_y: 0.350, color: '#B4643C' },
+  { id: 'comp-4', label: 'CLK',     x: 0.700, y: 0.133, width: 0.175, height: 0.233, confidence: 0.91, center_x: 0.788, center_y: 0.250, color: '#A03CB4' },
+  { id: 'comp-5', label: 'Storage', x: 0.100, y: 0.467, width: 0.275, height: 0.167, confidence: 0.94, center_x: 0.238, center_y: 0.550, color: '#C8A028' },
+  { id: 'comp-6', label: 'GPU',     x: 0.425, y: 0.467, width: 0.350, height: 0.233, confidence: 0.97, center_x: 0.600, center_y: 0.583, color: '#B43232' },
+  { id: 'comp-7', label: 'I/O',     x: 0.100, y: 0.733, width: 0.175, height: 0.133, confidence: 0.87, center_x: 0.188, center_y: 0.800, color: '#50A0A0' },
+  { id: 'comp-8', label: 'Network', x: 0.350, y: 0.733, width: 0.250, height: 0.133, confidence: 0.90, center_x: 0.475, center_y: 0.800, color: '#6450B4' },
 ];
 
 const MOCK_CONNECTIONS = [
-  { from: 'comp-1', to: 'comp-2', type: 'vision', distance: 0.22 },
-  { from: 'comp-2', to: 'comp-3', type: 'vision', distance: 0.28 },
-  { from: 'comp-1', to: 'comp-4', type: 'proximity', distance: 0.30 },
-  { from: 'comp-4', to: 'comp-5', type: 'vision', distance: 0.31 },
-  { from: 'comp-5', to: 'comp-6', type: 'proximity', distance: 0.25 },
-  { from: 'comp-5', to: 'comp-7', type: 'vision', distance: 0.30 },
-  { from: 'comp-7', to: 'comp-8', type: 'proximity', distance: 0.30 },
+  { from: 'comp-1', to: 'comp-2', type: 'bus',       distance: 0.31 },
+  { from: 'comp-1', to: 'comp-5', type: 'bus',       distance: 0.32 },
+  { from: 'comp-2', to: 'comp-6', type: 'bus',       distance: 0.39 },
+  { from: 'comp-2', to: 'comp-3', type: 'data_flow', distance: 0.17 },
+  { from: 'comp-1', to: 'comp-3', type: 'data_flow', distance: 0.30 },
+  { from: 'comp-4', to: 'comp-1', type: 'signal',    distance: 0.56 },
+  { from: 'comp-5', to: 'comp-7', type: 'bus',       distance: 0.25 },
+  { from: 'comp-7', to: 'comp-8', type: 'bus',       distance: 0.29 },
+  { from: 'comp-6', to: 'comp-8', type: 'data_flow', distance: 0.25 },
 ];
 
-// Simulated image dimensions (backend returns these)
-const MOCK_IMAGE_DIMS = { width: 900, height: 600 };
+const MOCK_IMAGE_DIMS = { width: 800, height: 600 };
 
-const DISPLAY_WIDTH = SCREEN_WIDTH - 32;
-const DISPLAY_HEIGHT = DISPLAY_WIDTH * (600 / 900);
+const DISPLAY_WIDTH  = SCREEN_WIDTH - 32;
+const DISPLAY_HEIGHT = DISPLAY_WIDTH * (600 / 800);
 
 /* ──────────────────────────────────────────────
-   SVG Placeholder Diagram
+   SVG Placeholder — matching conftest.py test image
    ────────────────────────────────────────────── */
 
 function PlaceholderDiagram({ width, height }) {
-  const boxes = [
-    { x: 0.05, y: 0.10, w: 0.18, h: 0.14, label: 'API Gateway', color: '#4a90d9' },
-    { x: 0.30, y: 0.08, w: 0.16, h: 0.12, label: 'Auth Service', color: '#4a90d9' },
-    { x: 0.55, y: 0.12, w: 0.20, h: 0.16, label: 'Database', color: '#4a90d9' },
-    { x: 0.10, y: 0.40, w: 0.22, h: 0.12, label: 'Message Queue', color: '#63b2ee' },
-    { x: 0.40, y: 0.38, w: 0.18, h: 0.14, label: 'Worker Service', color: '#63b2ee' },
-    { x: 0.65, y: 0.42, w: 0.16, h: 0.10, label: 'Cache Layer', color: '#63b2ee' },
-    { x: 0.25, y: 0.65, w: 0.20, h: 0.12, label: 'Load Balancer', color: '#FFB74D' },
-    { x: 0.55, y: 0.68, w: 0.14, h: 0.10, label: 'CDN', color: '#FFB74D' },
-  ];
-
-  const connections = [
-    [0.23, 0.17, 0.30, 0.14],
-    [0.46, 0.14, 0.55, 0.18],
-    [0.14, 0.24, 0.21, 0.40],
-    [0.32, 0.46, 0.40, 0.44],
-    [0.58, 0.46, 0.65, 0.46],
-    [0.49, 0.52, 0.35, 0.65],
-    [0.45, 0.71, 0.55, 0.73],
-  ];
+  // Grid lines (40px intervals on 800×600)
+  const gridV = [];
+  for (let gx = 0; gx < 1; gx += 40 / 800) gridV.push(gx);
+  const gridH = [];
+  for (let gy = 0; gy < 1; gy += 40 / 600) gridH.push(gy);
 
   return (
     <Svg width={width} height={height}>
-      <Rect width={width} height={height} fill="#0f1e36" rx={8} />
-      <SvgText x={width / 2} y={25} textAnchor="middle" fill="#4a90d9" fontSize="12" fontWeight="bold">
-        System Architecture (Mock)
-      </SvgText>
+      {/* Background */}
+      <Rect width={width} height={height} fill="#F0F0F5" rx={4} />
 
-      {connections.map((c, i) => (
-        <Line
-          key={`line-${i}`}
-          x1={c[0] * width}
-          y1={c[1] * height}
-          x2={c[2] * width}
-          y2={c[3] * height}
-          stroke="#1e3a5f"
-          strokeWidth={1.5}
-          strokeDasharray="4,3"
-        />
+      {/* Grid */}
+      {gridV.map((gx, i) => (
+        <Line key={`gv-${i}`} x1={gx * width} y1={0} x2={gx * width} y2={height}
+          stroke="#DCE1EB" strokeWidth={0.5} />
+      ))}
+      {gridH.map((gy, i) => (
+        <Line key={`gh-${i}`} x1={0} y1={gy * height} x2={width} y2={gy * height}
+          stroke="#DCE1EB" strokeWidth={0.5} />
       ))}
 
-      {boxes.map((b, i) => (
-        <G key={`box-${i}`}>
+      {/* Title bar */}
+      <Rect x={0} y={0} width={width} height={height * 0.058} fill="#323246" />
+      <SvgText x={width / 2} y={height * 0.038} textAnchor="middle" fill="white" fontSize="11" fontWeight="bold">
+        System Architecture Diagram
+      </SvgText>
+
+      {/* Connection lines */}
+      {MOCK_CONNECTIONS.map((conn, i) => {
+        const from = MOCK_COMPONENTS.find((c) => c.id === conn.from);
+        const to   = MOCK_COMPONENTS.find((c) => c.id === conn.to);
+        if (!from || !to) return null;
+        return (
+          <Line key={`cl-${i}`}
+            x1={from.center_x * width} y1={from.center_y * height}
+            x2={to.center_x * width}   y2={to.center_y * height}
+            stroke="#505064" strokeWidth={1.5}
+          />
+        );
+      })}
+
+      {/* Component rectangles */}
+      {MOCK_COMPONENTS.map((c) => (
+        <G key={c.id}>
           <Rect
-            x={b.x * width}
-            y={b.y * height}
-            width={b.w * width}
-            height={b.h * height}
-            rx={6}
-            fill="#132744"
-            stroke={b.color}
-            strokeWidth={1.2}
+            x={c.x * width} y={c.y * height}
+            width={c.width * width} height={c.height * height}
+            fill={c.color} stroke="#1E1E1E" strokeWidth={2} rx={2}
           />
           <SvgText
-            x={(b.x + b.w / 2) * width}
-            y={(b.y + b.h / 2) * height + 4}
-            textAnchor="middle"
-            fill="#8ab4f8"
-            fontSize="10"
+            x={c.center_x * width} y={c.center_y * height + 4}
+            textAnchor="middle" fill="white" fontSize="10" fontWeight="bold"
           >
-            {b.label}
+            {c.label}
           </SvgText>
         </G>
       ))}
@@ -204,11 +118,17 @@ function PlaceholderDiagram({ width, height }) {
 export default function ARMockScreen() {
   const [selected, setSelected] = useState(null);
 
+  const relatedConnections = selected
+    ? MOCK_CONNECTIONS.filter(
+        (c) => c.from === selected.id || c.to === selected.id,
+      )
+    : [];
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.heading}>Mobile AR Overlay — Mock</Text>
+      <Text style={styles.heading}>AR Overlay Preview</Text>
       <Text style={styles.subheading}>
-        Tap bounding boxes to select components
+        System Architecture — {MOCK_COMPONENTS.length} components detected
       </Text>
 
       {/* Diagram + AR Overlay */}
@@ -228,11 +148,29 @@ export default function ARMockScreen() {
       {/* Selected detail */}
       {selected && (
         <View style={styles.selectedCard}>
-          <Text style={styles.selectedLabel}>{selected.label}</Text>
+          <View style={styles.selectedHeader}>
+            <View style={[styles.colorDot, { backgroundColor: selected.color }]} />
+            <Text style={styles.selectedLabel}>{selected.label}</Text>
+            <View style={styles.confPill}>
+              <Text style={styles.confPillText}>
+                {(selected.confidence * 100).toFixed(0)}%
+              </Text>
+            </View>
+          </View>
           <Text style={styles.selectedMeta}>
-            Confidence: {(selected.confidence * 100).toFixed(0)}%{'  '}
-            Position: ({selected.x.toFixed(2)}, {selected.y.toFixed(2)})
+            Position: ({selected.x.toFixed(2)}, {selected.y.toFixed(2)})  •  Size: {(selected.width * 100).toFixed(0)}% × {(selected.height * 100).toFixed(0)}%
           </Text>
+          {relatedConnections.length > 0 && (
+            <Text style={styles.selectedConnections}>
+              Connected to:{' '}
+              {relatedConnections
+                .map((c) => {
+                  const other = c.from === selected.id ? c.to : c.from;
+                  return MOCK_COMPONENTS.find((m) => m.id === other)?.label || other;
+                })
+                .join(', ')}
+            </Text>
+          )}
           <TouchableOpacity
             style={styles.clearButton}
             onPress={() => setSelected(null)}
@@ -317,17 +255,45 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#4a90d9',
   },
+  selectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: spacing.xs,
+  },
+  colorDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+  },
   selectedLabel: {
     fontSize: 18,
     fontWeight: '700',
     color: '#e2eaf4',
-    marginBottom: spacing.xs,
+    flex: 1,
+  },
+  confPill: {
+    backgroundColor: 'rgba(76, 175, 80, 0.2)',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  confPillText: {
+    color: '#4caf50',
+    fontSize: 12,
+    fontWeight: '700',
   },
   selectedMeta: {
     fontSize: 12,
     color: '#6b7fa3',
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
     fontFamily: 'monospace',
+  },
+  selectedConnections: {
+    fontSize: 12,
+    color: '#8ab4f8',
+    marginBottom: spacing.sm,
+    fontStyle: 'italic',
   },
   clearButton: {
     backgroundColor: '#4a90d9',

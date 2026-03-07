@@ -8,8 +8,8 @@ class AIService:
     """Enhanced AI service for technical document analysis"""
     
     def __init__(self):
-        self.max_context_length = 2048
-        self.default_max_tokens = 300
+        self.max_context_length = 3072
+        self.default_max_tokens = 400
     
     def _generate_text(
         self, 
@@ -29,7 +29,7 @@ class AIService:
             max_tokens = self.default_max_tokens
 
         # Try generation with progressively shorter context on OOM
-        for attempt, max_len in enumerate([self.max_context_length, 768, 512]):
+        for attempt, max_len in enumerate([self.max_context_length, 1536, 768]):
             try:
                 # Free cached VRAM before generation
                 if torch.cuda.is_available():
@@ -44,8 +44,8 @@ class AIService:
                     max_length=max_len
                 )
 
-                # Move to device
-                enc = {k: v.to(manager.device) for k, v in enc.items()}
+                # Move to same device as the chat model
+                enc = {k: v.to(manager.chat_device) for k, v in enc.items()}
                 if "attention_mask" in enc:
                     enc["attention_mask"] = enc["attention_mask"].long()
 
@@ -155,29 +155,34 @@ class AIService:
         text_excerpt: str = None,
         vision: Dict = None,
         components: List[Dict] = None,
-        connections: List[Dict] = None
+        connections: List[Dict] = None,
+        ai_summary: str = None
     ) -> str:
         """Build a comprehensive context string from available data, kept compact for VRAM."""
         context_parts = []
-        
+
+        # AI summary is the most information-dense source — include first
+        if ai_summary:
+            context_parts.append(f"Document Summary:\n{ai_summary[:1200]}\n")
+
         if text_excerpt:
-            # Truncate long text excerpts to ~800 chars
-            excerpt = text_excerpt[:800]
+            # Allow more text so the model can actually reference document content
+            excerpt = text_excerpt[:4000]
             context_parts.append(f"Document Text:\n{excerpt}\n")
         
         if vision and isinstance(vision, dict):
             vision_summary = vision.get('analysis', {}).get('summary', '')
             if vision_summary:
-                context_parts.append(f"Visual Analysis:\n{vision_summary[:600]}\n")
+                context_parts.append(f"Visual Analysis:\n{vision_summary[:1000]}\n")
         
         if components and isinstance(components, list):
             comp_list = []
-            for comp in components[:10]:  # Limit to first 10
+            for comp in components[:15]:  # Show more components
                 label = comp.get('label', 'Unknown')
                 desc = comp.get('description', '')
                 comp_str = f"- {label}"
                 if desc:
-                    comp_str += f": {desc[:60]}"
+                    comp_str += f": {desc[:80]}"
                 comp_list.append(comp_str)
             
             if comp_list:
@@ -197,9 +202,9 @@ class AIService:
                 )
         
         result = "\n".join(context_parts)
-        # Hard cap at ~3000 chars (~750 tokens) to leave room for prompt + generation
-        if len(result) > 3000:
-            result = result[:3000] + "\n[Context truncated]"
+        # Cap at ~7000 chars (~1750 tokens) to leave room for prompt + generation
+        if len(result) > 7000:
+            result = result[:7000] + "\n[Context truncated]"
         return result
     
     def analyze_context(
@@ -256,10 +261,10 @@ class AIService:
             f"You are an expert technical analyst.\n\n"
             f"Context:\n{context_str}\n\n"
             f"Task: {task}\n\n"
-            f"Provide a clear, structured analysis:\n"
+            f"Provide a clear, structured analysis based ONLY on the context above:\n"
         )
         
-        answer = self._generate_text(prompt, max_tokens=256)
+        answer = self._generate_text(prompt, max_tokens=400)
         
         return {
             "status": "ok",
@@ -314,7 +319,8 @@ class AIService:
                 text_excerpt=context.get('text_excerpt'),
                 vision=context.get('vision'),
                 components=context.get('components'),
-                connections=context.get('connections')
+                connections=context.get('connections'),
+                ai_summary=context.get('ai_summary')
             )
         elif isinstance(context, str):
             context_str = context
@@ -342,9 +348,9 @@ class AIService:
         if history_str:
             prompt += f"Previous Conversation:\n{history_str}\n"
         
-        prompt += f"User Question: {query}\n\nProvide a clear, concise answer. Do not generate follow-up questions or continue the conversation:\n"
+        prompt += f"User Question: {query}\n\nProvide a clear, concise answer based ONLY on the document context above. Do not make up information. If the context doesn't cover the topic, say so. Do not generate follow-up questions or continue the conversation:\n"
         
-        answer = self._generate_text(prompt, max_tokens=256, temperature=0.3)
+        answer = self._generate_text(prompt, max_tokens=400, temperature=0.3)
         
         return {
             "status": "ok",

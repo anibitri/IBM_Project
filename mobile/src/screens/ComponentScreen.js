@@ -7,7 +7,7 @@ import {
   TextInput,
   TouchableOpacity,
 } from 'react-native';
-import { useDocumentContext } from '@ar-viewer/shared';
+import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
 import ComponentCard from '../components/ComponentCard';
 import { colors, spacing, typography } from '../styles/theme';
 
@@ -18,7 +18,7 @@ export default function ComponentsScreen({ navigation }) {
 
   useEffect(() => {
     if (!document) {
-      navigation.replace('Upload');
+      navigation.replace('HomeMain');
     }
   }, [document, navigation]);
 

@@ -392,8 +392,15 @@ body {
 }
 
 .capability-icon {
-  font-size: 22px;
   flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius);
+  background: var(--primary-muted);
+  color: var(--accent);
 }
 
 .capability-content {
@@ -494,9 +501,12 @@ body {
   align-items: center;
   justify-content: space-between;
   min-height: var(--header-height);
+  gap: 16px;
 }
 
-.view-mode-toggle {
+/* ── Panel toggle buttons ─────────────────────────────── */
+
+.panel-toggles {
   display: flex;
   gap: 2px;
   background: var(--bg-primary);
@@ -505,7 +515,7 @@ body {
   border: 1px solid var(--border);
 }
 
-.mode-btn {
+.panel-toggle-btn {
   display: flex;
   align-items: center;
   gap: 6px;
@@ -518,22 +528,41 @@ body {
   color: var(--text-tertiary);
   cursor: pointer;
   transition: var(--transition);
+  position: relative;
 }
 
-.mode-btn:hover {
+.panel-toggle-btn:hover {
   color: var(--text-secondary);
   background: var(--bg-tertiary);
 }
 
-.mode-btn.active {
+.panel-toggle-btn.active {
   background: var(--bg-elevated);
   color: var(--accent);
   box-shadow: var(--shadow-sm);
 }
 
-.mode-btn svg {
+.panel-toggle-btn.active::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 16px;
+  height: 2px;
+  border-radius: 1px;
+  background: var(--accent);
+}
+
+.panel-toggle-btn svg {
   flex-shrink: 0;
 }
+
+.panel-toggle-label {
+  white-space: nowrap;
+}
+
+/* ── Multi-panel layout ──────────────────────────────── */
 
 .workspace-content {
   flex: 1;
@@ -541,26 +570,94 @@ body {
   overflow: hidden;
 }
 
-.workspace-content.mode-diagram .panel-wrapper,
-.workspace-content.mode-chat .panel-wrapper,
-.workspace-content.mode-pdf .panel-wrapper {
+.workspace-multi-panel {
+  /* panels share space equally via flex:1 on .panel-wrapper */
+}
+
+.workspace-multi-panel .panel-wrapper {
   flex: 1;
+  min-width: 0;
+}
+
+.panel-divider {
+  width: 1px;
+  flex-shrink: 0;
+  background: var(--border);
+  position: relative;
+}
+
+.panel-divider::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: -3px;
+  transform: translateY(-50%);
+  width: 7px;
+  height: 40px;
+  border-radius: 4px;
+  background: transparent;
+  transition: background var(--transition);
+  pointer-events: none;
 }
 
 /* ═══════════════════════════════════════════════════════════
-   PDF VIEWER
+   DOCUMENT BROWSER PANEL (PDF / Image viewer)
    ═══════════════════════════════════════════════════════════ */
 
-.pdf-viewer-panel {
+.document-browser-panel {
   display: flex;
   flex-direction: column;
+  flex: 1;
+  overflow: hidden;
+  background: var(--bg-primary);
 }
 
-.pdf-viewer-iframe {
+.document-browser-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.document-browser-header svg {
+  flex-shrink: 0;
+  color: var(--text-tertiary);
+}
+
+.document-browser-header span {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.document-browser-iframe {
   width: 100%;
   flex: 1;
   border: none;
-  background: var(--bg-secondary, #1a1a2e);
+  background: var(--bg-secondary);
+}
+
+.document-browser-image-wrap {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: auto;
+  padding: 20px;
+}
+
+.document-browser-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-md);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1298,7 +1395,7 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════
-   RESIZE HANDLE
+   PANEL WRAPPER
    ═══════════════════════════════════════════════════════════ */
 
 .panel-wrapper {
@@ -1311,38 +1408,6 @@ body {
 .panel-wrapper > * {
   flex: 1;
   min-height: 0;
-}
-
-.resize-handle {
-  width: 6px;
-  cursor: col-resize;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  z-index: 5;
-  position: relative;
-  background: transparent;
-  transition: background var(--transition);
-}
-
-.resize-handle:hover,
-.resize-handle:active {
-  background: rgba(74, 144, 217, 0.10);
-}
-
-.resize-handle-line {
-  width: 2px;
-  height: 40px;
-  border-radius: 2px;
-  background: var(--border);
-  transition: var(--transition);
-}
-
-.resize-handle:hover .resize-handle-line,
-.resize-handle:active .resize-handle-line {
-  height: 60px;
-  background: var(--accent);
 }
 
 /* ═══════════════════════════════════════════════════════════
@@ -1392,16 +1457,13 @@ body {
    ═══════════════════════════════════════════════════════════ */
 
 @media (max-width: 1024px) {
-  .workspace-content.mode-split {
+  .workspace-multi-panel {
     flex-direction: column;
   }
 
-  .resize-handle {
-    display: none;
-  }
-
-  .workspace-content.mode-split .panel-wrapper {
-    flex: 1 !important;
+  .panel-divider {
+    width: auto;
+    height: 1px;
   }
 
   .chat-panel {
@@ -1411,6 +1473,10 @@ body {
 
   .sidebar-components-list {
     max-height: 200px;
+  }
+
+  .panel-toggle-label {
+    display: none;
   }
 }
 

@@ -140,9 +140,27 @@ export const DocumentProvider = ({ children }) => {
     try {
       addMessage('user', query);
 
+      // Build rich context including AI summary and per-page vision data
+      // so the chat model has full document knowledge
+      const images = document.images || [];
+      const isPdf = document.type === 'pdf' && images.length > 0;
+
+      // Compile all vision summaries for PDFs
+      let visionContext = document.vision || {};
+      if (isPdf && images.length > 0) {
+        const pageSummaries = images
+          .filter((img) => img.vision_summary)
+          .map((img) => `Page ${img.page}: ${img.vision_summary}`)
+          .join('\n');
+        if (pageSummaries) {
+          visionContext = { analysis: { summary: pageSummaries } };
+        }
+      }
+
       const context = {
-        text_excerpt: document.text_excerpt || '',
-        vision: document.vision || {},
+        text_excerpt: document.full_text || document.text_excerpt || '',
+        ai_summary: document.ai_summary || '',
+        vision: visionContext,
         components: document.ar?.components || [],
         connections: document.ar?.connections || document.ar?.relationships?.connections || [],
         stored_name: document.storedName || '',

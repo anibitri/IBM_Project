@@ -212,6 +212,78 @@ class PreprocessService:
         
         return extracted_images
     
+    def _filter_extracted_images(self, images: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter extracted images using the Granite Vision model to keep only
+        technical diagrams and discard photos, screenshots, logos, etc.
+
+        Each image is sent to the vision model with a quick yes/no
+        classification prompt.  Only images the model identifies as
+        diagrams proceed to the full Vision + AR pipeline.
+
+        Args:
+            images: List of image metadata dicts (from _extract_images_from_pdf)
+
+        Returns:
+            Filtered list containing only likely-diagram images
+        """
+        if not images:
+            return images
+
+        from app.services.granite_vision_service import query_image
+
+        CLASSIFICATION_PROMPT = (
+            "Is this image a technical diagram (e.g. schematic, flowchart, UML)? "
+            "Demos or photos of real-world objects (e.g. devices, people, screenshots) should be classified as non-diagrams. "
+            "Answer with ONLY 'yes' or 'no'."
+        )
+
+        # Keywords that signal diagram vs non-diagram in ambiguous answers
+        YES_SIGNALS = {'yes', 'diagram', 'schematic', 'flowchart', 'UML',
+                       'architecture', 'technical'}
+        NO_SIGNALS  = {'no', 'photograph', 'photo', 'screenshot', 'picture',
+                       'selfie', 'landscape'}
+
+        filtered = []
+        for img_info in images:
+            try:
+                answer = query_image(img_info['path'], CLASSIFICATION_PROMPT)
+                answer_lower = answer.strip().lower()
+
+                # Check for explicit yes/no first
+                first_word = answer_lower.split()[0] if answer_lower else ''
+                is_diagram = first_word.rstrip('.,;:!') == 'yes'
+
+                if not is_diagram and first_word.rstrip('.,;:!') != 'no':
+                    # Ambiguous answer — fall back to keyword matching
+                    yes_count = sum(1 for w in YES_SIGNALS if w in answer_lower)
+                    no_count  = sum(1 for w in NO_SIGNALS  if w in answer_lower)
+                    is_diagram = yes_count > no_count
+
+                if is_diagram:
+                    filtered.append(img_info)
+                    logger.debug(
+                        f"    ✓ Diagram confirmed: {img_info['filename']} "
+                        f"(vision: \"{answer[:80]}\")"
+                    )
+                else:
+                    logger.info(
+                        f"    ✗ Filtered non-diagram: {img_info['filename']} "
+                        f"(vision: \"{answer[:80]}\")"
+                    )
+
+            except Exception as e:
+                # If classification fails, keep the image to avoid data loss
+                logger.warning(
+                    f"    Could not classify {img_info['filename']}: {e} — keeping"
+                )
+                filtered.append(img_info)
+
+        logger.info(
+            f"  Vision filter: kept {len(filtered)}/{len(images)} images as diagrams"
+        )
+        return filtered
+
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF using Docling.
@@ -271,7 +343,11 @@ class PreprocessService:
         except Exception as e:
             logger.error(f"Image extraction failed: {e}")
             # Continue with text processing even if image extraction fails
-        
+
+        # Step 1b: Filter out non-diagram images (photos, screenshots, etc.)
+        if extracted_images:
+            extracted_images = self._filter_extracted_images(extracted_images)
+
         # Step 2: Extract text from PDF
         full_text = ""
         text_excerpt = ""

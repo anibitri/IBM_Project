@@ -154,7 +154,12 @@ def _register_middleware(app: Flask):
     def add_headers(response):
         """Add security and cache headers"""
         response.headers['X-Content-Type-Options'] = 'nosniff'
-        response.headers['X-Frame-Options'] = 'DENY'
+        # Allow static files (PDFs, images) to be embedded in iframes
+        # from the same origin, but block cross-origin framing for API routes
+        if request.path.startswith('/static/'):
+            response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+        else:
+            response.headers['X-Frame-Options'] = 'DENY'
         return response
 
 

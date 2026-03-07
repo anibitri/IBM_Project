@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useDocumentContext } from '@ar-viewer/shared';
 import DiagramPanel from './DiagramPanel';
 import ChatPanel from './ChatPanel';
+
+/* ── helpers ─────────────────────────────────────────────── */
 
 function formatFileSize(bytes) {
   if (!bytes) return '—';
@@ -9,6 +11,58 @@ function formatFileSize(bytes) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
+
+/* ── Document Browser Panel (PDF iframe / image viewer) ── */
+
+function DocumentBrowserPanel() {
+  const { document: doc } = useDocumentContext();
+  if (!doc) return null;
+
+  const isPdf = doc.type === 'pdf' || doc.file?.extension === '.pdf';
+  const fileUrl = doc.file?.url || `/static/uploads/${doc.storedName}`;
+
+  if (isPdf) {
+    return (
+      <div className="document-browser-panel">
+        <div className="document-browser-header">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+            <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+            <polyline points="14 2 14 8 20 8" />
+          </svg>
+          <span>{doc.file?.original_name || doc.file?.name || 'Document'}</span>
+        </div>
+        <iframe
+          src={fileUrl}
+          title="Document Viewer"
+          className="document-browser-iframe"
+        />
+      </div>
+    );
+  }
+
+  /* For images — display the original uploaded image */
+  return (
+    <div className="document-browser-panel">
+      <div className="document-browser-header">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <circle cx="8.5" cy="8.5" r="1.5" />
+          <path d="M21 15l-5-5L5 21" />
+        </svg>
+        <span>{doc.file?.original_name || doc.file?.name || 'Image'}</span>
+      </div>
+      <div className="document-browser-image-wrap">
+        <img
+          src={fileUrl}
+          alt="Uploaded document"
+          className="document-browser-image"
+        />
+      </div>
+    </div>
+  );
+}
+
+/* ── Document Info Panel ─────────────────────────────────── */
 
 function DocumentInfoPanel() {
   const { document: doc, currentImageIndex } = useDocumentContext();
@@ -112,54 +166,96 @@ function DocumentInfoPanel() {
   );
 }
 
+/* ── Panel definitions ───────────────────────────────────── */
+
+const PANELS = [
+  {
+    id: 'diagram',
+    label: 'Diagram',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <rect x="3" y="3" width="18" height="18" rx="2" />
+        <circle cx="8.5" cy="8.5" r="1.5" />
+        <path d="M21 15l-5-5L5 21" />
+      </svg>
+    ),
+  },
+  {
+    id: 'document',
+    label: 'Document',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
+        <polyline points="14 2 14 8 20 8" />
+        <line x1="16" y1="13" x2="8" y2="13" />
+        <line x1="16" y1="17" x2="8" y2="17" />
+        <polyline points="10 9 9 9 8 9" />
+      </svg>
+    ),
+  },
+  {
+    id: 'chat',
+    label: 'Chat',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
+      </svg>
+    ),
+  },
+  {
+    id: 'info',
+    label: 'Info',
+    icon: (
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="12" cy="12" r="10" />
+        <line x1="12" y1="16" x2="12" y2="12" />
+        <line x1="12" y1="8" x2="12.01" y2="8" />
+      </svg>
+    ),
+  },
+];
+
+/* ── Render the correct component for a panel id ─────────── */
+
+function PanelContent({ panelId }) {
+  switch (panelId) {
+    case 'diagram':  return <DiagramPanel />;
+    case 'document': return <DocumentBrowserPanel />;
+    case 'chat':     return <ChatPanel />;
+    case 'info':     return <DocumentInfoPanel />;
+    default:         return null;
+  }
+}
+
+/* ── Main workspace ──────────────────────────────────────── */
+
 export default function WorkspaceView() {
-  const [viewMode, setViewMode] = useState('split');
+  const [activePanels, setActivePanels] = useState(['diagram', 'chat']);
   const { pendingQuestion, document: doc } = useDocumentContext();
-  const [splitPercent, setSplitPercent] = useState(55);
-  const isDragging = useRef(false);
-  const containerRef = useRef(null);
 
-  const isPdf = doc?.type === 'pdf' && (doc?.images?.length > 0 || doc?.file?.extension === '.pdf');
-
+  /* Auto-open chat when a pending question arrives */
   useEffect(() => {
-    if (pendingQuestion && viewMode === 'diagram') {
-      setViewMode('split');
+    if (pendingQuestion && !activePanels.includes('chat')) {
+      setActivePanels((prev) => [...prev, 'chat']);
     }
-  }, [pendingQuestion]);
+  }, [pendingQuestion]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleMouseDown = useCallback((e) => {
-    e.preventDefault();
-    isDragging.current = true;
-    document.body.style.cursor = 'col-resize';
-    document.body.style.userSelect = 'none';
-  }, []);
-
-  useEffect(() => {
-    const handleMouseMove = (e) => {
-      if (!isDragging.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const pct = ((e.clientX - rect.left) / rect.width) * 100;
-      setSplitPercent(Math.max(25, Math.min(75, pct)));
-    };
-    const handleMouseUp = () => {
-      if (isDragging.current) {
-        isDragging.current = false;
-        document.body.style.cursor = '';
-        document.body.style.userSelect = '';
+  /* Toggle a panel on / off (at least 1 must stay open) */
+  const togglePanel = useCallback((panelId) => {
+    setActivePanels((prev) => {
+      if (prev.includes(panelId)) {
+        if (prev.length <= 1) return prev; // keep at least one
+        return prev.filter((p) => p !== panelId);
       }
-    };
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
+      return [...prev, panelId];
+    });
   }, []);
 
   const fileName = doc?.file?.original_name || doc?.file?.name || 'Document';
 
   return (
     <div className="workspace-view">
+      {/* ── header toolbar ───────────────────────────────── */}
       <div className="workspace-header">
         <div className="workspace-doc-name">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -168,96 +264,35 @@ export default function WorkspaceView() {
           </svg>
           <span className="workspace-doc-title">{fileName}</span>
         </div>
-        <div className="view-mode-toggle">
-          <button
-            className={`mode-btn ${viewMode === 'diagram' ? 'active' : ''}`}
-            onClick={() => setViewMode('diagram')}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <circle cx="8.5" cy="8.5" r="1.5" />
-              <path d="M21 15l-5-5L5 21" />
-            </svg>
-            Diagram
-          </button>
-          <button
-            className={`mode-btn ${viewMode === 'split' ? 'active' : ''}`}
-            onClick={() => setViewMode('split')}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <rect x="3" y="3" width="18" height="18" rx="2" />
-              <line x1="12" y1="3" x2="12" y2="21" />
-            </svg>
-            Split
-          </button>
-          <button
-            className={`mode-btn ${viewMode === 'chat' ? 'active' : ''}`}
-            onClick={() => setViewMode('chat')}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z" />
-            </svg>
-            Chat
-          </button>
-          <button
-            className={`mode-btn ${viewMode === 'info' ? 'active' : ''}`}
-            onClick={() => setViewMode('info')}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-              <circle cx="12" cy="12" r="10" />
-              <line x1="12" y1="16" x2="12" y2="12" />
-              <line x1="12" y1="8" x2="12.01" y2="8" />
-            </svg>
-            Info
-          </button>
-          {isPdf && (
-            <button
-              className={`mode-btn ${viewMode === 'pdf' ? 'active' : ''}`}
-              onClick={() => setViewMode('pdf')}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                <path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z" />
-                <polyline points="14 2 14 8 20 8" />
-                <line x1="16" y1="13" x2="8" y2="13" />
-                <line x1="16" y1="17" x2="8" y2="17" />
-                <polyline points="10 9 9 9 8 9" />
-              </svg>
-              PDF
-            </button>
-          )}
+
+        <div className="panel-toggles">
+          {PANELS.map((panel) => {
+            const isActive = activePanels.includes(panel.id);
+            return (
+              <button
+                key={panel.id}
+                className={`panel-toggle-btn ${isActive ? 'active' : ''}`}
+                onClick={() => togglePanel(panel.id)}
+                title={`${isActive ? 'Hide' : 'Show'} ${panel.label}`}
+              >
+                {panel.icon}
+                <span className="panel-toggle-label">{panel.label}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
-      <div ref={containerRef} className={`workspace-content mode-${viewMode}`}>
-        {(viewMode === 'diagram' || viewMode === 'split') && (
-          <div className="panel-wrapper" style={viewMode === 'split' ? { flex: `0 0 ${splitPercent}%` } : undefined}>
-            <DiagramPanel />
-          </div>
-        )}
-        {viewMode === 'split' && (
-          <div className="resize-handle" onMouseDown={handleMouseDown}>
-            <div className="resize-handle-line" />
-          </div>
-        )}
-        {(viewMode === 'chat' || viewMode === 'split') && (
-          <div className="panel-wrapper" style={viewMode === 'split' ? { flex: 1 } : undefined}>
-            <ChatPanel />
-          </div>
-        )}
-        {viewMode === 'info' && (
-          <div className="panel-wrapper">
-            <DocumentInfoPanel />
-          </div>
-        )}
-        {viewMode === 'pdf' && isPdf && (
-          <div className="panel-wrapper pdf-viewer-panel">
-            <iframe
-              src={doc.file?.url || `/static/uploads/${doc.storedName}`}
-              title="PDF Viewer"
-              className="pdf-viewer-iframe"
-            />
-          </div>
-        )}
+      {/* ── panels area ──────────────────────────────────── */}
+      <div className="workspace-content workspace-multi-panel">
+        {activePanels.map((panelId, index) => (
+          <React.Fragment key={panelId}>
+            {index > 0 && <div className="panel-divider" />}
+            <div className="panel-wrapper">
+              <PanelContent panelId={panelId} />
+            </div>
+          </React.Fragment>
+        ))}
       </div>
     </div>
   );
