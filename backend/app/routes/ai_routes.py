@@ -3,6 +3,7 @@ import logging
 import traceback
 
 from app.services.granite_ai_service import ai_service
+from app.utils.shared_utils import resolve_file_path
 
 ai_bp = Blueprint('ai', __name__)
 logger = logging.getLogger(__name__)
@@ -97,6 +98,14 @@ def ask():
             }), 400
         
         logger.info(f"💬 AI Chat: {query[:50]}...")
+        
+        # Resolve image path so the chat service can query the vision model
+        if isinstance(context, dict):
+            stored_name = context.pop('stored_name', None)
+            if stored_name and not context.get('image_path'):
+                resolved_path, err = resolve_file_path(stored_name)
+                if not err:
+                    context['image_path'] = resolved_path
         
         # Run chat
         result = ai_service.chat_with_document(query, context, chat_history=history)

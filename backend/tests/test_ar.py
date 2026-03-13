@@ -22,24 +22,26 @@ class TestARServiceDirect:
 
     # --- extract_document_features ---
 
-    def test_returns_list(self, diagram_path):
+    def test_returns_dict(self, diagram_path):
         result = self.ar_service.extract_document_features(diagram_path)
-        assert isinstance(result, list)
+        assert isinstance(result, dict)
+        assert 'components' in result
+        assert isinstance(result['components'], list)
 
     def test_detects_components(self, diagram_path):
         result = self.ar_service.extract_document_features(diagram_path)
-        assert len(result) > 0, "Expected at least one component in diagram"
+        assert len(result['components']) > 0, "Expected at least one component in diagram"
 
     def test_component_has_required_fields(self, diagram_path):
         result    = self.ar_service.extract_document_features(diagram_path)
         required  = {'id', 'x', 'y', 'width', 'height', 'confidence', 'label'}
-        for comp in result:
+        for comp in result['components']:
             missing = required - set(comp.keys())
             assert not missing, f"Component missing fields: {missing}"
 
     def test_normalised_coordinates_in_range(self, diagram_path):
         result = self.ar_service.extract_document_features(diagram_path)
-        for comp in result:
+        for comp in result['components']:
             assert 0.0 <= comp['x']      <= 1.0, f"x out of range: {comp['x']}"
             assert 0.0 <= comp['y']      <= 1.0, f"y out of range: {comp['y']}"
             assert 0.0 <  comp['width']  <= 1.0, f"width out of range: {comp['width']}"
@@ -47,54 +49,59 @@ class TestARServiceDirect:
 
     def test_confidence_in_range(self, diagram_path):
         result = self.ar_service.extract_document_features(diagram_path)
-        for comp in result:
+        for comp in result['components']:
             assert comp['confidence'] >= 0.0
 
     def test_ids_are_unique(self, diagram_path):
         result = self.ar_service.extract_document_features(diagram_path)
-        ids    = [c['id'] for c in result]
+        ids    = [c['id'] for c in result['components']]
         assert len(ids) == len(set(ids)), "Duplicate component IDs found"
 
     def test_hints_accepted(self, diagram_path):
         hints  = ['CPU', 'RAM', 'GPU', 'Storage']
         result = self.ar_service.extract_document_features(diagram_path, hints=hints)
-        assert isinstance(result, list)
+        assert isinstance(result, dict)
+        assert isinstance(result['components'], list)
 
     def test_empty_hints_ok(self, diagram_path):
         result = self.ar_service.extract_document_features(diagram_path, hints=[])
-        assert isinstance(result, list)
+        assert isinstance(result, dict)
+        assert isinstance(result['components'], list)
 
-    def test_simple_image_returns_list(self, simple_path):
+    def test_simple_image_returns_dict(self, simple_path):
         result = self.ar_service.extract_document_features(simple_path)
-        assert isinstance(result, list)
-        assert len(result) > 0
+        assert isinstance(result, dict)
+        assert len(result['components']) > 0
 
     def test_no_full_image_boxes(self, diagram_path):
         """No component should span almost the entire image"""
         result = self.ar_service.extract_document_features(diagram_path)
-        for comp in result:
+        for comp in result['components']:
             area = comp['width'] * comp['height']
             assert area < 0.85, f"Component spans {area*100:.0f}% of image (likely background)"
 
     def test_invalid_path_returns_empty(self):
         result = self.ar_service.extract_document_features("/no/such/file.png")
-        assert result == []
+        assert isinstance(result, dict)
+        assert result['components'] == []
 
     # --- analyze_component_relationships ---
 
     def test_relationships_returns_dict(self, diagram_path):
-        components = self.ar_service.extract_document_features(diagram_path)
+        result = self.ar_service.extract_document_features(diagram_path)
+        components = result['components']
         if len(components) < 2:
             pytest.skip("Need at least 2 components for relationship test")
-        result = self.ar_service.analyze_component_relationships(components)
-        assert isinstance(result, dict)
+        rel = self.ar_service.analyze_component_relationships(components)
+        assert isinstance(rel, dict)
 
     def test_relationships_has_connections_key(self, diagram_path):
-        components = self.ar_service.extract_document_features(diagram_path)
+        result = self.ar_service.extract_document_features(diagram_path)
+        components = result['components']
         if len(components) < 2:
             pytest.skip("Need at least 2 components")
-        result = self.ar_service.analyze_component_relationships(components)
-        assert 'connections' in result
+        rel = self.ar_service.analyze_component_relationships(components)
+        assert 'connections' in rel
 
     def test_relationships_empty_input(self):
         result = self.ar_service.analyze_component_relationships([])

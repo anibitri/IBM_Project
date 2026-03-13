@@ -166,6 +166,7 @@ def main():
     parser.add_argument('--output', type=str, default='ar_output_annotated.png', help='Output path')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--hints', type=str, default='', help='Comma-separated hints')
+    parser.add_argument('--legacy-service', action='store_true', help='Use legacy ARv1 service')
     args = parser.parse_args()
     
     print("\n" + "=" * 60)
@@ -193,11 +194,19 @@ def main():
     
     # Load AR service
     print("\n⏳ Loading AR service...")
-    from app.services.ar_service import ar_service
+    if args.legacy_service:
+        from app.services.ARv1 import ar_service
+        print("   Using legacy service: app.services.ARv1")
+    else:
+        from app.services.ar_service import ar_service
+        print("   Using improved service: app.services.ar_service")
     
     # Enable debug if requested
     if args.debug:
-        ar_service.debug_complexity = True
+        if args.legacy_service:
+            ar_service.debug_complexity = True
+        else:
+            ar_service.debug = True
     
     # Run AR extraction
     print("\n🎯 Running AR extraction...")
@@ -205,12 +214,17 @@ def main():
     
     import time
     start = time.time()
-    components = ar_service.extract_document_features(args.image, hints=hints)
+    result = ar_service.extract_document_features(args.image, hints=hints)
     elapsed = time.time() - start
     
     print("-" * 60)
     print(f"⏱️  Extraction took {elapsed:.2f}s")
     
+    if args.legacy_service:
+        components = result if isinstance(result, list) else []
+    else:
+        components = result.get('components', []) if isinstance(result, dict) else []
+
     if not components:
         print("\n❌ No components detected!")
         print("\nTroubleshooting:")

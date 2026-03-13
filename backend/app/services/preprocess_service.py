@@ -18,6 +18,7 @@ except ImportError:
 from app.services.granite_vision_service import analyze_images  # Function
 from app.services.granite_ai_service import ai_service  # Singleton instance
 from app.services.ar_service import ar_service  # Singleton instance
+from app.services.prompt_builder import DIAGRAM_CLASSIFICATION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -212,6 +213,72 @@ class PreprocessService:
         
         return extracted_images
     
+    def _filter_extracted_images(self, images: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Filter extracted images using the Granite Vision model to keep only
+        technical diagrams and discard photos, screenshots, logos, etc.
+
+        Each image is sent to the vision model with a quick yes/no
+        classification prompt.  Only images the model identifies as
+        diagrams proceed to the full Vision + AR pipeline.
+
+        Args:
+            images: List of image metadata dicts (from _extract_images_from_pdf)
+
+        Returns:
+            Filtered list containing only likely-diagram images
+        """
+        if not images:
+            return images
+
+        from app.services.granite_vision_service import query_image
+
+        # Keywords that signal diagram vs non-diagram in ambiguous answers
+        YES_SIGNALS = {'yes', 'diagram', 'schematic', 'flowchart', 'UML', 'sequence', 'class', 'activity', 'state diagram',
+                       'architecture', 'technical'}
+        NO_SIGNALS  = {'no', 'photograph', 'photo', 'screenshot', 'picture',
+                       'selfie', 'landscape', 'timetable', 'schedule', 'gantt'}
+
+        filtered = []
+        for img_info in images:
+            try:
+                answer = query_image(img_info['path'], DIAGRAM_CLASSIFICATION_PROMPT)
+                answer_lower = answer.strip().lower()
+
+                # Check for explicit yes/no first
+                first_word = answer_lower.split()[0] if answer_lower else ''
+                is_diagram = first_word.rstrip('.,;:!') == 'yes'
+
+                if not is_diagram and first_word.rstrip('.,;:!') != 'no':
+                    # Ambiguous answer — fall back to keyword matching
+                    yes_count = sum(1 for w in YES_SIGNALS if w in answer_lower)
+                    no_count  = sum(1 for w in NO_SIGNALS  if w in answer_lower)
+                    is_diagram = yes_count > no_count
+
+                if is_diagram:
+                    filtered.append(img_info)
+                    logger.debug(
+                        f"    ✓ Diagram confirmed: {img_info['filename']} "
+                        f"(vision: \"{answer[:80]}\")"
+                    )
+                else:
+                    logger.info(
+                        f"    ✗ Filtered non-diagram: {img_info['filename']} "
+                        f"(vision: \"{answer[:80]}\")"
+                    )
+
+            except Exception as e:
+                # If classification fails, keep the image to avoid data loss
+                logger.warning(
+                    f"    Could not classify {img_info['filename']}: {e} — keeping"
+                )
+                filtered.append(img_info)
+
+        logger.info(
+            f"  Vision filter: kept {len(filtered)}/{len(images)} images as diagrams"
+        )
+        return filtered
+
     def _extract_text_from_pdf(self, pdf_path: str) -> tuple:
         """
         Extract text from PDF using Docling.
@@ -271,7 +338,11 @@ class PreprocessService:
         except Exception as e:
             logger.error(f"Image extraction failed: {e}")
             # Continue with text processing even if image extraction fails
-        
+
+        # Step 1b: Filter out non-diagram images (photos, screenshots, etc.)
+        if extracted_images:
+            extracted_images = self._filter_extracted_images(extracted_images)
+
         # Step 2: Extract text from PDF
         full_text = ""
         text_excerpt = ""
@@ -288,6 +359,7 @@ class PreprocessService:
         # Step 3: Process each extracted image through Vision + AR pipeline
         image_analyses = []
         all_ar_components = []
+        all_connections = []
         
         for img_info in extracted_images:
             img_path = img_info['path']
@@ -312,14 +384,16 @@ class PreprocessService:
                 
                 if extract_ar:
                     try:
-                        ar_components = ar_service.extract_document_features(
+                        ar_result = ar_service.extract_document_features(
                             img_path,
                             hints=vision_components
                         )
+                        ar_components = ar_result.get('components', [])
+                        relationships = ar_result.get('relationships', {})
                         
                         if ar_components:
-                            relationships = ar_service.analyze_component_relationships(ar_components)
                             all_ar_components.extend(ar_components)
+                            all_connections.extend(ar_result.get('connections', []))
                     
                     except Exception as e:
                         logger.warning(f"AR extraction failed for page {page_num}: {e}")
@@ -363,7 +437,8 @@ class PreprocessService:
                     text_excerpt=text_excerpt,
                     vision={'analysis': {'summary': combined_vision_text}},
                     components=all_ar_components[:20],  # Limit to first 20 for token management
-                    context_type='general'
+                    context_type='general',
+                    connections=all_connections[:30],
                 )
                 
                 ai_summary = ai_result.get('answer', '')
@@ -399,6 +474,7 @@ class PreprocessService:
                 'status': 'success',
                 'components': all_ar_components,
                 'componentCount': len(all_ar_components),
+                'connections': all_connections,
                 'images_processed': len(image_analyses)
             },
             
@@ -479,18 +555,18 @@ class PreprocessService:
             if extract_ar:
                 logger.info("🎯 Extracting AR components...")
                 try:
-                    ar_components = ar_service.extract_document_features(
+                    ar_result = ar_service.extract_document_features(
                         file_path,
                         hints=vision_components
                     )
-                    
-                    if ar_components:
-                        relationships = ar_service.analyze_component_relationships(ar_components)
+                    ar_components = ar_result.get('components', [])
+                    relationships = ar_result.get('relationships', {})
                     
                     ar_result = {
                         'status': 'success',
                         'components': ar_components,
                         'componentCount': len(ar_components),
+                        'connections': ar_result.get('connections', []),
                         'relationships': relationships
                     }
                     
@@ -518,7 +594,8 @@ class PreprocessService:
                     ai_result = ai_service.analyze_context(
                         vision=vision_result,
                         components=ar_components,
-                        context_type=document_type
+                        context_type=document_type,
+                        connections=relationships.get('connections', []) if isinstance(relationships, dict) else [],
                     )
                     ai_summary = ai_result.get('answer', vision_summary)
                     logger.info("✓ AI summary generated")

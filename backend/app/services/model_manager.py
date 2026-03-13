@@ -130,6 +130,7 @@ class ModelManager:
         self.chat_model = None
         self.chat_tokenizer = None
         self.ar_model = None
+        self.ar_device = "cpu"
 
     # ============================================================
     # 5. MODEL LOADING
@@ -198,7 +199,7 @@ class ModelManager:
             print("\n💬 Loading Granite Chat...")
             self._log_vram("Before chat load")
 
-            chat_path = "ibm-granite/granite-3.1-1b-a400m-instruct"
+            chat_path = "ibm-granite/granite-3.3-2b-instruct"
 
             # Load tokenizer
             self.chat_tokenizer = AutoTokenizer.from_pretrained(chat_path)
@@ -232,33 +233,33 @@ class ModelManager:
 
     def _load_ar_model(self):
         """
-        Load SAM model for AR segmentation.
+        Load MobileSAM model for AR segmentation.
         
         Device strategy:
         - Checks remaining VRAM after vision + chat are loaded
-        - If > 2GB free: loads on GPU for faster inference
+        - If > 0.5GB free: loads on GPU for faster inference
         - Otherwise: loads on CPU to avoid OOM errors
         """
         try:
             from ultralytics import SAM
 
-            print("\n📐 Loading SAM (AR Model)...")
+            print("\n📐 Loading MobileSAM (AR Model)...")
             self._log_vram("Before SAM load")
 
             self.ar_model = SAM('mobile_sam.pt')
 
             # Determine SAM device based on remaining VRAM
-            # ar_device = self._get_ar_device()
-            ar_device = "cpu"  # Force CPU for stability in this example
-            self.ar_model.to(ar_device)
+            self.ar_device = self._get_ar_device()
+            self.ar_model.to(self.ar_device)
 
             self._log_vram("After SAM load")
-            print(f"   ✅ SAM loaded on {ar_device.upper()}")
+            print(f"   ✅ MobileSAM loaded on {self.ar_device.upper()}")
 
         except Exception as e:
             print(f"   ❌ SAM load failed: {e}")
             logger.exception("SAM model load failed")
             self.ar_model = None
+            self.ar_device = "cpu"
 
     # ============================================================
     # 6. HELPER METHODS
@@ -269,18 +270,20 @@ class ModelManager:
         Determine best device for SAM based on available VRAM.
         Returns 'cuda' if enough VRAM is free, 'cpu' otherwise.
         """
-        if not torch.cuda.is_available():
-            return "cpu"
+        # if not torch.cuda.is_available():
+        #     return "cpu"
 
-        free_vram_gb = self._get_free_vram_gb()
+        # free_vram_gb = self._get_free_vram_gb()
 
-        # SAM2-L needs ~2.5GB VRAM - use GPU only if enough is free
-        if free_vram_gb > 2.5:
-            print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on GPU")
-            return "cuda"
-        else:
-            print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on CPU")
-            return "cpu"
+        # # MobileSAM is ~40MB; need some headroom for inference activations
+        # if free_vram_gb > 0.5:
+        #     print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on GPU")
+        #     return "cuda"
+        # else:
+        #     print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on CPU")
+        #     return "cpu"
+
+        return "cpu"
 
     def _get_free_vram_gb(self) -> float:
         """Get current free VRAM in GB"""
@@ -301,6 +304,32 @@ class ModelManager:
         """Clear CUDA cache to free fragmented memory"""
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def move_sam_to_cpu(self):
+        """Move SAM model to CPU after an OOM error."""
+        if self.ar_model is not None and self.ar_device != "cpu":
+            print("   🔄 Moving SAM to CPU due to OOM...")
+            self._clear_cuda_cache()
+            self.ar_model.to("cpu")
+            self.ar_device = "cpu"
+            self._clear_cuda_cache()
+            print("   ✅ SAM now running on CPU")
+
+    def try_restore_sam_to_gpu(self):
+        """Move SAM back to GPU if at least 3 GB VRAM is free."""
+        if (self.ar_model is not None
+                and self.ar_device == "cpu"
+                and torch.cuda.is_available()):
+            free_gb = self._get_free_vram_gb()
+            if free_gb >= 3.0:
+                try:
+                    self.ar_model.to("cuda")
+                    self.ar_device = "cuda"
+                    print(f"   ✅ SAM restored to GPU ({free_gb:.1f}GB free)")
+                except Exception as e:
+                    print(f"   ⚠️ Failed to restore SAM to GPU: {e}")
+                    self.ar_model.to("cpu")
+                    self.ar_device = "cpu"
 
     def _log_vram(self, label: str = ""):
         """Log current VRAM usage"""
@@ -326,7 +355,10 @@ class ModelManager:
         print("\n📦 MODEL STATUS:")
         print(f"   Vision Model  : {'✅ Loaded' if self.vision_model else '❌ Failed'}")
         print(f"   Chat Model    : {'✅ Loaded' if self.chat_model else '❌ Failed'}")
-        print(f"   SAM (AR)      : {'✅ Loaded' if self.ar_model else '❌ Failed'}")
+        if self.ar_model:
+            print(f"   MobileSAM(AR) : ✅ Loaded on {self.ar_device.upper()}")
+        else:
+            print("   MobileSAM(AR) : ❌ Failed")
 
         if torch.cuda.is_available():
             used = self._get_used_vram_gb()
@@ -355,11 +387,8 @@ class ModelManager:
             },
             'ar': {
                 'loaded': self.ar_model is not None,
-                'device': 'cuda' if (
-                    self.ar_model is not None and 
-                    torch.cuda.is_available() and 
-                    self._get_free_vram_gb() > 2.5
-                ) else 'cpu'
+                'model': 'MobileSAM',
+                'device': self.ar_device
             },
             'hardware': {
                 'device': self.device,

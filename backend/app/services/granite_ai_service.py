@@ -1,14 +1,25 @@
 import torch
 from typing import Dict, List, Optional, Any
 from app.services.model_manager import manager
+from app.services.granite_vision_service import query_image
+from app.services.prompt_builder import (
+    AI_ANALYZE_SYSTEM_PROMPT,
+    AI_CHAT_SYSTEM_PROMPT,
+    get_context_analysis_task,
+    get_insight_task,
+    build_analyze_context_prompt,
+    build_chat_with_document_prompt,
+    build_component_summary_prompt,
+    build_generate_insights_prompt,
+)
 
 
 class AIService:
     """Enhanced AI service for technical document analysis"""
     
     def __init__(self):
-        self.max_context_length = 4096
-        self.default_max_tokens = 300
+        self.max_context_length = 3072
+        self.default_max_tokens = 400
     
     def _generate_text(
         self, 
@@ -19,111 +30,274 @@ class AIService:
     ) -> str:
         """
         Generate text using the chat model with proper token management.
+        Includes OOM retry with progressive context truncation.
         """
         if not manager.chat_model or not manager.chat_tokenizer:
             return "Error: AI Model not available."
         
         if max_tokens is None:
             max_tokens = self.default_max_tokens
-        
-        try:
-            # Tokenize with truncation
-            enc = manager.chat_tokenizer(
-                prompt,
-                return_tensors="pt",
-                padding=True,
-                truncation=True,
-                max_length=self.max_context_length
-            )
 
-            # Move to device
-            enc = {k: v.to(manager.device) for k, v in enc.items()}
-            if "attention_mask" in enc:
-                enc["attention_mask"] = enc["attention_mask"].long()
+        # Try generation with progressively shorter context on OOM
+        for attempt, max_len in enumerate([self.max_context_length, 1536, 768]):
+            try:
+                # Free cached VRAM before generation
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
-            # Generate
-            with torch.no_grad():
-                output_ids = manager.chat_model.generate(
-                    **enc,
-                    max_new_tokens=max_tokens,
-                    do_sample=True,
-                    temperature=temperature,
-                    top_p=top_p,
-                    repetition_penalty=1.1,
-                    pad_token_id=manager.chat_tokenizer.pad_token_id,
-                    eos_token_id=manager.chat_tokenizer.eos_token_id
+                # Tokenize with truncation
+                enc = manager.chat_tokenizer(
+                    prompt,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
+                    max_length=max_len
                 )
-            
-            # Decode
-            response = manager.chat_tokenizer.decode(
-                output_ids[0], 
-                skip_special_tokens=True
-            )
-            
-            # Clean up prompt echo
-            if prompt in response:
-                response = response.replace(prompt, "").strip()
-            
-            # Remove common artifacts
-            response = self._clean_response(response)
-            
-            return response
+
+                # Move to same device as the chat model
+                enc = {k: v.to(manager.chat_device) for k, v in enc.items()}
+                if "attention_mask" in enc:
+                    enc["attention_mask"] = enc["attention_mask"].long()
+
+                # Generate
+                prompt_len = enc["input_ids"].shape[1]
+                with torch.no_grad():
+                    output_ids = manager.chat_model.generate(
+                        **enc,
+                        max_new_tokens=max_tokens,
+                        do_sample=True,
+                        temperature=temperature,
+                        top_p=top_p,
+                        repetition_penalty=1.1,
+                        pad_token_id=manager.chat_tokenizer.pad_token_id,
+                        eos_token_id=manager.chat_tokenizer.eos_token_id
+                    )
+                
+                # Decode only newly generated tokens (skip the prompt)
+                new_token_ids = output_ids[0][prompt_len:]
+                response = manager.chat_tokenizer.decode(
+                    new_token_ids, 
+                    skip_special_tokens=True
+                ).strip()
+                
+                # Remove common artifacts
+                response = self._clean_response(response)
+                
+                return response
+
+            except torch.cuda.OutOfMemoryError:
+                print(f"⚠️ OOM on attempt {attempt+1} (max_len={max_len}), retrying shorter...")
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                if attempt == 2:
+                    return "Error: Not enough GPU memory to generate a response. Try a shorter question."
         
-        except Exception as e:
-            print(f"❌ Text generation error: {e}")
-            return f"Error generating response: {str(e)}"
+            except Exception as e:
+                print(f"❌ Text generation error: {e}")
+                return f"Error generating response: {str(e)}"
+        
+        return "Error generating response."
     
     def _clean_response(self, text: str) -> str:
         """Clean up generated response"""
+        import re
+        
         # Remove common prefixes
-        prefixes_to_remove = ["Answer:", "Response:", "Summary:", "AI:"]
+        prefixes_to_remove = [
+            "Answer:", "Response:", "Summary:", "AI:",
+            "Provide a clear, structured analysis:",
+            "Provide a clear, concise answer:",
+            "Analysis:",
+        ]
         for prefix in prefixes_to_remove:
             if text.startswith(prefix):
                 text = text[len(prefix):].strip()
         
+        # Remove any residual prompt fragments that start with known markers
+        prompt_markers = [
+            AI_ANALYZE_SYSTEM_PROMPT,
+            AI_CHAT_SYSTEM_PROMPT,
+            "Task:",
+            "Context:",
+        ]
+        for marker in prompt_markers:
+            idx = text.find(marker)
+            if idx != -1 and idx < 60:
+                # Prompt text leaked at the start — find where the actual answer begins
+                # Look for the closing marker "analysis:" or "answer:"
+                answer_start = text.lower().find("analysis:", idx)
+                if answer_start == -1:
+                    answer_start = text.lower().find("answer:", idx)
+                if answer_start != -1:
+                    text = text[answer_start:].split(":", 1)[-1].strip()
+                else:
+                    text = text[idx + len(marker):].strip()
+        
+        # Collapse multiple newlines
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        # Truncate at self-generated dialogue (model continuing as if it's a conversation)
+        dialogue_markers = [
+            r'\n\s*(?:User|Human|Question|Q)\s*[:\?]',
+            r'\n\s*(?:Follow[\s-]?up|Additional|Note to)',
+            r'\n\s*(?:Let me know|Do you have|Would you like|If you have|Feel free)',
+            r'\n\s*---+',
+        ]
+        for marker in dialogue_markers:
+            m = re.search(marker, text, re.IGNORECASE)
+            if m and m.start() > 40:  # Only if we already have some content
+                text = text[:m.start()].rstrip()
+        
         # Remove incomplete sentences at the end
-        if text and not text[-1] in '.!?':
+        if text and text[-1] not in '.!?:':
             last_punct = max(
                 text.rfind('.'),
                 text.rfind('!'),
                 text.rfind('?')
             )
-            if last_punct > len(text) * 0.7:  # Only if we're near the end
+            if last_punct > len(text) * 0.5:  # Only if we're past halfway
                 text = text[:last_punct + 1]
         
         return text.strip()
-    
+
+    def _select_relevant_chunks(
+        self,
+        full_text: str,
+        query: str,
+        max_chars: int = 4000,
+        chunk_size: int = 600,
+    ) -> str:
+        """Select the most query-relevant portions of a long document.
+
+        Splits the text into overlapping chunks, scores each by keyword
+        overlap with the query, and returns the top-scoring chunks in
+        document order so the model gets the most useful context.
+        """
+        if not full_text or not query:
+            return (full_text or '')[:max_chars]
+
+        if len(full_text) <= max_chars:
+            return full_text
+
+        import re
+
+        # Normalise query into keyword set (words ≥ 3 chars)
+        stop_words = {
+            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all',
+            'can', 'has', 'her', 'was', 'one', 'our', 'out', 'what',
+            'with', 'this', 'that', 'from', 'have', 'been', 'will',
+            'does', 'how', 'about', 'which', 'when', 'where', 'there',
+        }
+        query_words = {
+            w.lower()
+            for w in re.findall(r'\w+', query)
+            if len(w) >= 3 and w.lower() not in stop_words
+        }
+
+        if not query_words:
+            return full_text[:max_chars]
+
+        # Split into chunks with ~20% overlap
+        overlap = chunk_size // 5
+        chunks = []
+        pos = 0
+        while pos < len(full_text):
+            end = pos + chunk_size
+            chunk_text = full_text[pos:end]
+            chunks.append((pos, chunk_text))
+            pos += chunk_size - overlap
+
+        # Score each chunk by fraction of query keywords it contains
+        scored = []
+        for idx, (start_pos, chunk_text) in enumerate(chunks):
+            chunk_lower = chunk_text.lower()
+            hits = sum(1 for w in query_words if w in chunk_lower)
+            score = hits / len(query_words)
+            scored.append((score, idx, start_pos, chunk_text))
+
+        # Always include the first chunk (document intro) with a bonus
+        scored[0] = (scored[0][0] + 0.15, *scored[0][1:])
+
+        # Sort by score descending, pick top chunks
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        selected = []
+        total_len = 0
+        for score, idx, start_pos, chunk_text in scored:
+            if total_len + len(chunk_text) > max_chars:
+                remaining = max_chars - total_len
+                if remaining > 100:
+                    selected.append((start_pos, chunk_text[:remaining]))
+                break
+            selected.append((start_pos, chunk_text))
+            total_len += len(chunk_text)
+
+        # Re-order by document position so output reads naturally
+        selected.sort(key=lambda x: x[0])
+
+        return '\n...\n'.join(text for _, text in selected)
+
     def _build_context_string(
         self,
         text_excerpt: str = None,
         vision: Dict = None,
-        components: List[Dict] = None
+        components: List[Dict] = None,
+        connections: List[Dict] = None,
+        ai_summary: str = None,
+        query: str = None,
     ) -> str:
-        """Build a comprehensive context string from available data"""
+        """Build a comprehensive context string from available data, kept compact for VRAM."""
         context_parts = []
-        
+
+        # AI summary is the most information-dense source — include first
+        if ai_summary:
+            context_parts.append(f"Document Summary:\n{ai_summary[:1200]}\n")
+
         if text_excerpt:
-            context_parts.append(f"Document Text:\n{text_excerpt}\n")
+            # When a query is provided, select the most relevant portions
+            # of the document text instead of blindly taking the first N chars.
+            if query and len(text_excerpt) > 4000:
+                excerpt = self._select_relevant_chunks(text_excerpt, query, max_chars=4500)
+            else:
+                excerpt = text_excerpt[:4500]
+            context_parts.append(f"Document Text:\n{excerpt}\n")
         
         if vision and isinstance(vision, dict):
             vision_summary = vision.get('analysis', {}).get('summary', '')
             if vision_summary:
-                context_parts.append(f"Visual Analysis:\n{vision_summary}\n")
+                context_parts.append(f"Visual Analysis:\n{vision_summary[:1000]}\n")
         
         if components and isinstance(components, list):
             comp_list = []
-            for comp in components[:10]:  # Limit to first 10
+            for comp in components[:15]:  # Show more components
                 label = comp.get('label', 'Unknown')
                 desc = comp.get('description', '')
                 comp_str = f"- {label}"
                 if desc:
-                    comp_str += f": {desc}"
+                    comp_str += f": {desc[:80]}"
                 comp_list.append(comp_str)
             
             if comp_list:
                 context_parts.append(f"Identified Components:\n" + "\n".join(comp_list))
         
-        return "\n".join(context_parts)
+        # Add connection / relationship information
+        if connections and isinstance(connections, list):
+            conn_lines = []
+            for conn in connections[:15]:  # Limit to 15 connections
+                src = conn.get('from_label') or conn.get('from', '?')
+                tgt = conn.get('to_label') or conn.get('to', '?')
+                conn_lines.append(f"- {src} connects to {tgt}")
+            if conn_lines:
+                context_parts.append(
+                    "Component Connections (which components are linked to each other):\n"
+                    + "\n".join(conn_lines)
+                )
+        
+        result = "\n".join(context_parts)
+        # Cap at ~8000 chars (~2000 tokens) to leave room for prompt + generation
+        if len(result) > 8000:
+            result = result[:8000] + "\n[Context truncated]"
+        return result
     
     def analyze_context(
         self,
@@ -131,6 +305,7 @@ class AIService:
         vision: Dict = None,
         components: List[Dict] = None,
         context_type: str = "general",
+        connections: List[Dict] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -141,6 +316,7 @@ class AIService:
             vision: Vision analysis results
             components: AR component data
             context_type: Type of document (general, software, electronics, etc.)
+            connections: List of connection dicts {from_label, to_label, ...}
         
         Returns:
             Dictionary with analysis results
@@ -152,7 +328,7 @@ class AIService:
             text_excerpt = kwargs['message']
         
         # Build context
-        context_str = self._build_context_string(text_excerpt, vision, components)
+        context_str = self._build_context_string(text_excerpt, vision, components, connections)
         
         if not context_str.strip():
             return {
@@ -161,24 +337,8 @@ class AIService:
                 "answer": "No content provided for analysis."
             }
         
-        # Build prompt based on context type
-        if context_type == "software":
-            task = "Analyze this software architecture diagram or code documentation. Explain the system design, key components, and their interactions."
-        elif context_type == "electronics":
-            task = "Analyze this circuit or electronics diagram. Explain the circuit function, key components, and how they work together."
-        elif context_type == "mechanical":
-            task = "Analyze this mechanical or engineering diagram. Explain the design, key parts, and their functions."
-        elif context_type == "network":
-            task = "Analyze this network or infrastructure diagram. Explain the architecture, components, and data flow."
-        else:
-            task = "Provide a comprehensive technical analysis of this document. Explain the key components and their relationships."
-        
-        prompt = (
-            f"You are an expert technical analyst.\n\n"
-            f"Context:\n{context_str}\n\n"
-            f"Task: {task}\n\n"
-            f"Provide a clear, structured analysis:\n"
-        )
+        task = get_context_analysis_task(context_type)
+        prompt = build_analyze_context_prompt(context_str, task)
         
         answer = self._generate_text(prompt, max_tokens=400)
         
@@ -198,6 +358,11 @@ class AIService:
         """
         Interactive Q&A with document context.
         
+        When an image_path is available in the context, the vision model is
+        asked the same question first.  Its visual answer is injected into
+        the chat-model prompt so the text model can reason over both the
+        pre-existing document context *and* fresh visual evidence.
+        
         Args:
             query: User question
             context: Document context (dict, string, or structured data)
@@ -211,38 +376,49 @@ class AIService:
         
         print(f"💬 AI Chat: {query[:50]}...")
         
-        # Build context string
+        # ── Resolve image path for vision Q&A ──
+        image_path = None
+        if isinstance(context, dict):
+            image_path = context.get('image_path')
+        
+        # ── Ask the vision model the same question (if image available) ──
+        vision_answer = ""
+        if image_path:
+            try:
+                vision_answer = query_image(image_path, query)
+            except Exception as e:
+                print(f"⚠️ Vision Q&A skipped: {e}")
+        
+        # ── Build context string from structured data ──
         if isinstance(context, dict):
             context_str = self._build_context_string(
                 text_excerpt=context.get('text_excerpt'),
                 vision=context.get('vision'),
-                components=context.get('components')
+                components=context.get('components'),
+                connections=context.get('connections'),
+                ai_summary=context.get('ai_summary'),
+                query=query,
             )
         elif isinstance(context, str):
             context_str = context
         else:
             context_str = str(context)
         
-        # Build conversation history
+        # Inject vision answer as extra context
+        if vision_answer:
+            context_str += f"\n\nVisual Observation (from looking at the image):\n{vision_answer}\n"
+        
+        # Build conversation history (keep short for VRAM)
         history_str = ""
-        for msg in chat_history[-5:]:  # Last 5 messages only
+        for msg in chat_history[-3:]:
             role = "User" if msg.get('role') == 'user' else "Assistant"
             text = msg.get('text', '') or msg.get('content', '')
             if text:
                 history_str += f"{role}: {text}\n"
         
-        # Build prompt
-        prompt = (
-            f"You are a helpful technical assistant answering questions about a document.\n\n"
-            f"Document Context:\n{context_str}\n\n"
-        )
+        prompt = build_chat_with_document_prompt(context_str, query, history_str)
         
-        if history_str:
-            prompt += f"Previous Conversation:\n{history_str}\n"
-        
-        prompt += f"User Question: {query}\n\nProvide a clear, concise answer:\n"
-        
-        answer = self._generate_text(prompt, max_tokens=350)
+        answer = self._generate_text(prompt, max_tokens=400, temperature=0.3)
         
         return {
             "status": "ok",
@@ -303,16 +479,9 @@ class AIService:
             ]
             relationship_str = "\n\nConnections:\n" + "\n".join(rel_list)
         
-        prompt = (
-            f"You are analyzing a {document_type} technical diagram.\n\n"
-            f"Components identified:\n{component_list}\n"
-            f"{relationship_str}\n\n"
-            f"Task: Provide a concise technical summary explaining what this diagram shows, "
-            f"the main components, and how they relate to each other.\n\n"
-            f"Summary:\n"
-        )
+        prompt = build_component_summary_prompt(document_type, component_list, relationship_str)
         
-        summary = self._generate_text(prompt, max_tokens=300)
+        summary = self._generate_text(prompt, max_tokens=256)
         
         return {
             "status": "ok",
@@ -363,24 +532,10 @@ class AIService:
                 "insights": []
             }
         
-        insight_prompts = {
-            "architecture": "Analyze the system architecture. What are the key design patterns and architectural decisions?",
-            "complexity": "Assess the technical complexity. What are the most complex parts and potential challenges?",
-            "optimization": "Identify potential optimization opportunities. Where could performance or efficiency be improved?",
-            "relationships": "Analyze component relationships. How do the parts interact and depend on each other?",
-            "general": "Provide key technical insights about this system. What are the most important things to understand?"
-        }
+        task = get_insight_task(insight_type)
+        prompt = build_generate_insights_prompt(context_str, task)
         
-        task = insight_prompts.get(insight_type, insight_prompts["general"])
-        
-        prompt = (
-            f"You are a senior technical analyst.\n\n"
-            f"Technical Data:\n{context_str}\n\n"
-            f"Task: {task}\n\n"
-            f"Provide 3-5 specific, actionable insights:\n"
-        )
-        
-        insights_text = self._generate_text(prompt, max_tokens=350)
+        insights_text = self._generate_text(prompt, max_tokens=256)
         
         # Parse into list if possible
         insights_list = [
