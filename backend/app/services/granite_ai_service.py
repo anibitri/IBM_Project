@@ -2,6 +2,16 @@ import torch
 from typing import Dict, List, Optional, Any
 from app.services.model_manager import manager
 from app.services.granite_vision_service import query_image
+from app.services.prompt_builder import (
+    AI_ANALYZE_SYSTEM_PROMPT,
+    AI_CHAT_SYSTEM_PROMPT,
+    get_context_analysis_task,
+    get_insight_task,
+    build_analyze_context_prompt,
+    build_chat_with_document_prompt,
+    build_component_summary_prompt,
+    build_generate_insights_prompt,
+)
 
 
 class AIService:
@@ -105,8 +115,8 @@ class AIService:
         
         # Remove any residual prompt fragments that start with known markers
         prompt_markers = [
-            "You are an expert technical analyst.",
-            "You are a helpful technical assistant",
+            AI_ANALYZE_SYSTEM_PROMPT,
+            AI_CHAT_SYSTEM_PROMPT,
             "Task:",
             "Context:",
         ]
@@ -149,14 +159,92 @@ class AIService:
                 text = text[:last_punct + 1]
         
         return text.strip()
-    
+
+    def _select_relevant_chunks(
+        self,
+        full_text: str,
+        query: str,
+        max_chars: int = 4000,
+        chunk_size: int = 600,
+    ) -> str:
+        """Select the most query-relevant portions of a long document.
+
+        Splits the text into overlapping chunks, scores each by keyword
+        overlap with the query, and returns the top-scoring chunks in
+        document order so the model gets the most useful context.
+        """
+        if not full_text or not query:
+            return (full_text or '')[:max_chars]
+
+        if len(full_text) <= max_chars:
+            return full_text
+
+        import re
+
+        # Normalise query into keyword set (words ≥ 3 chars)
+        stop_words = {
+            'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all',
+            'can', 'has', 'her', 'was', 'one', 'our', 'out', 'what',
+            'with', 'this', 'that', 'from', 'have', 'been', 'will',
+            'does', 'how', 'about', 'which', 'when', 'where', 'there',
+        }
+        query_words = {
+            w.lower()
+            for w in re.findall(r'\w+', query)
+            if len(w) >= 3 and w.lower() not in stop_words
+        }
+
+        if not query_words:
+            return full_text[:max_chars]
+
+        # Split into chunks with ~20% overlap
+        overlap = chunk_size // 5
+        chunks = []
+        pos = 0
+        while pos < len(full_text):
+            end = pos + chunk_size
+            chunk_text = full_text[pos:end]
+            chunks.append((pos, chunk_text))
+            pos += chunk_size - overlap
+
+        # Score each chunk by fraction of query keywords it contains
+        scored = []
+        for idx, (start_pos, chunk_text) in enumerate(chunks):
+            chunk_lower = chunk_text.lower()
+            hits = sum(1 for w in query_words if w in chunk_lower)
+            score = hits / len(query_words)
+            scored.append((score, idx, start_pos, chunk_text))
+
+        # Always include the first chunk (document intro) with a bonus
+        scored[0] = (scored[0][0] + 0.15, *scored[0][1:])
+
+        # Sort by score descending, pick top chunks
+        scored.sort(key=lambda x: x[0], reverse=True)
+
+        selected = []
+        total_len = 0
+        for score, idx, start_pos, chunk_text in scored:
+            if total_len + len(chunk_text) > max_chars:
+                remaining = max_chars - total_len
+                if remaining > 100:
+                    selected.append((start_pos, chunk_text[:remaining]))
+                break
+            selected.append((start_pos, chunk_text))
+            total_len += len(chunk_text)
+
+        # Re-order by document position so output reads naturally
+        selected.sort(key=lambda x: x[0])
+
+        return '\n...\n'.join(text for _, text in selected)
+
     def _build_context_string(
         self,
         text_excerpt: str = None,
         vision: Dict = None,
         components: List[Dict] = None,
         connections: List[Dict] = None,
-        ai_summary: str = None
+        ai_summary: str = None,
+        query: str = None,
     ) -> str:
         """Build a comprehensive context string from available data, kept compact for VRAM."""
         context_parts = []
@@ -166,8 +254,12 @@ class AIService:
             context_parts.append(f"Document Summary:\n{ai_summary[:1200]}\n")
 
         if text_excerpt:
-            # Allow more text so the model can actually reference document content
-            excerpt = text_excerpt[:4000]
+            # When a query is provided, select the most relevant portions
+            # of the document text instead of blindly taking the first N chars.
+            if query and len(text_excerpt) > 4000:
+                excerpt = self._select_relevant_chunks(text_excerpt, query, max_chars=4500)
+            else:
+                excerpt = text_excerpt[:4500]
             context_parts.append(f"Document Text:\n{excerpt}\n")
         
         if vision and isinstance(vision, dict):
@@ -202,9 +294,9 @@ class AIService:
                 )
         
         result = "\n".join(context_parts)
-        # Cap at ~7000 chars (~1750 tokens) to leave room for prompt + generation
-        if len(result) > 7000:
-            result = result[:7000] + "\n[Context truncated]"
+        # Cap at ~8000 chars (~2000 tokens) to leave room for prompt + generation
+        if len(result) > 8000:
+            result = result[:8000] + "\n[Context truncated]"
         return result
     
     def analyze_context(
@@ -245,24 +337,8 @@ class AIService:
                 "answer": "No content provided for analysis."
             }
         
-        # Build prompt based on context type
-        if context_type == "software":
-            task = "Analyze this software architecture diagram or code documentation. Explain the system design, key components, and their interactions."
-        elif context_type == "electronics":
-            task = "Analyze this circuit or electronics diagram. Explain the circuit function, key components, and how they work together."
-        elif context_type == "mechanical":
-            task = "Analyze this mechanical or engineering diagram. Explain the design, key parts, and their functions."
-        elif context_type == "network":
-            task = "Analyze this network or infrastructure diagram. Explain the architecture, components, and data flow."
-        else:
-            task = "Provide a comprehensive technical analysis of this document. Explain the key components and their relationships."
-        
-        prompt = (
-            f"You are an expert technical analyst.\n\n"
-            f"Context:\n{context_str}\n\n"
-            f"Task: {task}\n\n"
-            f"Provide a clear, structured analysis based ONLY on the context above:\n"
-        )
+        task = get_context_analysis_task(context_type)
+        prompt = build_analyze_context_prompt(context_str, task)
         
         answer = self._generate_text(prompt, max_tokens=400)
         
@@ -320,7 +396,8 @@ class AIService:
                 vision=context.get('vision'),
                 components=context.get('components'),
                 connections=context.get('connections'),
-                ai_summary=context.get('ai_summary')
+                ai_summary=context.get('ai_summary'),
+                query=query,
             )
         elif isinstance(context, str):
             context_str = context
@@ -339,16 +416,7 @@ class AIService:
             if text:
                 history_str += f"{role}: {text}\n"
         
-        # Build prompt
-        prompt = (
-            f"You are a helpful technical assistant answering questions about a document.\n\n"
-            f"Document Context:\n{context_str}\n\n"
-        )
-        
-        if history_str:
-            prompt += f"Previous Conversation:\n{history_str}\n"
-        
-        prompt += f"User Question: {query}\n\nProvide a clear, concise answer based ONLY on the document context above. Do not make up information. If the context doesn't cover the topic, say so. Do not generate follow-up questions or continue the conversation:\n"
+        prompt = build_chat_with_document_prompt(context_str, query, history_str)
         
         answer = self._generate_text(prompt, max_tokens=400, temperature=0.3)
         
@@ -411,14 +479,7 @@ class AIService:
             ]
             relationship_str = "\n\nConnections:\n" + "\n".join(rel_list)
         
-        prompt = (
-            f"You are analyzing a {document_type} technical diagram.\n\n"
-            f"Components identified:\n{component_list}\n"
-            f"{relationship_str}\n\n"
-            f"Task: Provide a brief and concise technical summary explaining what this diagram shows, "
-            f"the main components, and how they relate to each other.\n\n"
-            f"Summary:\n"
-        )
+        prompt = build_component_summary_prompt(document_type, component_list, relationship_str)
         
         summary = self._generate_text(prompt, max_tokens=256)
         
@@ -471,22 +532,8 @@ class AIService:
                 "insights": []
             }
         
-        insight_prompts = {
-            "architecture": "Analyze the system architecture. What are the key design patterns and architectural decisions?",
-            "complexity": "Assess the technical complexity. What are the most complex parts and potential challenges?",
-            "optimization": "Identify potential optimization opportunities. Where could performance or efficiency be improved?",
-            "relationships": "Analyze component relationships. How do the parts interact and depend on each other?",
-            "general": "Provide key technical insights about this system. What are the most important things to understand?"
-        }
-        
-        task = insight_prompts.get(insight_type, insight_prompts["general"])
-        
-        prompt = (
-            f"You are a senior technical analyst.\n\n"
-            f"Technical Data:\n{context_str}\n\n"
-            f"Task: {task}\n\n"
-            f"Provide 3-5 specific, actionable insights:\n"
-        )
+        task = get_insight_task(insight_type)
+        prompt = build_generate_insights_prompt(context_str, task)
         
         insights_text = self._generate_text(prompt, max_tokens=256)
         

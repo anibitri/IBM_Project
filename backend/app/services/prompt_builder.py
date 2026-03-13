@@ -76,6 +76,149 @@ AR_EXTRACTION_PROMPT = (
 )
 
 
+GENERAL_IMAGE_ANALYSIS_PROMPT = (
+    "Describe the image in detail and list all visible technical components."
+)
+
+
+DIAGRAM_CLASSIFICATION_PROMPT = (
+    "Is this image a technical diagram (e.g. schematic, flowchart, UML, sequence, "
+    "class diagram, activity diagram, state diagram, etc)? "
+    "Demos, photos of real-world objects, gantt charts, schedules, UI mocks, "
+    "(e.g. devices, people, screenshots, timetables, schedules) should be "
+    "classified as non-diagrams. "
+    "Answer with ONLY 'yes' or 'no'."
+)
+
+
+AI_ANALYZE_SYSTEM_PROMPT = "You are an expert technical analyst."
+AI_CHAT_SYSTEM_PROMPT = "You are a helpful technical assistant answering questions about a document."
+AI_INSIGHTS_SYSTEM_PROMPT = "You are a senior technical analyst."
+
+
+_ANALYZE_CONTEXT_TASKS = {
+    'software': (
+        'Analyze this software architecture diagram or code documentation. '
+        'Explain the system design, key components, and their interactions.'
+    ),
+    'electronics': (
+        'Analyze this circuit or electronics diagram. Explain the circuit '
+        'function, key components, and how they work together.'
+    ),
+    'mechanical': (
+        'Analyze this mechanical or engineering diagram. Explain the design, '
+        'key parts, and their functions.'
+    ),
+    'network': (
+        'Analyze this network or infrastructure diagram. Explain the architecture, '
+        'components, and data flow.'
+    ),
+    'general': (
+        'Provide a comprehensive technical analysis of this document. Explain '
+        'the key components and their relationships.'
+    ),
+}
+
+
+_INSIGHT_TASKS = {
+    'architecture': (
+        'Analyze the system architecture. What are the key design patterns and '
+        'architectural decisions?'
+    ),
+    'complexity': (
+        'Assess the technical complexity. What are the most complex parts and '
+        'potential challenges?'
+    ),
+    'optimization': (
+        'Identify potential optimization opportunities. Where could performance '
+        'or efficiency be improved?'
+    ),
+    'relationships': (
+        'Analyze component relationships. How do the parts interact and depend '
+        'on each other?'
+    ),
+    'general': (
+        'Provide key technical insights about this system. What are the most '
+        'important things to understand?'
+    ),
+}
+
+
+def build_vision_chat_text(user_prompt: str) -> str:
+    """Wrap a vision user prompt in Granite chat image format."""
+    return f"<|user|>\n<image>\n{user_prompt}\n<|assistant|>\n"
+
+
+def build_vision_qa_prompt(question: str) -> str:
+    """Build question-answering prompt for image querying."""
+    return (
+        'Look at this technical diagram carefully.\n\n'
+        f'Question: {question}\n\n'
+        'Give a direct, concise answer based on what you see in the image.'
+    )
+
+
+def get_context_analysis_task(context_type: str) -> str:
+    """Return analysis task text for a given context type."""
+    return _ANALYZE_CONTEXT_TASKS.get(context_type, _ANALYZE_CONTEXT_TASKS['general'])
+
+
+def get_insight_task(insight_type: str) -> str:
+    """Return insight task text for a given insight type."""
+    return _INSIGHT_TASKS.get(insight_type, _INSIGHT_TASKS['general'])
+
+
+def build_analyze_context_prompt(context_str: str, task: str) -> str:
+    """Build chat-model prompt for context analysis."""
+    return (
+        f"{AI_ANALYZE_SYSTEM_PROMPT}\n\n"
+        f"Context:\n{context_str}\n\n"
+        f"Task: {task}\n\n"
+        'Provide a clear, structured analysis based ONLY on the context above:\n'
+    )
+
+
+def build_chat_with_document_prompt(context_str: str, query: str, history_str: str = '') -> str:
+    """Build chat-model prompt for document Q&A."""
+    prompt = (
+        f"{AI_CHAT_SYSTEM_PROMPT}\n\n"
+        f"Document Context:\n{context_str}\n\n"
+    )
+    if history_str:
+        prompt += f"Previous Conversation:\n{history_str}\n"
+    prompt += (
+        f"User Question: {query}\n\n"
+        'Provide a clear, concise answer based ONLY on the document context '
+        "above. Do not make up information. If the context doesn't cover the "
+        'topic, say so. Do not generate follow-up questions or continue the '
+        'conversation:\n'
+    )
+    return prompt
+
+
+def build_component_summary_prompt(document_type: str, component_list: str, relationship_str: str = '') -> str:
+    """Build chat-model prompt for component summarization."""
+    return (
+        f'You are analyzing a {document_type} technical diagram.\n\n'
+        f'Components identified:\n{component_list}\n'
+        f'{relationship_str}\n\n'
+        'Task: Provide a brief and concise technical summary explaining what '
+        'this diagram shows, the main components, and how they relate to each '
+        'other.\n\n'
+        'Summary:\n'
+    )
+
+
+def build_generate_insights_prompt(context_str: str, task: str) -> str:
+    """Build chat-model prompt for insight generation."""
+    return (
+        f"{AI_INSIGHTS_SYSTEM_PROMPT}\n\n"
+        f"Technical Data:\n{context_str}\n\n"
+        f"Task: {task}\n\n"
+        'Provide 3-5 specific, actionable insights:\n'
+    )
+
+
 # ── Post-processing helpers ──
 
 _REFUSAL_MARKERS = [

@@ -101,7 +101,8 @@ export const MobileDocumentProvider = ({ children }) => {
       addMessage('user', query);
 
       const context = {
-        text_excerpt: document.text_excerpt || '',
+        text_excerpt: document.full_text || document.text_excerpt || '',
+        ai_summary: document.ai_summary || '',
         vision: document.vision || {},
         components: document.ar?.components || [],
         connections: document.ar?.connections || document.ar?.relationships?.connections || [],

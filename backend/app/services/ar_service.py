@@ -1,1399 +1,1584 @@
 """
-ar_service.py - Updated with debug output and tuned thresholds
+ar_service.py - Improved AR Component Detection & Connection Analysis
+
+Key improvements:
+1. No vision model usage (pure SAM + classical CV)
+2. Adaptive thresholds based on image characteristics
+3. Advanced connection detection using line tracing
+4. Port/terminal detection on components
+5. Graph-based relationship analysis
+6. 10-15 second total processing time
 """
 
 import numpy as np
-from PIL import Image, ImageStat
-import torch
-from typing import List, Dict, Optional
-
+import cv2
+from PIL import Image
+from typing import List, Dict, Tuple, Optional
+import logging
+from scipy.spatial.distance import cdist
+from skimage.morphology import skeletonize
+from collections import defaultdict
+import networkx as nx
 from app.services.model_manager import manager
-from app.services.prompt_builder import (
-    COMPONENT_LABEL_PROMPT,
-    build_connection_prompt,
-    clean_label,
-    make_unique_labels,
-)
 
 
-class ARService:
-    """AR component extraction and analysis"""
-    
+logger = logging.getLogger(__name__)
+
+
+class ImprovedARService:
     def __init__(self):
-        self.confidence_threshold = 0.35
-        self.min_box_area = 1000
-        self.iou_threshold = 0.35
-        self.iomin_threshold = 0.70
-        self.max_components = 50
-        self.proximity_threshold = 0.05
-
-        # Size Thresholds
-        self.max_area_ratio = 0.85
-        self.min_area_ratio = 0.004
-        self.min_dimension = 30
-        self.max_aspect_ratio = 4.0
+        self.debug = False
         
-        # Visual complexity thresholds
-        self.min_color_variance = 10.0    
-        self.min_edge_density = 0.01
+        # Adaptive thresholds (will be calculated per image)
+        self.min_component_area = 500
+        self.max_component_area = 100000
+        self.min_aspect_ratio = 0.2
+        self.max_aspect_ratio = 5.0
+        self.confidence_threshold = 0.7
 
-        # Border margin
-        self.edge_exclude_margin = 0.02
-
-        # Box tightening parameters
-        self.tighten_boxes = True
-        self.tighten_margin = 0.15          # max fraction of box dim to shrink per side
-        self.tighten_bg_threshold = 12      # pixel intensity diff from border to count as content
-
-        # Containment removal parameters
-        self.container_min_area_ratio = 0.55
-        self.container_min_children = 5
-        self.nesting_size_ratio = 1.8
-
-        # Text-region detection thresholds
-        self.text_edge_density_threshold = 0.12   # text has very dense edges
-        self.text_fill_ratio_threshold = 0.30     # text fills the box uniformly
-        self.text_max_height_px = 60              # standalone text is usually short
-        self.text_min_aspect_ratio = 2.0          # text regions are wide & short
-
-        # Empty-box detection
-        self.empty_box_max_variance = 18.0        # very low colour spread
-        self.empty_box_max_edge_density = 0.025   # almost no interior edges
-        
-        # Debug mode
-        self.debug_complexity = False  # Set to True to see rejection reasons
+        # Scene background model (estimated per image)
+        self._bg_rgb = np.array([245.0, 245.0, 245.0], dtype=np.float32)
+        self._bg_dominance = 0.0
+        self._is_light_background = True
     
-    def extract_document_features(
-        self, 
-        image_path: str, 
-        hints: List[str] = None
-    ) -> List[Dict]:
-        """Extract AR-ready components from an image."""
-        if hints is None:
-            hints = []
-        
-        try:
-            img = Image.open(image_path).convert("RGB")
-            img_width, img_height = img.size
-            
-            if manager.ar_model is None:
-                print("⚠️ SAM model not loaded")
-                return []
-            
-            # If SAM is on CPU, check whether GPU has recovered
-            manager.try_restore_sam_to_gpu()
-            
-            # Run SAM with OOM protection
-            try:
-                results = manager.ar_model(image_path)
-            except torch.cuda.OutOfMemoryError:
-                print("⚠️ SAM CUDA OOM — switching to CPU")
-                manager.move_sam_to_cpu()
-                results = manager.ar_model(image_path)
-            
-            segments = self._extract_segments(results, img_width, img_height)
-            print(f"   📦 Raw SAM detections: {len(segments)}")
-            
-            filtered = self._filter_segments(segments, img_width, img_height)
-            print(f"   ✓ After basic filtering: {len(filtered)}")
-            
-            # Tighten boxes to actual content boundaries
-            if self.tighten_boxes:
-                filtered = self._tighten_boxes(filtered, img)
-                print(f"   ✓ After box tightening: {len(filtered)}")
-            
-            img_area = img_width * img_height
-            unique = self._remove_overlaps(filtered, img_area=img_area)
-            print(f"   ✓ After NMS: {len(unique)}")
-            
-            # Remove smaller box when it is mostly covered by a larger one
-            unique = self._remove_high_overlap_pairs(unique)
-            print(f"   ✓ After IoMin overlap pass: {len(unique)}")
-            
-            # Remove larger box when a smaller one is fully contained in it
-            unique = self._remove_contained_duplicates(unique)
-            print(f"   ✓ After containment dedup: {len(unique)}")
-            
-            # NEW: Debug mode for first run
-            if self.debug_complexity:
-                print(f"\n   🔍 DEBUGGING VISUAL COMPLEXITY:")
-                self._debug_complexity_values(unique[:5], img)  # Check first 5
-            
-            complex_enough = self._filter_by_visual_complexity(unique, img)
-            print(f"   ✓ After visual complexity filtering: {len(complex_enough)}")
-            
-            components = self._normalize_components(complex_enough, img_width, img_height)
-            print(f"   ✓ Normalized to AR components: {len(components)}")
-            
-            components = self._label_components(components, image_path, hints)
-            print(f"   ✓ Labeled components: {len(components)}")
-
-            # Post-label filter: remove components whose vision label
-            # reveals they are text/annotations rather than real components
-            components = self._filter_text_labels(components)
-            print(f"   ✓ After text-label filtering: {len(components)}")
-
-            components = self._deduplicate_by_label(components)
-            print(f"   ✓ Deduplicated by label: {len(components)}")
-
-            components = components[:self.max_components]
-            
-            print(f"✅ Extracted {len(components)} AR components")
-            return components
-        
-        except Exception as e:
-            print(f"❌ AR extraction failed: {e}")
-            import traceback
-            traceback.print_exc()
+    def _run_sam(self, img_array: np.ndarray) -> List[Dict]:
+        """Run SAM via model manager and convert ultralytics output to mask dicts."""
+        if manager.ar_model is None:
+            logger.warning("SAM model not loaded in model manager")
             return []
         
-    def _filter_text_labels(self, components: List[Dict]) -> List[Dict]:
-        """Remove components whose vision-generated label suggests they are
-        standalone text, titles, or annotations rather than real diagram
-        components.
-
-        Common false positives from text detection:
-        - 'Figure 1', 'Step 3', 'Note:', section headings
-        - Long descriptive phrases the model read verbatim
-        - Pure numeric strings
-        """
-        import re
-
-        _TEXT_PATTERNS = [
-            r'^(?:figure|fig\.?|step|note|caption|title|heading)\s*\d*',
-            r'^(?:section|chapter|part|appendix)\s',
-            r'^\d+[\.\)]\s',           # numbered list items: "1. " "2) "
-            r'^[ivxlcdm]+[\.\)]\s',    # roman numeral lists
-            r'^(?:source|ref|reference|see)\s*:',
-            r'^(?:input|output)\s*$',   # bare "Input" / "Output" text labels
-        ]
-
-        keep = []
-        for comp in components:
-            label = (comp.get('label') or '').strip()
-            if not label or label.lower() in ('unknown', 'unlabeled'):
-                keep.append(comp)
-                continue
-
-            label_lower = label.lower()
-
-            # Reject if it matches a text/annotation pattern
-            matched = False
-            for pat in _TEXT_PATTERNS:
-                if re.match(pat, label_lower):
-                    matched = True
-                    break
-            if matched:
-                if self.debug_complexity:
-                    print(f"   🗑️ Text-label filter removed: '{label}'")
-                continue
-
-            # Reject very long labels (>5 words) — likely a sentence the
-            # model read from the image rather than a component name
-            if len(label.split()) > 5:
-                if self.debug_complexity:
-                    print(f"   🗑️ Long-label filter removed: '{label}'")
-                continue
-
-            keep.append(comp)
-
-        return keep
-
-    def _deduplicate_by_label(self, components: List[Dict]) -> List[Dict]:
-        """Assign unique labels – keep ALL components, append numeric suffix
-        to duplicates so the frontend can distinguish them."""
-        labels = [comp.get('label') or f"Component {i+1}" for i, comp in enumerate(components)]
-        unique_labels = make_unique_labels(labels)
-        for comp, new_label in zip(components, unique_labels):
-            comp['label'] = new_label
-        return components
-    
-    def _extract_segments(self, results, img_width: int, img_height: int) -> List[Dict]:
-        """Extract bounding boxes from SAM results"""
-        segments = []
+        results = manager.ar_model(img_array, device=manager.ar_device, verbose=False)
         
-        for r in results:
-            if not hasattr(r, 'boxes') or r.boxes is None:
+        masks = []
+        for result in results:
+            if result.masks is None:
                 continue
             
-            boxes = r.boxes
-            if not hasattr(boxes, 'xyxy') or boxes.xyxy is None:
-                continue
+            h, w = img_array.shape[:2]
+            mask_data = result.masks.data.cpu().numpy()  # (N, H, W)
             
-            box_coords = boxes.xyxy.cpu().numpy()
-            confidences = boxes.conf.cpu().numpy() if hasattr(boxes, 'conf') and boxes.conf is not None else None
-            
-            for i, box in enumerate(box_coords):
-                x1, y1, x2, y2 = float(box[0]), float(box[1]), float(box[2]), float(box[3])
-                conf = float(confidences[i]) if confidences is not None else 1.0
+            for i in range(mask_data.shape[0]):
+                seg = mask_data[i].astype(bool)
                 
-                segments.append({
-                    'box_pixels': [x1, y1, x2, y2],
-                    'confidence': conf,
-                    'area_pixels': (x2 - x1) * (y2 - y1)
+                # Resize mask if it doesn't match image dimensions
+                if seg.shape != (h, w):
+                    seg = cv2.resize(seg.astype(np.uint8), (w, h),
+                                     interpolation=cv2.INTER_NEAREST).astype(bool)
+                
+                # Compute bounding box from mask
+                ys, xs = np.where(seg)
+                if len(xs) == 0:
+                    continue
+                x_min, x_max = int(xs.min()), int(xs.max())
+                y_min, y_max = int(ys.min()), int(ys.max())
+                bbox_w = x_max - x_min
+                bbox_h = y_max - y_min
+                area = int(seg.sum())
+                
+                conf = float(result.boxes.conf[i]) if result.boxes is not None else 0.8
+                
+                masks.append({
+                    'segmentation': seg,
+                    'bbox': [x_min, y_min, bbox_w, bbox_h],
+                    'area': area,
+                    'predicted_iou': conf,
                 })
         
-        return segments
+        return masks
     
-    def _filter_segments(self, segments: List[Dict], img_width: int, img_height: int) -> List[Dict]:
-        """Filter out invalid segments"""
-        img_area = img_width * img_height
+    def extract_document_features(self, image_path: str, hints: List[str] = None):
+        """
+        Main extraction pipeline - No vision model used
+        
+        Pipeline:
+        1. Analyze image characteristics
+        2. Calculate adaptive thresholds
+        3. Run SAM segmentation
+        4. Filter and score masks
+        5. Detect component terminals/ports
+        6. Detect connecting lines/wires
+        7. Build connection graph
+        8. Analyze relationships
+        """
+        logger.info(f"📐 Extracting AR features from: {image_path}")
+        
+        # Load image
+        try:
+            img = Image.open(image_path).convert('RGB')
+        except (FileNotFoundError, OSError) as e:
+            logger.warning(f"Cannot open image: {e}")
+            return {
+                'components': [],
+                'componentCount': 0,
+                'connections': [],
+                'relationships': {},
+                'metadata': {}
+            }
+        img_array = np.array(img)
+        
+        print(f"📊 Image size: {img.width} × {img.height}")
+        
+        # Step 1: Analyze image and calculate adaptive thresholds
+        self._hint_diagram_type = None   # explicit hint from caller
+        if hints:
+            _lower = [h.lower() for h in hints]
+            if any(k in ' '.join(_lower) for k in ('sequence', 'sequence diagram', 'lifeline')):
+                self._hint_diagram_type = 'sequence'
+            elif any(k in ' '.join(_lower) for k in ('uml', 'class diagram')):
+                self._hint_diagram_type = 'uml'
+            elif any(k in ' '.join(_lower) for k in ('flowchart', 'flow chart', 'flow diagram')):
+                self._hint_diagram_type = 'flowchart'
+        self._calculate_adaptive_thresholds(img)
+        
+        # Step 2: Run SAM detection
+        print("🔍 Running SAM segmentation...")
+        masks = self._run_sam(img_array)
+        print(f"   SAM detected {len(masks)} initial masks")
+        
+        # Step 2b: Classical contour detection
+        # Only run contour supplement when diagram type was explicitly
+        # requested via hints — auto-detected types rely on SAM alone
+        # to avoid flooding with false positives on architecture diagrams.
+        if self._hint_diagram_type in ('uml', 'flowchart', 'sequence'):
+            print("🔲 Running contour-based detection...")
+            contour_masks = self._detect_contour_components(img)
+            print(f"   Contour detection found {len(contour_masks)} candidates")
+            masks = self._merge_detection_results(masks, contour_masks)
+            print(f"   Merged to {len(masks)} total masks")
+        
+        # Step 3: Filter and score masks
+        filtered_masks = self._filter_masks_adaptive(masks, img)
+        print(f"   Filtered to {len(filtered_masks)} valid components")
+        
+        # Step 4: Convert to bounding boxes with features
+        components = self._masks_to_components(filtered_masks, img)
+        print(f"   Extracted {len(components)} components")
+        
+        # Step 5: Detect terminals/ports on components
+        components = self._detect_component_terminals(components, img_array)
+        print(f"   Detected terminals on components")
+        
+        # Step 6: Detect connecting lines/wires
+        connections = self._detect_connections(components, img_array)
+        print(f"   Found {len(connections)} direct connections")
+        
+        # Step 7: Build connectivity graph
+        graph = self._build_connection_graph(components, connections)
+        
+        # Step 8: Analyze spatial relationships
+        relationships = self._analyze_relationships(components, connections, graph)
+        
+        # Strip non-serializable fields from components
+        for comp in components:
+            comp.pop('segmentation', None)
+        
+        print(f"✅ AR extraction complete: {len(components)} components, {len(connections)} connections")
+        
+        return {
+            'components': components,
+            'componentCount': len(components),
+            'connections': connections,
+            'relationships': relationships,
+            'metadata': {
+                'image_size': {'width': img.width, 'height': img.height},
+                'diagram_type': self.diagram_type,
+                'total_connections': len(connections),
+                'connected_components': len([c for c in components if c.get('connection_count', 0) > 0])
+            }
+        }
+    
+    def _calculate_adaptive_thresholds(self, img: Image.Image):
+        """Calculate thresholds based on image characteristics.
+        
+        Detects diagram type (UML, flowchart, circuit, etc.) using
+        line orientation analysis and rectangle counting.
+        """
+        rgb_array = np.array(img.convert('RGB'))
+        img_array = np.array(img.convert('L'))
+        
+        # Image statistics
+        img_area = img.width * img.height
+        overall_variance = np.var(img_array)
+        
+        # Detect edges to understand diagram complexity
+        edges = cv2.Canny(img_array, 50, 150)
+        edge_density = edges.sum() / img_area
+
+        # Build a simple global background-colour model.
+        self._estimate_background_model(rgb_array)
+        
+        # --- Line orientation analysis for diagram type detection ---
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=30,
+                                minLineLength=20, maxLineGap=5)
+        h_lines = 0   # horizontal
+        v_lines = 0   # vertical
+        d_lines = 0   # diagonal / angled
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = abs(np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi)
+                if angle < 15 or angle > 165:
+                    h_lines += 1
+                elif 75 < angle < 105:
+                    v_lines += 1
+                else:
+                    d_lines += 1
+        total_lines = h_lines + v_lines + d_lines + 1  # avoid div-0
+        hv_ratio = (h_lines + v_lines) / total_lines
+        
+        # --- Lifeline detection (sequence diagram signal) ---
+        # Cluster vertical line segments by x-position.  A real lifeline
+        # spans a significant portion of the image height; short box edges
+        # don't qualify.
+        lifeline_count = 0
+        img_h_px = img_array.shape[0]
+        if lines is not None:
+            v_line_data = []  # (x_mid, y_lo, y_hi)
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                angle = abs(np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi)
+                if 75 < angle < 105:
+                    v_line_data.append(((x1 + x2) // 2, min(y1, y2), max(y1, y2)))
+            if v_line_data:
+                v_line_data.sort(key=lambda d: d[0])
+                clusters = [[v_line_data[0]]]
+                for vld in v_line_data[1:]:
+                    if vld[0] - clusters[-1][-1][0] < 20:
+                        clusters[-1].append(vld)
+                    else:
+                        clusters.append([vld])
+                for cluster in clusters:
+                    if len(cluster) < 5:
+                        continue
+                    # Vertical span of all segments in this cluster
+                    span_lo = min(d[1] for d in cluster)
+                    span_hi = max(d[2] for d in cluster)
+                    if (span_hi - span_lo) > img_h_px * 0.50:
+                        lifeline_count += 1
+        
+        # --- Rectangle counting (strong signal for UML / flowcharts) ---
+        _, binary = cv2.threshold(img_array, 0, 255,
+                                  cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        contours_all, _ = cv2.findContours(binary, cv2.RETR_TREE,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+        rect_count = 0
+        diamond_count = 0
+        circle_count = 0
+        for c in contours_all:
+            area = cv2.contourArea(c)
+            if area < 400:
+                continue
+            peri = cv2.arcLength(c, True)
+            approx = cv2.approxPolyDP(c, 0.02 * peri, True)
+            x, y, w, h = cv2.boundingRect(c)
+            fill = area / (w * h) if w * h > 0 else 0
+            aspect = max(w, h) / (min(w, h) + 1e-6)
+            circ = (4 * np.pi * area) / (peri ** 2) if peri > 0 else 0
+            if len(approx) == 4 and fill > 0.8 and 0.3 < aspect < 3.5:
+                rect_count += 1
+            elif len(approx) == 4 and fill < 0.65 and aspect < 2.0:
+                diamond_count += 1
+            elif circ > 0.75:
+                circle_count += 1
+        
+        # --- Detect compartmented rectangles (UML class-specific) ---
+        # A compartmented rectangle has internal horizontal lines that
+        # divide it into sections.  Simple architecture blocks don't.
+        compartmented = 0
+        for c in contours_all:
+            area_c = cv2.contourArea(c)
+            if area_c < 800:
+                continue
+            xr, yr, wr, hr = cv2.boundingRect(c)
+            peri_c = cv2.arcLength(c, True)
+            approx_c = cv2.approxPolyDP(c, 0.02 * peri_c, True)
+            fill_c = area_c / (wr * hr) if wr * hr > 0 else 0
+            aspect_c = max(wr, hr) / (min(wr, hr) + 1e-6)
+            if len(approx_c) == 4 and fill_c > 0.8 and 0.3 < aspect_c < 4.0:
+                # Check for horizontal lines inside this rectangle
+                roi = img_array[yr:yr+hr, xr:xr+wr]
+                roi_edges = cv2.Canny(roi, 50, 150)
+                h_lines_inner = cv2.HoughLinesP(
+                    roi_edges, 1, np.pi / 180, threshold=20,
+                    minLineLength=int(wr * 0.5), maxLineGap=5)
+                if h_lines_inner is not None and len(h_lines_inner) >= 1:
+                    # Count lines that span most of the box width
+                    for hl in h_lines_inner:
+                        hx1, hy1, hx2, hy2 = hl[0]
+                        if abs(hy1 - hy2) < 5 and abs(hx2 - hx1) > wr * 0.4:
+                            compartmented += 1
+                            break
+        
+        # --- Classify diagram type ---
+        # Honour explicit hint first
+        _hint = getattr(self, '_hint_diagram_type', None)
+        if _hint == 'sequence':
+            self.diagram_type = 'sequence'
+            self.confidence_threshold = 0.40
+            self.min_component_area = max(200, int(img_area * 0.001))
+            self.max_component_area = int(img_area * 0.25)
+            self.max_aspect_ratio = 8.0
+            self.min_aspect_ratio = 0.10
+        elif _hint == 'uml':
+            self.diagram_type = 'uml'
+            self.confidence_threshold = 0.40
+            self.min_component_area = max(200, int(img_area * 0.001))
+            self.max_component_area = int(img_area * 0.20)
+            self.max_aspect_ratio = 6.0
+            self.min_aspect_ratio = 0.15
+        elif _hint == 'flowchart':
+            self.diagram_type = 'flowchart'
+            self.confidence_threshold = 0.40
+            self.min_component_area = max(200, int(img_area * 0.002))
+            self.max_component_area = int(img_area * 0.18)
+            self.max_aspect_ratio = 5.0
+            self.min_aspect_ratio = 0.15
+        elif (lifeline_count >= 3 and h_lines > v_lines * 2 and
+              lifeline_count >= compartmented and rect_count >= 3):
+            # Sequence diagram: parallel vertical lifelines, many horizontal messages
+            self.diagram_type = 'sequence'
+            self.confidence_threshold = 0.45
+            self.min_component_area = max(300, int(img_area * 0.002))
+            self.max_component_area = int(img_area * 0.20)
+            self.max_aspect_ratio = 8.0
+            self.min_aspect_ratio = 0.10
+        elif (hv_ratio > 0.80 and compartmented >= 3 and
+              rect_count >= 5 and diamond_count <= 1):
+            # Strong UML evidence: many compartmented rectangles
+            self.diagram_type = 'uml'
+            self.confidence_threshold = 0.45
+            self.min_component_area = max(300, int(img_area * 0.003))
+            self.max_component_area = int(img_area * 0.18)
+            self.max_aspect_ratio = 6.0
+            self.min_aspect_ratio = 0.15
+        elif (diamond_count >= 2 or
+              (diamond_count >= 1 and circle_count >= 2) or
+              (rect_count >= 5 and d_lines > total_lines * 0.20)):
+            # Strong flowchart evidence
+            self.diagram_type = 'flowchart'
+            self.confidence_threshold = 0.45
+            self.min_component_area = max(300, int(img_area * 0.003))
+            self.max_component_area = int(img_area * 0.18)
+            self.max_aspect_ratio = 5.0
+            self.min_aspect_ratio = 0.15
+        elif edge_density > 0.05:
+            self.diagram_type = 'dense'
+            self.confidence_threshold = 0.6
+            self.max_aspect_ratio = 4.0
+            self.min_component_area = max(500, int(img_area * 0.005))
+            self.max_component_area = int(img_area * 0.12)
+        elif edge_density > 0.02:
+            self.diagram_type = 'medium'
+            self.confidence_threshold = 0.5
+            self.max_aspect_ratio = 5.0
+            self.min_component_area = max(500, int(img_area * 0.005))
+            self.max_component_area = int(img_area * 0.12)
+        else:
+            self.diagram_type = 'sparse'
+            self.confidence_threshold = 0.4
+            self.max_aspect_ratio = 6.0
+            self.min_component_area = max(500, int(img_area * 0.005))
+            self.max_component_area = int(img_area * 0.12)
+        
+        print(f"📊 Diagram type detected: {self.diagram_type}")
+        if self.debug:
+            print(f"   H/V ratio: {hv_ratio:.2f}  rects: {rect_count}  diamonds: {diamond_count}  circles: {circle_count}")
+            print(f"   Lifelines: {lifeline_count}  compartmented: {compartmented}")
+            print(f"   v_lines: {v_lines}  h_lines: {h_lines}  d_lines: {d_lines}")
+            print(f"   Edge density: {edge_density:.4f}")
+            print(f"   Variance: {overall_variance:.1f}")
+            print(f"   Min area: {self.min_component_area} px²")
+            print(f"   Max area: {self.max_component_area} px²")
+
+    def _estimate_background_model(self, rgb_array: np.ndarray):
+        """Estimate dominant background colour (robust for light/dark themes)."""
+        h, w = rgb_array.shape[:2]
+        if h < 4 or w < 4:
+            return
+
+        b = max(2, min(h, w) // 18)
+        border = np.concatenate([
+            rgb_array[:b, :, :].reshape(-1, 3),
+            rgb_array[-b:, :, :].reshape(-1, 3),
+            rgb_array[:, :b, :].reshape(-1, 3),
+            rgb_array[:, -b:, :].reshape(-1, 3),
+        ], axis=0)
+
+        q = (border // 20) * 20
+        colors, counts = np.unique(q, axis=0, return_counts=True)
+        if len(colors) == 0:
+            return
+
+        idx = int(np.argmax(counts))
+        self._bg_rgb = np.clip(colors[idx].astype(np.float32) + 10.0, 0, 255)
+        self._bg_dominance = float(counts[idx] / max(len(border), 1))
+        self._is_light_background = bool(np.mean(self._bg_rgb) >= 145.0)
+
+    def _has_rect_frame(self, gray_region: np.ndarray) -> bool:
+        """Detect border frame lines to preserve text-in-box components."""
+        h, w = gray_region.shape[:2]
+        if h < 12 or w < 12:
+            return False
+
+        gx = np.abs(np.diff(gray_region, axis=1, prepend=gray_region[:, :1]))
+        gy = np.abs(np.diff(gray_region, axis=0, prepend=gray_region[:1, :]))
+        g = np.sqrt(gx ** 2 + gy ** 2)
+
+        b = max(1, min(h, w) // 12)
+        top = float(np.mean(g[:b, :] > 11))
+        bottom = float(np.mean(g[-b:, :] > 11))
+        left = float(np.mean(g[:, :b] > 11))
+        right = float(np.mean(g[:, -b:] > 11))
+
+        return (top > 0.13 and bottom > 0.13) or (left > 0.13 and right > 0.13)
+
+    def _is_background_like_region(self, rgb_region: np.ndarray) -> bool:
+        """Check whether region colour is close to estimated background."""
+        h, w = rgb_region.shape[:2]
+        if h < 2 or w < 2:
+            return False
+
+        my = max(1, int(h * 0.15))
+        mx = max(1, int(w * 0.15))
+        core = rgb_region[my:h - my, mx:w - mx] if (h > 2 * my + 2 and w > 2 * mx + 2) else rgb_region
+
+        mean_rgb = np.mean(core, axis=(0, 1)).astype(np.float32)
+        spread = float(np.mean(np.std(core, axis=(0, 1))))
+        dist = float(np.linalg.norm(mean_rgb - self._bg_rgb))
+
+        threshold = 38.0 if self._bg_dominance > 0.25 else 32.0
+        return dist < threshold and spread < 34.0
+
+    def _looks_like_floating_text(
+        self,
+        gray_region: np.ndarray,
+        rgb_region: np.ndarray,
+        norm_area: float,
+    ) -> bool:
+        """Reject floating text areas while keeping real text-containing boxes."""
+        h, w = gray_region.shape[:2]
+        if h < 10 or w < 16:
+            return False
+
+        if not self._is_background_like_region(rgb_region):
+            return False
+
+        # Preserve any framed/boxed container with text.
+        if self._has_rect_frame(gray_region):
+            return False
+
+        gx = np.abs(np.diff(gray_region, axis=1, prepend=gray_region[:, :1]))
+        gy = np.abs(np.diff(gray_region, axis=0, prepend=gray_region[:1, :]))
+        grad = np.sqrt(gx ** 2 + gy ** 2)
+
+        border = np.concatenate([
+            gray_region[0, :], gray_region[-1, :], gray_region[:, 0], gray_region[:, -1]
+        ])
+        bg_val = float(np.median(border))
+        content = np.abs(gray_region - bg_val) > 18
+        fill_ratio = float(np.mean(content))
+
+        row_density = np.mean(content, axis=1)
+        active = row_density > 0.08
+        transitions = np.diff(active.astype(np.int32), prepend=0, append=0)
+        text_bands = int(np.sum(transitions == 1))
+
+        border_support = float(np.mean(grad[[0, -1], :] > 11) + np.mean(grad[:, [0, -1]] > 11)) * 0.5
+        center_dense = float(np.mean(grad > 10))
+
+        if self._is_light_background:
+            return (
+                norm_area < 0.10 and
+                text_bands >= 1 and
+                border_support < 0.11 and
+                0.02 <= fill_ratio <= 0.58 and
+                center_dense > 0.03
+            )
+
+        return (
+            norm_area < 0.08 and
+            text_bands >= 2 and
+            border_support < 0.10 and
+            fill_ratio <= 0.55
+        )
+    
+    def _filter_masks_adaptive(self, masks: List[Dict], img: Image.Image) -> List[Dict]:
+        """Filter masks using multi-factor scoring"""
+        img_array = np.array(img.convert('L'))
+        img_rgb = np.array(img.convert('RGB'))
         filtered = []
         
-        for seg in segments:
-            x1, y1, x2, y2 = seg['box_pixels']
-            width_px = x2 - x1
-            height_px = y2 - y1
-            area_ratio = seg['area_pixels'] / img_area
+        for mask in masks:
+            # Extract mask region
+            segmentation = mask['segmentation']
+            bbox = mask['bbox']  # [x, y, w, h]
             
-            # Filter: low confidence
-            if seg['confidence'] < self.confidence_threshold:
-                continue
+            # Calculate score
+            score = self._calculate_mask_score(mask, segmentation, img_array, img_rgb)
             
-            # Filter: too small (absolute)
-            if seg['area_pixels'] < self.min_box_area:
-                if self.debug_complexity:
-                    print(f"   🗑️ Too small (area): {seg['box_pixels']} area={seg['area_pixels']:.0f}")
-                continue
-            
-            # Filter: too small relative to image
-            if area_ratio < self.min_area_ratio:
-                if self.debug_complexity:
-                    print(f"   🗑️ Too small (ratio): {seg['box_pixels']} ratio={area_ratio:.4f}")
-                continue
-            
-            # Filter: too large (background)
-            if seg['area_pixels'] > img_area * self.max_area_ratio:
-                continue
-            
-            # Filter: extreme aspect ratios (lines, thin rectangles)
-            aspect_ratio = max(width_px, height_px) / max(min(width_px, height_px), 1)
-            if aspect_ratio > self.max_aspect_ratio:
-                continue
-            
-            # Filter: too small in either dimension
-            if width_px < self.min_dimension or height_px < self.min_dimension:
-                if self.debug_complexity:
-                    print(f"   🗑️ Too small (dim): {seg['box_pixels']} w={width_px:.0f} h={height_px:.0f}")
-                continue
-            
-            # Filter: components touching or very close to image border
-            # These are often grid artifacts, partial elements, or decorations
-            norm_x1 = x1 / img_width
-            norm_y1 = y1 / img_height
-            norm_x2 = x2 / img_width
-            norm_y2 = y2 / img_height
-            margin = self.edge_exclude_margin
-            
-            # Only reject border components if they are SMALL
-            # (large real components near edges should be kept)
-            if area_ratio < 0.008:  # For small boxes near edges
-                if (norm_y2 > 1.0 - margin or norm_y1 < margin or
-                    norm_x1 < margin or norm_x2 > 1.0 - margin):
-                    if self.debug_complexity:
-                        print(f"   🗑️ Border artifact: {seg['box_pixels']} area_ratio={area_ratio:.4f}")
-                    continue
-            
-            # Filter: edge artifacts (thin slivers at borders)
-            if x1 < 5 or y1 < 5 or x2 > img_width - 5 or y2 > img_height - 5:
-                edge_margin = 10
-                if width_px < edge_margin or height_px < edge_margin:
-                    continue
-            
-            filtered.append(seg)
+            # Only lower keep-threshold when there's an explicit hint
+            _hint = getattr(self, '_hint_diagram_type', None)
+            if _hint in ('uml', 'flowchart', 'sequence'):
+                keep_threshold = 0.40
+            else:
+                keep_threshold = self.confidence_threshold
+            if score > keep_threshold:  # Threshold for keeping mask
+                mask['quality_score'] = score
+                filtered.append(mask)
+        
+        # Sort by score and apply NMS
+        filtered.sort(key=lambda x: x['quality_score'], reverse=True)
+        filtered = self._non_maximum_suppression(filtered)
         
         return filtered
     
-    def _tighten_boxes(self, segments: List[Dict], img: Image.Image) -> List[Dict]:
-        """Shrink bounding boxes inward to fit the actual component content.
+    def _calculate_mask_score(
+        self,
+        mask: Dict,
+        segmentation: np.ndarray,
+        img_array: np.ndarray,
+        img_rgb: np.ndarray,
+    ) -> float:
+        """Multi-factor quality score for mask"""
         
-        SAM often produces boxes that extend beyond the real component edges.
-        This analyses gradient activity along each border strip and contracts
-        the box inward until it reaches rows/columns with real content.
-        """
-        tightened = []
-        img_arr = np.array(img.convert('L'), dtype=np.float32)
+        # Get bounding box
+        x, y, w, h = mask['bbox']
+        area = mask['area']
+        img_h, img_w = img_array.shape[:2]
+        img_area = img_h * img_w
         
-        for seg in segments:
-            x1, y1, x2, y2 = [int(c) for c in seg['box_pixels']]
-            box_w = x2 - x1
-            box_h = y2 - y1
-            
-            if box_w < 10 or box_h < 10:
-                tightened.append(seg)
-                continue
-            
-            crop = img_arr[y1:y2, x1:x2]
-            
-            # Maximum pixels we're willing to trim per side
-            max_trim_x = int(box_w * self.tighten_margin)
-            max_trim_y = int(box_h * self.tighten_margin)
-            
-            # Determine the dominant border colour (median of outermost ring)
-            border_pixels = np.concatenate([
-                crop[0, :], crop[-1, :], crop[:, 0], crop[:, -1]
-            ])
-            bg_val = float(np.median(border_pixels))
-            
-            # Shrink from left
-            trim_left = 0
-            for col in range(min(max_trim_x, crop.shape[1] - 1)):
-                col_diff = np.mean(np.abs(crop[:, col] - bg_val))
-                if col_diff > self.tighten_bg_threshold:
-                    break
-                trim_left = col + 1
-            
-            # Shrink from right
-            trim_right = 0
-            for col in range(crop.shape[1] - 1, max(crop.shape[1] - 1 - max_trim_x, 0), -1):
-                col_diff = np.mean(np.abs(crop[:, col] - bg_val))
-                if col_diff > self.tighten_bg_threshold:
-                    break
-                trim_right = crop.shape[1] - col
-            
-            # Shrink from top
-            trim_top = 0
-            for row in range(min(max_trim_y, crop.shape[0] - 1)):
-                row_diff = np.mean(np.abs(crop[row, :] - bg_val))
-                if row_diff > self.tighten_bg_threshold:
-                    break
-                trim_top = row + 1
-            
-            # Shrink from bottom
-            trim_bottom = 0
-            for row in range(crop.shape[0] - 1, max(crop.shape[0] - 1 - max_trim_y, 0), -1):
-                row_diff = np.mean(np.abs(crop[row, :] - bg_val))
-                if row_diff > self.tighten_bg_threshold:
-                    break
-                trim_bottom = crop.shape[0] - row
-            
-            new_x1 = x1 + trim_left
-            new_y1 = y1 + trim_top
-            new_x2 = x2 - trim_right
-            new_y2 = y2 - trim_bottom
-            
-            new_w = new_x2 - new_x1
-            new_h = new_y2 - new_y1
-            
-            # Safety: don't tighten to something too small
-            if new_w >= self.min_dimension and new_h >= self.min_dimension:
-                # Also reject if tightening created a bad aspect ratio
-                aspect = max(new_w, new_h) / max(min(new_w, new_h), 1)
-                if aspect <= self.max_aspect_ratio:
-                    seg = dict(seg)  # copy
-                    seg['box_pixels'] = [float(new_x1), float(new_y1), float(new_x2), float(new_y2)]
-                    seg['area_pixels'] = float(new_w * new_h)
-            
-            tightened.append(seg)
+        # Pre-compute border-touching flag (used in multiple checks)
+        border_margin = 3
+        touches_any_border = (
+            x <= border_margin or y <= border_margin or
+            (x + w) >= img_w - border_margin or (y + h) >= img_h - border_margin
+        )
         
-        return tightened
+        # Hard reject: mask covers > 40% of image (background)
+        if area / img_area > 0.40:
+            return 0.0
+        
+        # Hard reject: bounding box spans > 80% in both dims (full-image)
+        if w / img_w > 0.80 and h / img_h > 0.80:
+            return 0.0
+        
+        # Hard reject: normalised bbox area too small or too large
+        # Only use relaxed thresholds when there's an explicit hint
+        norm_area = (w * h) / img_area
+        _hint = getattr(self, '_hint_diagram_type', None)
+        _min_norm = 0.001 if _hint in ('uml', 'flowchart', 'sequence') else 0.004
+        _max_norm = 0.25  if _hint in ('uml', 'flowchart', 'sequence') else 0.20
+        if norm_area < _min_norm:
+            return 0.0
+        if norm_area > _max_norm:
+            return 0.0
+        
+        # Hard reject: thin bands touching borders (title bars, borders, margins)
+        aspect_ratio_raw = max(w, h) / (min(w, h) + 1e-6)
+        if aspect_ratio_raw > 6.0 and touches_any_border:
+            return 0.0
+        
+        # Hard reject: large irregular blobs (merged segments covering multiple components)
+        # Real components are roughly rectangular; blobs have low fill ratio
+        if norm_area > 0.08:
+            bbox_pixel_area = w * h
+            fill_ratio = area / bbox_pixel_area if bbox_pixel_area > 0 else 0
+            if fill_ratio < 0.6:
+                return 0.0
+        
+        # Factor 1: Size appropriateness (0-1)
+        if area < self.min_component_area:
+            size_score = 0.0
+        elif area > self.max_component_area:
+            size_score = 0.0
+        else:
+            relative_area = area / img_area
+            if _hint in ('uml', 'flowchart', 'sequence'):
+                # Relaxed only with explicit hint
+                if 0.002 < relative_area < 0.08:
+                    size_score = 1.0
+                elif 0.001 < relative_area <= 0.002:
+                    size_score = 0.7
+                elif relative_area < 0.001:
+                    size_score = 0.3
+                else:
+                    size_score = 0.5
+            else:
+                if 0.005 < relative_area < 0.05:
+                    size_score = 1.0
+                elif 0.003 < relative_area <= 0.005:
+                    size_score = 0.7
+                elif relative_area < 0.003:
+                    size_score = 0.0
+                else:
+                    size_score = 0.5
+        
+        # Factor 2: Aspect ratio (0-1)
+        aspect_ratio = max(w, h) / (min(w, h) + 1e-6)
+        if self.min_aspect_ratio < aspect_ratio < self.max_aspect_ratio:
+            aspect_score = 1.0
+        else:
+            aspect_score = max(0.0, 1.0 - abs(aspect_ratio - 3.0) / 10)
+        
+        # Factor 3: Edge density (components should have clear edges)
+        y1, y2 = max(0, y), min(img_h, y + h)
+        x1, x2 = max(0, x), min(img_w, x + w)
+        region = img_array[y1:y2, x1:x2]
+        region_rgb = img_rgb[y1:y2, x1:x2] if img_rgb.size > 0 else np.zeros((0, 0, 3), dtype=np.uint8)
+
+        # Hard reject floating background-text regions, but keep boxed components with text.
+        if region.size > 0 and region_rgb.size > 0:
+            if self._looks_like_floating_text(region.astype(np.float32), region_rgb, norm_area):
+                return 0.0
+        
+        if region.size > 0:
+            edges = cv2.Canny(region, 50, 150)
+            edge_density = edges.sum() / region.size
+            edge_score = min(1.0, edge_density * 500)
+        else:
+            edge_score = 0.0
+        
+        # Factor 4: Texture complexity (avoid blank regions)
+        if region.size > 0:
+            texture_variance = np.var(region)
+            texture_score = min(1.0, texture_variance / 100)
+        else:
+            texture_score = 0.0
+        
+        # Hard reject: empty gap regions (hollow inside)
+        # In sequence diagrams, SAM segments the space between vertical lifelines.
+        # These regions are uniform inside regardless of boundary edges.
+        # Sequence diagram gaps contain dashed lifelines and stray message arrows
+        # which create some edge content (density 1-6), so use relaxed thresholds.
+        if region.size > 0:
+            rh, rw = region.shape[:2]
+            if rh >= 6 and rw >= 6:
+                # Shrink the region inward by ~15% on each side
+                margin_x = max(3, int(rw * 0.15))
+                margin_y = max(3, int(rh * 0.15))
+                interior = region[margin_y:rh - margin_y, margin_x:rw - margin_x]
+                if interior.size > 0:
+                    interior_edges = cv2.Canny(interior, 50, 150)
+                    interior_edge_density = interior_edges.sum() / interior.size
+                    interior_variance = np.var(interior)
+                    _diag = getattr(self, 'diagram_type', 'medium')
+                    if _diag == 'sequence':
+                        # Sequence gaps have sparse dashed lines (density 1-6, var 100-700)
+                        # Real components have dense text/edges (density 14+, var 900+)
+                        if interior_edge_density < 8 and interior_variance < 800:
+                            return 0.0
+                    else:
+                        if interior_edge_density < 0.002 and interior_variance < 15:
+                            return 0.0
+        
+        # Factor 5: Shape compactness (prefer regular shapes)
+        contours_found = cv2.findContours(
+            segmentation.astype(np.uint8), 
+            cv2.RETR_EXTERNAL, 
+            cv2.CHAIN_APPROX_SIMPLE
+        )[0]
+        
+        if len(contours_found) > 0:
+            perimeter = cv2.arcLength(contours_found[0], True)
+        else:
+            perimeter = 0
+        
+        if perimeter > 0:
+            compactness = (4 * np.pi * area) / (perimeter ** 2)
+            compactness_score = min(1.0, compactness)
+        else:
+            compactness_score = 0.5
+        
+        # Factor 6: Border penalty — only penalise very large masks that touch edges
+        # Small/medium components at the edge are fine (e.g. CLK at right side)
+        mask_area_ratio = area / img_area  # use actual mask area, not bbox
+        if touches_any_border and mask_area_ratio > 0.15:
+            # Very large mask touching border = likely background
+            border_penalty = 0.3
+        elif touches_any_border and mask_area_ratio > 0.10:
+            border_penalty = 0.1
+        else:
+            border_penalty = 0.0
+        
+        # Weighted composite score (capped at 1.0)
+        total_score = (
+            0.25 * size_score +
+            0.20 * aspect_score +
+            0.20 * edge_score +
+            0.15 * texture_score +
+            0.10 * compactness_score +
+            0.10 * min(1.0, mask.get('predicted_iou', 0.8))
+        ) - border_penalty
+        
+        total_score = max(0.0, min(1.0, total_score))
+        
+        if self.debug and total_score > 0.3:
+            print(f"Mask score: {total_score:.2f} (size={size_score:.2f}, aspect={aspect_score:.2f}, edge={edge_score:.2f}, texture={texture_score:.2f}, compact={compactness_score:.2f}, border={border_penalty:.2f}, area%={norm_area*100:.1f})")
+        
+        return total_score
     
-    def _debug_complexity_values(self, segments: List[Dict], img: Image.Image):
-        """Debug: show actual complexity values for tuning thresholds"""
-        for i, seg in enumerate(segments):
-            x1, y1, x2, y2 = [int(c) for c in seg['box_pixels']]
-            crop = img.crop((x1, y1, x2, y2))
-            
-            # Color variance
-            gray = crop.convert('L')
-            stat = ImageStat.Stat(gray)
-            variance = stat.stddev[0]
-            
-            # Edge density — match the actual filter logic (threshold 8, float32)
-            arr = np.array(gray, dtype=np.float32)
-            dx = np.diff(arr, axis=1, prepend=arr[:, :1])
-            dy = np.diff(arr, axis=0, prepend=arr[:1, :])
-            edges = np.sqrt(dx**2 + dy**2)
-            edge_pixels = np.sum(edges > 8)
-            edge_density = edge_pixels / arr.size
-            
-            area_ratio = seg['area_pixels'] / (img.size[0] * img.size[1])
-            
-            # print(f"      Segment {i}: box={seg['box_pixels']}, variance={variance:.1f}, edge_density={edge_density:.4f}, area_ratio={area_ratio:.3f}")
-    
-    def _filter_by_visual_complexity(self, segments: List[Dict], img: Image.Image) -> List[Dict]:
-        """
-        Filter out visually simple regions (background/grid artifacts),
-        standalone text labels, and empty boxes.
-        
-        Large components are always kept — solid-coloured boxes (CPU, GPU, etc.)
-        have low grayscale variance and few edges but are real components.
-        Only small detections are subjected to the full complexity pipeline.
-        """
-        img_area = img.size[0] * img.size[1]
-        # Components larger than this fraction of the image skip complexity checks
-        # Raised from 0.015 → 0.04 so medium boxes still get checked
-        complexity_bypass_area = 0.04
-        
-        complex_segments = []
-        
-        for seg in segments:
-            area_ratio = seg['area_pixels'] / img_area
-            x1, y1, x2, y2 = [int(c) for c in seg['box_pixels']]
-            crop = img.crop((x1, y1, x2, y2))
-            w_px = x2 - x1
-            h_px = y2 - y1
-            
-            # ── 1. Reject standalone text regions ──
-            if self._is_text_region(crop, w_px, h_px, area_ratio):
-                if self.debug_complexity:
-                    print(f"   🗑️ Text region rejected: [{x1},{y1},{x2},{y2}] {w_px}x{h_px}")
-                continue
-            
-            # ── 2. Reject empty / near-empty boxes ──
-            if self._is_empty_box(crop, area_ratio):
-                if self.debug_complexity:
-                    print(f"   🗑️ Empty box rejected: [{x1},{y1},{x2},{y2}]")
-                continue
-            
-            # ── 3. Large components skip remaining complexity checks ──
-            if area_ratio >= complexity_bypass_area:
-                complex_segments.append(seg)
-                continue
-            
-            # ── 4. Standard complexity check for small detections ──
-            has_color_variance = self._has_sufficient_color_variance(crop)
-            has_edges = self._has_sufficient_edges(crop)
-            
-            if has_color_variance or has_edges:
-                complex_segments.append(seg)
-            elif self.debug_complexity:
-                print(f"   🗑️ Visual complexity fail: [{x1},{y1},{x2},{y2}] area_r={area_ratio:.4f}")
-        
-        return complex_segments
-
-    def _is_text_region(self, crop: Image.Image, w_px: int, h_px: int, area_ratio: float) -> bool:
-        """Detect standalone text labels, titles, or annotations.
-
-        Text regions are characterised by:
-        - High edge density (every character is an edge)
-        - High fill ratio (content distributed uniformly, no hollow interior)
-        - Typically short height or extreme width-to-height aspect ratio
-        - Small overall area (real component boxes are bigger)
-
-        Returns True if this crop looks like a text label rather than a
-        diagram component.
-        """
-        # Large boxes are rarely just text
-        if area_ratio > 0.05:
-            return False
-
-        aspect = max(w_px, h_px) / max(min(w_px, h_px), 1)
-
-        # ── Colour saturation guard ──
-        # Coloured shapes (circles, hexagons with fills) look like text
-        # in grayscale but are real diagram components.  Measure how much
-        # the R, G, B channels differ from each other in the interior.
-        rgb_arr = np.array(crop, dtype=np.float32)
-        rh, rw = rgb_arr.shape[:2]
-        my = max(int(rh * 0.2), 3)
-        mx = max(int(rw * 0.2), 3)
-        if rh > my * 2 + 2 and rw > mx * 2 + 2:
-            inner_rgb = rgb_arr[my:-my, mx:-mx]
-            channel_means = [float(np.mean(inner_rgb[:, :, c])) for c in range(3)]
-            channel_spread = float(np.std(channel_means))
-            # If the interior is distinctly coloured, this is NOT text
-            if channel_spread >= 5.0:
-                return False
-
-        gray = crop.convert('L')
-        arr = np.array(gray, dtype=np.float32)
-
-        # Edge density
-        dx = np.diff(arr, axis=1, prepend=arr[:, :1])
-        dy = np.diff(arr, axis=0, prepend=arr[:1, :])
-        edges = np.sqrt(dx ** 2 + dy ** 2)
-        edge_pixels = np.sum(edges > 10)
-        edge_density = edge_pixels / max(arr.size, 1)
-
-        # Fill ratio: fraction of non-background pixels.
-        # Background = the dominant border colour.
-        border_pixels = np.concatenate([arr[0, :], arr[-1, :], arr[:, 0], arr[:, -1]])
-        bg_val = float(np.median(border_pixels))
-        content_mask = np.abs(arr - bg_val) > 20
-        fill_ratio = np.sum(content_mask) / max(arr.size, 1)
-
-        # Heuristic rule set:
-        # A) Very high edge density + wide & short  →  text
-        if (edge_density > self.text_edge_density_threshold
-                and aspect >= self.text_min_aspect_ratio
-                and h_px <= self.text_max_height_px):
-            return True
-
-        # B) High edge density + high fill ratio + small area  →  text
-        #    Only applies to achromatic (grey/black/white) regions.
-        if (edge_density > self.text_edge_density_threshold
-                and fill_ratio > self.text_fill_ratio_threshold
-                and area_ratio < 0.015):
-            return True
-
-        # C) Extremely high edge density alone (dense paragraph/title block)
-        if edge_density > 0.25 and area_ratio < 0.03:
-            return True
-
-        return False
-
-    def _is_empty_box(self, crop: Image.Image, area_ratio: float) -> bool:
-        """Detect empty or near-empty boxes (uniform colour, no content).
-
-        Returns True if the box interior is essentially blank — very low
-        grayscale variance AND almost no edge activity AND no colour.
-
-        Important: coloured boxes (solid fills like red, blue, green) have
-        low *grayscale* variance but are real diagram components.  We check
-        the RGB colour range of the interior to avoid rejecting them.
-        """
-        # ── Colour guard: coloured fills are NOT empty ──
-        rgb_arr = np.array(crop)
-        h_px, w_px = rgb_arr.shape[:2]
-
-        # Use a proportional margin (10% of each dim, min 5px) so we clear
-        # dark borders / outlines and inspect the actual interior.
-        margin_y = max(int(h_px * 0.10), 5)
-        margin_x = max(int(w_px * 0.10), 5)
-
-        # Need enough room for an interior region
-        if h_px <= margin_y * 2 + 4 or w_px <= margin_x * 2 + 4:
-            return False  # too small to judge
-
-        inner_rgb = rgb_arr[margin_y:-margin_y, margin_x:-margin_x]
-        # Colour range: max peak-to-peak across R, G, B channels
-        color_range = max(int(np.ptp(inner_rgb[:, :, c])) for c in range(3))
-
-        # If the interior is colourful (> 80 range in any channel) it's a
-        # real component with a coloured fill, not an empty box.
-        if color_range > 80:
-            return False
-
-        # ── Grayscale checks (only reach here if box is NOT colourful) ──
-        gray = crop.convert('L')
-        arr = np.array(gray, dtype=np.float32)
-        stat = ImageStat.Stat(gray)
-        variance = stat.stddev[0]
-
-        dx = np.diff(arr, axis=1, prepend=arr[:, :1])
-        dy = np.diff(arr, axis=0, prepend=arr[:1, :])
-        edges = np.sqrt(dx ** 2 + dy ** 2)
-        edge_density = np.sum(edges > 8) / max(arr.size, 1)
-
-        # A truly empty box has low variance AND almost no edges inside
-        if variance < self.empty_box_max_variance and edge_density < self.empty_box_max_edge_density:
-            return True
-
-        # Also catch boxes that have a border outline but nothing inside
-        inner_gray = arr[margin_y:-margin_y, margin_x:-margin_x]
-        dx_i = np.diff(inner_gray, axis=1, prepend=inner_gray[:, :1])
-        dy_i = np.diff(inner_gray, axis=0, prepend=inner_gray[:1, :])
-        inner_edges = np.sqrt(dx_i ** 2 + dy_i ** 2)
-        inner_edge_density = np.sum(inner_edges > 8) / max(inner_gray.size, 1)
-        inner_var = float(np.std(inner_gray))
-
-        if inner_var < 8.0 and inner_edge_density < 0.008:
-            return True
-
-        return False
-    
-    def _has_sufficient_color_variance(self, crop: Image.Image) -> bool:
-        """
-        Check if region has enough color variation.
-        Checks both grayscale variance AND RGB colour range so that
-        solid-coloured fills (blue, red, green) pass even though their
-        grayscale variance is low.
-        """
-        try:
-            # Grayscale variance check
-            gray = crop.convert('L')
-            stat = ImageStat.Stat(gray)
-            if stat.stddev[0] > self.min_color_variance:
-                return True
-
-            # RGB colour check: if any channel has wide range, there's real colour
-            rgb_arr = np.array(crop)
-            for c in range(3):
-                if np.ptp(rgb_arr[:, :, c]) > 60:
-                    return True
-
-            return False
-        
-        except Exception as e:
-            return True
-    
-    def _has_sufficient_edges(self, crop: Image.Image) -> bool:
-        """
-        Check if region has enough edge content.
-        Lowered threshold: 0.003 instead of 0.02.
-        """
-        try:
-            gray = crop.convert('L')
-            arr = np.array(gray, dtype=np.float32)
-            
-            # Gradient magnitude
-            dx = np.diff(arr, axis=1, prepend=arr[:, :1])
-            dy = np.diff(arr, axis=0, prepend=arr[:1, :])
-            edges = np.sqrt(dx**2 + dy**2)
-            
-            # Count edges — lowered pixel gradient threshold from 20 to 8
-            edge_pixels = np.sum(edges > 8)
-            total_pixels = arr.size
-            edge_density = edge_pixels / total_pixels
-            
-            return edge_density > self.min_edge_density
-        
-        except Exception as e:
-            return True
-    
-    def _remove_overlaps(self, segments: List[Dict], img_area: float = None) -> List[Dict]:
-        """Remove overlapping boxes using nesting-aware NMS.
-        
-        Preserves nested (encapsulated) components: if a small box is clearly
-        inside a larger one and their sizes differ significantly, both are kept.
-        Only true duplicates (similar-sized, high-IoU boxes) are suppressed.
-        """
-        if not segments:
+    def _non_maximum_suppression(self, masks: List[Dict], iou_threshold: float = 0.3) -> List[Dict]:
+        """Remove overlapping and contained masks using mask IoU and containment."""
+        if len(masks) == 0:
             return []
         
-        segments = sorted(segments, key=lambda x: x['confidence'], reverse=True)
-        
-        # Step 1: Remove near-full-image background boxes only
-        # Only discard a box if it covers >55% of the image AND contains
-        # many other detections (clearly just the page/canvas background).
-        non_background = []
-        for i, seg in enumerate(segments):
-            is_background = False
+        keep = []
+        while masks:
+            current = masks.pop(0)
+            keep.append(current)
             
-            if img_area and seg['area_pixels'] > img_area * self.container_min_area_ratio:
-                contained_count = 0
-                for j, other in enumerate(segments):
-                    if i == j:
-                        continue
-                    if self._contains(seg['box_pixels'], other['box_pixels']):
-                        contained_count += 1
+            remaining = []
+            for m in masks:
+                iou = self._calculate_iou(current, m)
+                # Check containment in both directions
+                containment_in_current = self._calculate_containment(current, m)
+                containment_of_current = self._calculate_containment(m, current)
+                max_containment = max(containment_in_current, containment_of_current)
                 
-                if contained_count >= self.container_min_children:
-                    is_background = True
-                    if self.debug_complexity:
-                        ratio = seg['area_pixels'] / img_area if img_area else 0
-                        print(f"   🗑️ Removing background box: {seg['box_pixels']} (contains {contained_count} others, area_ratio={ratio:.2f})")
-            
-            if not is_background:
-                non_background.append(seg)
-        
-        if not non_background:
-            non_background = segments
-        
-        # Step 2: Nesting-aware NMS
-        # If two boxes overlap but one is nested inside the other (encapsulation),
-        # keep both. Only suppress when boxes are similar in size (true duplicates).
-        kept = []
-        for seg in non_background:
-            should_keep = True
-            for kept_seg in kept:
-                iou = self._calculate_iou(seg['box_pixels'], kept_seg['box_pixels'])
-                if iou > self.iou_threshold:
-                    # High overlap — but is this nesting or duplication?
-                    if self._is_nested(seg['box_pixels'], kept_seg['box_pixels']):
-                        # Encapsulation: keep both boxes
-                        continue
-                    else:
-                        # True duplicate: suppress the lower-confidence one
-                        should_keep = False
-                        if self.debug_complexity:
-                            print(f"   🗑️ NMS removed box {seg['box_pixels']} (IoU={iou:.2f} with {kept_seg['box_pixels']})")
-                        break
-            
-            if should_keep:
-                kept.append(seg)
-        
-        return kept
-    
-    def _remove_high_overlap_pairs(self, segments: List[Dict]) -> List[Dict]:
-        """Remove boxes that are mostly covered by another larger box.
-        
-        Uses intersection-over-minimum-area (IoMin) instead of IoU.
-        IoMin catches cases where a small box is almost entirely inside a
-        bigger one but IoU is low because the bigger box is much larger.
-        When IoMin > threshold and the boxes are similar in size, the lower-
-        confidence one is dropped.
-        """
-        if len(segments) < 2:
-            return segments
-        
-        to_remove = set()
-        for i, seg_a in enumerate(segments):
-            if i in to_remove:
-                continue
-            for j, seg_b in enumerate(segments):
-                if j <= i or j in to_remove:
+                # Suppress if mask overlap or containment is too high
+                if iou >= iou_threshold or max_containment >= 0.65:
                     continue
-                iomin = self._calculate_iomin(seg_a['box_pixels'], seg_b['box_pixels'])
-                if iomin > self.iomin_threshold:
-                    # High overlap — drop the lower-confidence one
-                    if seg_a['confidence'] >= seg_b['confidence']:
-                        to_remove.add(j)
-                    else:
-                        to_remove.add(i)
-                        break
+                remaining.append(m)
+            masks = remaining
         
-        result = [s for i, s in enumerate(segments) if i not in to_remove]
-        return result
+        return keep
     
-    def _calculate_iomin(self, box1: List[float], box2: List[float]) -> float:
-        """Intersection area / area of the smaller box."""
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
+    def _calculate_containment(self, mask1: Dict, mask2: Dict) -> float:
+        """Calculate how much of mask2 is contained within mask1."""
+        seg1 = mask1['segmentation']
+        seg2 = mask2['segmentation']
         
-        if x2 <= x1 or y2 <= y1:
-            return 0.0
+        intersection = np.logical_and(seg1, seg2).sum()
+        area2 = seg2.sum()
         
-        inter = (x2 - x1) * (y2 - y1)
-        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        min_area = min(area1, area2)
-        
-        return inter / min_area if min_area > 0 else 0.0
+        return intersection / area2 if area2 > 0 else 0.0
     
-    def _remove_contained_duplicates(self, segments: List[Dict]) -> List[Dict]:
-        """Remove the larger box when it contains MULTIPLE smaller ones.
+    def _calculate_iou(self, mask1: Dict, mask2: Dict) -> float:
+        """Calculate intersection over union for two masks"""
+        seg1 = mask1['segmentation']
+        seg2 = mask2['segmentation']
         
-        After NMS, there can still be pairs where one box fully contains
-        another but IoU was below the NMS threshold (because the outer box
-        is much larger).  In architecture diagrams these outer boxes are
-        often bad SAM detections spanning multiple components.
+        intersection = np.logical_and(seg1, seg2).sum()
+        union = np.logical_or(seg1, seg2).sum()
         
-        However, in nested/hierarchical diagrams a large box that contains
-        only ONE child is typically a real parent component, so we keep it.
-        Only remove an outer box when it contains 2+ children — that signals
-        a spurious multi-component span rather than a genuine container.
-        """
-        if len(segments) < 2:
-            return segments
-        
-        def geo_contains(outer, inner, margin=15.0):
-            """Pure geometric containment – no area-ratio gate."""
-            return (
-                outer[0] <= inner[0] + margin and
-                outer[1] <= inner[1] + margin and
-                outer[2] >= inner[2] - margin and
-                outer[3] >= inner[3] - margin
-            )
-        
-        # Build a map: for each segment, count how many others it contains
-        contains_count = {}
-        for i, seg_a in enumerate(segments):
-            count = 0
-            for j, seg_b in enumerate(segments):
-                if i == j:
-                    continue
-                if geo_contains(seg_a['box_pixels'], seg_b['box_pixels'], margin=15.0):
-                    count += 1
-            contains_count[i] = count
-        
-        to_remove = set()
-        for i, seg_a in enumerate(segments):
-            if i in to_remove:
-                continue
-            # Only remove if this box contains 2+ other boxes
-            # (meaning it's a multi-component span, not a real parent)
-            if contains_count[i] >= 2:
-                to_remove.add(i)
-                if self.debug_complexity:
-                    print(f"   🗑️ Containment dedup: removed {seg_a['box_pixels']} (contains {contains_count[i]} children)")
-            elif contains_count[i] == 1:
-                # One child only — remove the parent if the child fills a
-                # large fraction of it (>40%).  A genuine parent container
-                # is much larger than its single child; a SAM artefact that
-                # barely extends past the child is not a real component.
-                parent_box = seg_a['box_pixels']
-                parent_area = (parent_box[2] - parent_box[0]) * (parent_box[3] - parent_box[1])
-                for j, seg_b in enumerate(segments):
-                    if i == j:
-                        continue
-                    if geo_contains(parent_box, seg_b['box_pixels'], margin=15.0):
-                        child_box = seg_b['box_pixels']
-                        child_area = (child_box[2] - child_box[0]) * (child_box[3] - child_box[1])
-                        if parent_area > 0 and child_area / parent_area > 0.40:
-                            to_remove.add(i)
-                            if self.debug_complexity:
-                                print(f"   🗑️ Containment dedup: removed {parent_box} (child fills {child_area/parent_area:.0%})")
-                        break
-        
-        return [seg for i, seg in enumerate(segments) if i not in to_remove]
+        return intersection / union if union > 0 else 0.0
     
-    def _is_nested(self, box1: List[float], box2: List[float]) -> bool:
-        """Return True if one box is nested inside the other (encapsulation).
-        
-        Two conditions must hold:
-          1. The boxes differ significantly in size (ratio >= nesting_size_ratio).
-          2. The smaller box is geometrically contained within the larger one
-             (with a pixel tolerance).
-        """
-        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        
-        if min(area1, area2) == 0:
-            return False
-        
-        size_ratio = max(area1, area2) / min(area1, area2)
-        if size_ratio < self.nesting_size_ratio:
-            # Similar-sized boxes → not nesting, just overlap
-            return False
-        
-        # Determine outer/inner
-        if area1 >= area2:
-            outer, inner = box1, box2
-        else:
-            outer, inner = box2, box1
-        
-        margin = 20.0  # pixel tolerance for imprecise detections
-        is_contained = (
-            outer[0] <= inner[0] + margin and
-            outer[1] <= inner[1] + margin and
-            outer[2] >= inner[2] - margin and
-            outer[3] >= inner[3] - margin
-        )
-        
-        return is_contained
-    
-    def _contains(self, outer: List[float], inner: List[float], margin: float = 10.0) -> bool:
-        """Check if outer box fully contains inner box (with margin tolerance)"""
-        inner_inside = (
-            outer[0] <= inner[0] + margin and
-            outer[1] <= inner[1] + margin and
-            outer[2] >= inner[2] - margin and
-            outer[3] >= inner[3] - margin
-        )
-        
-        if not inner_inside:
-            return False
-        
-        outer_area = (outer[2] - outer[0]) * (outer[3] - outer[1])
-        inner_area = (inner[2] - inner[0]) * (inner[3] - inner[1])
-        
-        # The outer must be significantly larger (at least 2x the inner)
-        # This prevents two similar-sized overlapping boxes from triggering containment
-        return outer_area > inner_area * 2.0
-    
-    def _calculate_iou(self, box1: List[float], box2: List[float]) -> float:
-        """Calculate Intersection over Union"""
-        x1 = max(box1[0], box2[0])
-        y1 = max(box1[1], box2[1])
-        x2 = min(box1[2], box2[2])
-        y2 = min(box1[3], box2[3])
-        
-        if x2 < x1 or y2 < y1:
-            return 0.0
-        
-        inter = (x2 - x1) * (y2 - y1)
-        area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
-        area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
-        union = area1 + area2 - inter
-        
-        return inter / union if union > 0 else 0.0
-    
-    def _normalize_components(self, segments: List[Dict], img_width: int, img_height: int) -> List[Dict]:
-        """Convert to normalized AR component format"""
+    def _masks_to_components(self, masks: List[Dict], img: Image.Image) -> List[Dict]:
+        """Convert masks to component objects with features"""
         components = []
         
-        for i, seg in enumerate(segments):
-            x1, y1, x2, y2 = seg['box_pixels']
-            width_px = x2 - x1
-            height_px = y2 - y1
+        for idx, mask in enumerate(masks):
+            x, y, w, h = mask['bbox']
+            
+            # Normalize coordinates
+            x_norm = x / img.width
+            y_norm = y / img.height
+            w_norm = w / img.width
+            h_norm = h / img.height
+            
+            cx = x_norm + w_norm / 2
+            cy = y_norm + h_norm / 2
+            
+            # Calculate shape features
+            shape_features = self._extract_shape_features(mask['segmentation'])
+            
+            # Generate descriptive label based on shape
+            label = self._classify_by_shape(shape_features, w_norm, h_norm)
             
             components.append({
-                'id': f'component_{i}',
-                'x': x1 / img_width,
-                'y': y1 / img_height,
-                'width': width_px / img_width,
-                'height': height_px / img_height,
-                'center_x': (x1 + width_px / 2) / img_width,
-                'center_y': (y1 + height_px / 2) / img_height,
-                'confidence': seg['confidence'],
-                'area': (width_px * height_px) / (img_width * img_height),
-                'label': None,
-                'description': None,
-                'box_pixels': seg['box_pixels']
+                'id': f'component_{idx}',
+                'label': label,
+                'confidence': mask.get('quality_score', 0.8),
+                'x': x_norm,
+                'y': y_norm,
+                'width': w_norm,
+                'height': h_norm,
+                'center_x': cx,
+                'center_y': cy,
+                'area': w_norm * h_norm,
+                'shape_features': shape_features,
+                'terminals': [],  # Will be populated later
+                'segmentation': mask['segmentation'],  # Keep for terminal detection
+                'description': f'{label} at ({cx:.2f}, {cy:.2f})'
             })
         
         return components
     
-    def _label_components(
-        self, 
-        components: List[Dict], 
-        image_path: str, 
-        hints: List[str]
-    ) -> List[Dict]:
-        """Label components using Granite Vision model"""
-        if not components:
-            return components
+    def _extract_shape_features(self, segmentation: np.ndarray) -> Dict:
+        """Extract geometric features from mask, including diamond / oval / parallelogram flags."""
+        contours, _ = cv2.findContours(
+            segmentation.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE
+        )
         
-        if manager.vision_model is None or manager.vision_processor is None:
-            print("⚠️ Vision model not available for labeling")
-            for i, comp in enumerate(components):
-                comp['label'] = f"Component {i+1}"
-            return components
+        _empty = {
+            'circularity': 0.0,
+            'rectangularity': 0.0,
+            'corner_count': 0,
+            'convexity': 0.0,
+            'rotation_angle': 0.0,
+            'is_diamond': False,
+            'is_oval': False,
+            'is_parallelogram': False,
+        }
+        if len(contours) == 0:
+            return _empty
         
-        try:
-            img = Image.open(image_path).convert("RGB")
-        except Exception as e:
-            print(f"⚠️ Failed to load image for labeling: {e}")
-            for i, comp in enumerate(components):
-                comp['label'] = f"Component {i+1}"
-            return components
+        contour = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(contour)
+        perimeter = cv2.arcLength(contour, True)
         
-        # Calculate median area to detect outlier (too-small) components
-        areas = [comp['area'] for comp in components]
-        median_area = sorted(areas)[len(areas) // 2] if areas else 0
+        # Circularity
+        circularity = (4 * np.pi * area) / (perimeter ** 2) if perimeter > 0 else 0.0
         
-        # Build a set of lowercase hint names for quick fallback matching
-        hint_set = {h.lower(): h for h in hints if h} if hints else {}
-
-        labeled = []
-        img_w, img_h = img.size
-        for i, comp in enumerate(components):
-            try:
-                x1, y1, x2, y2 = comp['box_pixels']
-                box_w = x2 - x1
-                box_h = y2 - y1
-
-                # Pad the crop by 40% of box size so nearby text labels
-                # (e.g. "User Corrections" below a database symbol) are
-                # visible to the vision model.
-                pad_x = int(box_w * 0.4)
-                pad_y = int(box_h * 0.4)
-                cx1 = max(0, int(x1) - pad_x)
-                cy1 = max(0, int(y1) - pad_y)
-                cx2 = min(img_w, int(x2) + pad_x)
-                cy2 = min(img_h, int(y2) + pad_y)
-                crop = img.crop((cx1, cy1, cx2, cy2))
-                
-                label = self._query_vision_for_label(crop, comp['id'])
-                print(f"   🎯 Labeled {comp['id']} as '{label}'")
-
-                # If the vision model failed, try to find a matching hint
-                # based on spatial overlap or use a generic fallback
-                if not label and hint_set:
-                    label = f"Component {i+1}"
-                
-                # Post-label sanity check: reject tiny components whose label
-                # doesn't match any text visible in the diagram
-                # If area is much smaller than median AND label seems hallucinated, skip
-                if label and comp['area'] < median_area * 0.3:
-                    # This component is suspiciously small compared to others
-                    if self.debug_complexity:
-                        print(f"   ⚠️ Suspicious: '{label}' has area={comp['area']:.4f}, median={median_area:.4f}")
-                
-                comp['label'] = label if label else f"Component {i+1}"
-                labeled.append(comp)
-            
-            except Exception as e:
-                print(f"⚠️ Failed to label {comp['id']}: {e}")
-                comp['label'] = f"Component {i+1}"
-                labeled.append(comp)
+        # Rectangularity (axis-aligned bounding box fill)
+        x, y, w, h = cv2.boundingRect(contour)
+        rectangularity = area / (w * h) if w * h > 0 else 0.0
         
-        for comp in labeled:
-            comp.pop('box_pixels', None)
+        # Corner detection
+        epsilon = 0.02 * perimeter
+        approx = cv2.approxPolyDP(contour, epsilon, True)
+        corner_count = len(approx)
         
-        return labeled
+        # Convexity
+        hull = cv2.convexHull(contour)
+        hull_area = cv2.contourArea(hull)
+        convexity = area / hull_area if hull_area > 0 else 0.0
+        
+        # ---- Minimum-area rotated rectangle for diamond / rotation ----
+        rotation_angle = 0.0
+        is_diamond = False
+        if len(contour) >= 5:
+            rect = cv2.minAreaRect(contour)
+            rotation_angle = rect[2]
+            rect_w, rect_h = rect[1]
+            if rect_w > 0 and rect_h > 0:
+                min_area_rect_fill = area / (rect_w * rect_h)
+                rot_aspect = max(rect_w, rect_h) / (min(rect_w, rect_h) + 1e-6)
+                # Diamond: 4 approx corners, poor axis-aligned fill, good rotated fill,
+                # roughly square in rotated frame
+                if (corner_count == 4 and
+                        rectangularity < 0.65 and
+                        min_area_rect_fill > 0.75 and
+                        rot_aspect < 2.0):
+                    is_diamond = True
+        
+        # ---- Oval / ellipse detection ----
+        bbox_aspect = max(w, h) / (min(w, h) + 1e-6)
+        is_oval = circularity > 0.70 and 1.3 < bbox_aspect < 3.5
+        
+        # ---- Parallelogram (4 corners, not rect, not diamond, convex) ----
+        is_parallelogram = (
+            corner_count == 4 and
+            rectangularity < 0.82 and
+            not is_diamond and
+            convexity > 0.88
+        )
+        
+        return {
+            'circularity': circularity,
+            'rectangularity': rectangularity,
+            'corner_count': corner_count,
+            'convexity': convexity,
+            'rotation_angle': rotation_angle,
+            'is_diamond': is_diamond,
+            'is_oval': is_oval,
+            'is_parallelogram': is_parallelogram,
+        }
     
-    def _query_vision_for_label(self, crop_img: Image.Image, component_id: str) -> Optional[str]:
-        """Query Granite Vision model to identify a cropped component"""
-        try:
-            if max(crop_img.size) > 224:
-                ratio = 224.0 / max(crop_img.size)
-                new_size = (int(crop_img.size[0] * ratio), int(crop_img.size[1] * ratio))
-                crop_img = crop_img.resize(new_size, Image.LANCZOS)
-            
-            prompt = COMPONENT_LABEL_PROMPT
-            
-            chat_text = f"<|user|>\n<image>\n{prompt}\n<|assistant|>\n"
-            
-            inputs = manager.vision_processor(
-                images=[crop_img],
-                text=chat_text,
-                return_tensors="pt"
-            )
-            
-            device = manager.vision_model.device
-            target_dtype = getattr(manager, "vision_compute_dtype", manager.dtype)
-            
-            processed_inputs = {}
-            for k, v in inputs.items():
-                if k == "pixel_values":
-                    if not torch.isfinite(v).all():
-                        v = torch.nan_to_num(v)
-                    processed_inputs[k] = v.to(device, dtype=target_dtype)
-                elif k == "input_ids":
-                    processed_inputs[k] = v.to(device)
-                elif v.dtype in [torch.float32, torch.float64]:
-                    processed_inputs[k] = v.to(device, dtype=target_dtype)
-                else:
-                    processed_inputs[k] = v.to(device)
-            
-            with torch.no_grad():
-                output_ids = manager.vision_model.generate(
-                    **processed_inputs,
-                    max_new_tokens=20,
-                    do_sample=False,
-                    temperature=1.0,
-                )
-            
-            prompt_len = processed_inputs.get("input_ids", torch.empty(1, 0)).shape[1]
-            if output_ids.shape[1] > prompt_len:
-                new_tokens = output_ids[:, prompt_len:]
-                label = manager.vision_processor.batch_decode(
-                    new_tokens, 
-                    skip_special_tokens=True
-                )[0]
-                
-                label = label.strip()
-                # Use centralised prompt_builder cleaner
-                label = clean_label(label)
-                return label
-            
-            return None
+    def _classify_by_shape(self, features: Dict, width: float, height: float) -> str:
+        """Classify component based on geometric features and detected diagram type."""
+        aspect_ratio = max(width, height) / (min(width, height) + 1e-6)
+        diag = getattr(self, 'diagram_type', 'medium')
         
-        except Exception as e:
-            print(f"⚠️ Vision labeling error for {component_id}: {e}")
-            return None
+        # ---- Priority shape checks (diagram-independent) ----
+        
+        # Diamond / Decision
+        if features.get('is_diamond', False):
+            if diag == 'flowchart':
+                return 'Decision'
+            return 'Diamond'
+        
+        # Oval / Ellipse
+        if features.get('is_oval', False):
+            if diag == 'flowchart':
+                return 'Terminator'
+            return 'Oval'
+        
+        # Parallelogram
+        if features.get('is_parallelogram', False):
+            if diag == 'flowchart':
+                return 'Data I/O'
+            return 'Parallelogram'
+        
+        # ---- Sequence diagram classifications ----
+        if diag == 'sequence':
+            if features['rectangularity'] > 0.70:
+                if height > width * 2.0:
+                    return 'Activation Bar'
+                if width > height * 2.5:
+                    return 'Lifeline Header'
+                if width * height > 0.03:
+                    return 'Combined Fragment'
+                return 'Object'
+            if features['circularity'] > 0.75:
+                return 'Actor'
+            if features['corner_count'] == 3:
+                return 'Arrow'
+            return 'Sequence Element'
+        
+        # ---- UML-specific classifications ----
+        if diag == 'uml':
+            if features['rectangularity'] > 0.75:
+                if aspect_ratio > 3.0:
+                    return 'UML Note'
+                return 'UML Class'
+            if features['circularity'] > 0.75:
+                return 'UML Interface'
+            if features['corner_count'] == 3:
+                return 'UML Inheritance Arrow'
+            return 'UML Element'
+        
+        # ---- Flowchart-specific classifications ----
+        if diag == 'flowchart':
+            if features['circularity'] > 0.80:
+                if aspect_ratio < 1.4:
+                    return 'Connector'
+                return 'Terminator'
+            if features['rectangularity'] > 0.80:
+                if aspect_ratio > 3.0:
+                    return 'Annotation'
+                return 'Process'
+            if features['corner_count'] == 3:
+                return 'Arrow'
+            if features['circularity'] > 0.60:
+                return 'Connector'
+            return 'Process'
+        
+        # ---- Generic / circuit / other diagram types ----
+        if features['circularity'] > 0.80:
+            return 'Circular Element'
+        
+        if features['rectangularity'] > 0.85:
+            if aspect_ratio > 3.0:
+                return 'Elongated Block'
+            elif aspect_ratio < 1.3:
+                return 'Square Block'
+            return 'Rectangular Block'
+        
+        if features['corner_count'] == 3:
+            return 'Triangular Element'
+        elif features['corner_count'] == 4:
+            return 'Quadrilateral Element'
+        elif features['corner_count'] > 6:
+            if features['circularity'] > 0.6:
+                return 'Rounded Element'
+            return 'Complex Shape'
+        
+        if aspect_ratio > 4.0:
+            return 'Linear Element'
+        return 'Component'
     
-    def _clean_label(self, label: str) -> Optional[str]:
-        """Post-process a vision model label to extract a concise component name.
+    # ------------------------------------------------------------------
+    # Contour-based component detection (supplements SAM for UML / flowcharts)
+    # ------------------------------------------------------------------
+    
+    def _detect_contour_components(self, img: Image.Image) -> List[Dict]:
+        """Detect rectangular / diamond / circular components using classical
+        contour detection.  Supplements SAM for UML class boxes and flowchart
+        shapes that SAM may miss.
         
-        Handles common verbose patterns like:
-          - "The component name is 'Database'"
-          - "The component is called LLM interface"
-          - "I am unable to provide the requested information"
-          - "This is a Database component"
+        Uses two complementary approaches:
+        1. Edge-based detection with morphological closing (handles connected lines)
+        2. Binary threshold detection with containment filtering
         """
-        if not label:
+        img_array = np.array(img.convert('L'))
+        h, w = img_array.shape
+        img_area = h * w
+        
+        all_candidates: List[Dict] = []
+        
+        # --- Approach 1: Edge-based contour detection ---
+        # Edges + morphological close to form enclosed regions
+        edges = cv2.Canny(img_array, 50, 150)
+        kernel = np.ones((3, 3), dtype=np.uint8)
+        closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+        contours_edge, _ = cv2.findContours(closed, cv2.RETR_LIST,
+                                            cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours_edge:
+            cand = self._contour_to_candidate(contour, h, w, img_area)
+            if cand is not None:
+                all_candidates.append(cand)
+        
+        # --- Approach 2: Binary threshold (catches filled shapes) ---
+        _, binary = cv2.threshold(img_array, 0, 255,
+                                  cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        contours_bin, _ = cv2.findContours(binary, cv2.RETR_LIST,
+                                           cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours_bin:
+            cand = self._contour_to_candidate(contour, h, w, img_area)
+            if cand is not None:
+                all_candidates.append(cand)
+        
+        # Deduplicate by IoU (keep higher-quality ones)
+        all_candidates.sort(key=lambda c: c['area'], reverse=True)
+        deduped: List[Dict] = []
+        for cand in all_candidates:
+            duplicate = False
+            for kept in deduped:
+                iou = self._calculate_iou(cand, kept)
+                if iou > 0.3:
+                    duplicate = True
+                    break
+                # Also check bbox containment
+                cont = self._calculate_containment(kept, cand)
+                if cont > 0.7:
+                    duplicate = True
+                    break
+            if not duplicate:
+                deduped.append(cand)
+        
+        return deduped
+    
+    def _contour_to_candidate(self, contour: np.ndarray, h: int, w: int,
+                               img_area: int) -> Optional[Dict]:
+        """Convert a single contour to a mask dict if it meets quality criteria."""
+        area = cv2.contourArea(contour)
+        if area < self.min_component_area or area > self.max_component_area:
             return None
         
-        import re
+        bx, by, bw, bh = cv2.boundingRect(contour)
+        fill_ratio = area / (bw * bh) if bw * bh > 0 else 0
+        aspect = max(bw, bh) / (min(bw, bh) + 1e-6)
         
-        # Normalise whitespace (collapse newlines, tabs, etc.)
-        label = re.sub(r'\s+', ' ', label).strip()
+        if fill_ratio < 0.35 or aspect > self.max_aspect_ratio:
+            return None
         
-        # Reject outright refusals / irrelevant responses
-        refusal_markers = [
-            'i am unable', 'i cannot', 'i\'m unable', 'sorry',
-            'i don\'t', 'not possible', 'no text', 'cannot determine',
-            'unable to', 'i can\'t',
-        ]
-        label_lower = label.lower()
-        for marker in refusal_markers:
-            if marker in label_lower:
-                return 'Unknown'
+        norm_area = (bw * bh) / img_area
+        _hint = getattr(self, '_hint_diagram_type', None)
+        _min_norm = 0.001 if _hint in ('uml', 'flowchart', 'sequence') else 0.004
+        if norm_area < _min_norm:
+            return None
         
-        # Extract quoted names: "The name is 'XYZ'" or 'The name is "XYZ"'
-        quoted = re.search(r"['\"]([^'\"]{1,40})['\"]", label)
-        if quoted:
-            label = quoted.group(1).strip()
-        else:
-            # Strip common verbose prefixes
-            prefix_patterns = [
-                r'^the\s+component\s+(name\s+)?is\s+(called\s+)?',
-                r'^this\s+(is\s+(a|an|the)\s+)?',
-                r'^it\s+(is\s+(a|an|the)\s+)?',
-                r'^the\s+name\s+(of\s+this\s+component\s+)?is\s+',
-                r'^component\s+name:\s*',
-                r'^name:\s*',
-            ]
-            for pat in prefix_patterns:
-                label = re.sub(pat, '', label, flags=re.IGNORECASE).strip()
+        # Prefer convex, regular shapes (rectangles, circles, diamonds)
+        peri = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
+        if len(approx) < 3 or len(approx) > 20:
+            return None
         
-        # Strip trailing punctuation and filler
-        label = re.sub(r'[.;,!?]+$', '', label).strip()
-        label = re.sub(r'\s+component$', '', label, flags=re.IGNORECASE).strip()
+        seg_uint8 = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(seg_uint8, [contour], -1, 1, cv2.FILLED)
+        seg = seg_uint8.astype(bool)
         
-        # Enforce 3-word maximum
-        words = label.split()
-        if len(words) > 3:
-            label = ' '.join(words[:3])
-        
-        # Final length check
-        if len(label) > 40:
-            label = label[:40].rsplit(' ', 1)[0]
-        
-        return label if label else None
+        return {
+            'segmentation': seg,
+            'bbox': [bx, by, bw, bh],
+            'area': int(area),
+            'predicted_iou': 0.70,
+            'source': 'contour',
+        }
     
-    def analyze_component_relationships(self, components: List[Dict], image_path: str = None) -> Dict:
-        """Detect connections between components using spatial proximity and optional vision."""
-        if not components or len(components) < 2:
-            return {'connections': [], 'groups': []}
-
-        # 1. Proximity-based connections (fast, always available)
-        #    Only very close / touching components count as connected.
-        proximity_connections = self._detect_proximity_connections(components)
-
-        # 2. Vision-based connections (slower but more accurate for arrows/lines)
-        vision_connections = []
-        if image_path and manager.vision_model is not None and len(components) <= 25:
-            try:
-                vision_connections = self._detect_connections_with_vision(components, image_path)
-            except Exception as e:
-                print(f"   ⚠️ Vision connection detection skipped: {e}")
-
-        # 3. Merge: only keep vision connections that are spatially plausible,
-        #    and proximity connections that are nearly touching.
-        all_connections = self._merge_connections(proximity_connections, vision_connections)
-
-        # 4. Build adjacency groups
-        groups = self._build_groups(components, all_connections)
-
-        return {'connections': all_connections, 'groups': groups}
-
-    def _detect_proximity_connections(self, components: List[Dict]) -> List[Dict]:
-        """Detect connections between components based on spatial proximity of edges."""
-        connections = []
-        seen = set()
-
-        for i, c1 in enumerate(components):
-            for j, c2 in enumerate(components):
-                if j <= i:
-                    continue
-
-                # Use edge-to-edge distance (not center-to-center)
-                dist = self._edge_distance(c1, c2)
-                if dist < self.proximity_threshold:
-                    pair = tuple(sorted([c1['id'], c2['id']]))
-                    if pair not in seen:
-                        seen.add(pair)
-                        connections.append({
-                            'from': c1['id'],
-                            'to': c2['id'],
-                            'from_label': c1.get('label', c1['id']),
-                            'to_label': c2.get('label', c2['id']),
-                            'type': 'proximity',
-                            'distance': float(dist),
-                        })
-
-        return connections
-
-    def _edge_distance(self, comp1: Dict, comp2: Dict) -> float:
-        """Shortest distance between the edges of two component bounding boxes (normalised coords)."""
-        x1_min, x1_max = comp1['x'], comp1['x'] + comp1['width']
-        y1_min, y1_max = comp1['y'], comp1['y'] + comp1['height']
-        x2_min, x2_max = comp2['x'], comp2['x'] + comp2['width']
-        y2_min, y2_max = comp2['y'], comp2['y'] + comp2['height']
-
-        dx = max(0, max(x1_min - x2_max, x2_min - x1_max))
-        dy = max(0, max(y1_min - y2_max, y2_min - y1_max))
-        return (dx ** 2 + dy ** 2) ** 0.5
-
-    def _build_groups(self, components: List[Dict], connections: List[Dict]) -> List[List[str]]:
-        """Build connected-component groups using union-find."""
-        parent: Dict[str, str] = {c['id']: c['id'] for c in components}
-
-        def find(x):
-            while parent[x] != x:
-                parent[x] = parent[parent[x]]
-                x = parent[x]
-            return x
-
-        def union(a, b):
-            ra, rb = find(a), find(b)
-            if ra != rb:
-                parent[ra] = rb
-
-        for conn in connections:
-            if conn['from'] in parent and conn['to'] in parent:
-                union(conn['from'], conn['to'])
-
-        groups_map: Dict[str, List[str]] = {}
-        for cid in parent:
-            root = find(cid)
-            groups_map.setdefault(root, []).append(cid)
-
-        # Only return groups with 2+ members
-        return [g for g in groups_map.values() if len(g) > 1]
+    def _merge_detection_results(self, sam_masks: List[Dict],
+                                  contour_masks: List[Dict]) -> List[Dict]:
+        """Merge SAM and contour detection results, keeping unique masks."""
+        merged = list(sam_masks)
+        
+        for c_mask in contour_masks:
+            duplicate = False
+            for s_mask in merged:
+                iou = self._calculate_iou(c_mask, s_mask)
+                if iou > 0.25:
+                    duplicate = True
+                    break
+            if not duplicate:
+                merged.append(c_mask)
+        
+        return merged
     
-    def _detect_connections_with_vision(self, components: List[Dict], image_path: str) -> List[Dict]:
-        """Use Granite Vision to detect lines/arrows/connections in the diagram."""
-        try:
-            img = Image.open(image_path).convert("RGB")
+    def _detect_component_terminals(self, components: List[Dict], img_array: np.ndarray) -> List[Dict]:
+        """Detect connection points (terminals/ports) on each component"""
+        
+        for comp in components:
+            segmentation = comp['segmentation']
             
-            if max(img.size) > 800:
-                ratio = 800.0 / max(img.size)
-                new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                img = img.resize(new_size, Image.LANCZOS)
-            
-            # Build prompt with component positions for spatial reasoning
-            prompt = build_connection_prompt(components)
-            
-            chat_text = f"<|user|>\n<image>\n{prompt}\n<|assistant|>\n"
-            
-            inputs = manager.vision_processor(
-                images=[img],
-                text=chat_text,
-                return_tensors="pt"
+            # Find contour of component
+            contours, _ = cv2.findContours(
+                segmentation.astype(np.uint8),
+                cv2.RETR_EXTERNAL,
+                cv2.CHAIN_APPROX_SIMPLE
             )
             
-            device = manager.vision_model.device
-            target_dtype = getattr(manager, "vision_compute_dtype", manager.dtype)
+            if len(contours) == 0:
+                continue
             
-            processed_inputs = {}
-            for k, v in inputs.items():
-                if k == "pixel_values":
-                    if not torch.isfinite(v).all():
-                        v = torch.nan_to_num(v)
-                    processed_inputs[k] = v.to(device, dtype=target_dtype)
-                elif k == "input_ids":
-                    processed_inputs[k] = v.to(device)
-                elif v.dtype in [torch.float32, torch.float64]:
-                    processed_inputs[k] = v.to(device, dtype=target_dtype)
-                else:
-                    processed_inputs[k] = v.to(device)
+            contour = contours[0]
             
-            with torch.no_grad():
-                output_ids = manager.vision_model.generate(
-                    **processed_inputs,
-                    max_new_tokens=300,
-                    do_sample=False,
-                    temperature=1.0,
-                )
+            # Method 1: Find extreme points (top, bottom, left, right)
+            leftmost = tuple(contour[contour[:, :, 0].argmin()][0])
+            rightmost = tuple(contour[contour[:, :, 0].argmax()][0])
+            topmost = tuple(contour[contour[:, :, 1].argmin()][0])
+            bottommost = tuple(contour[contour[:, :, 1].argmax()][0])
             
-            prompt_len = processed_inputs.get("input_ids", torch.empty(1, 0)).shape[1]
-            if output_ids.shape[1] <= prompt_len:
-                return []
+            terminals = []
+            h, w = img_array.shape[:2]
             
-            new_tokens = output_ids[:, prompt_len:]
-            response = manager.vision_processor.batch_decode(
-                new_tokens, skip_special_tokens=True
-            )[0].strip()
+            # Add edge terminals (normalized coordinates)
+            for point in [leftmost, rightmost, topmost, bottommost]:
+                terminals.append({
+                    'x': point[0] / w,
+                    'y': point[1] / h,
+                    'type': 'edge'
+                })
             
-            for noise in ['<|end_of_text|>', '<fim_prefix>', '<|system|>', '<|user|>', '<|assistant|>']:
-                response = response.replace(noise, '')
+            # Method 2: Detect corners as potential terminals
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
             
-            print(f"   🔍 Vision connections response: {response[:200]}")
+            for point in approx:
+                px, py = point[0]
+                terminals.append({
+                    'x': px / w,
+                    'y': py / h,
+                    'type': 'corner'
+                })
             
-            if 'NONE' in response.upper() and len(response) < 20:
-                return []
+            # Remove duplicate terminals (too close together)
+            terminals = self._remove_duplicate_terminals(terminals)
             
-            return self._parse_vision_connections(response, components)
+            comp['terminals'] = terminals
+            comp['terminal_count'] = len(terminals)
         
-        except Exception as e:
-            print(f"   ⚠️ Vision connection detection failed: {e}")
-            return []
+        return components
     
-    def _parse_vision_connections(self, text: str, components: List[Dict]) -> List[Dict]:
-        """Parse 'SOURCE -> TARGET' lines from vision output and map to component IDs."""
-        import re
+    def _remove_duplicate_terminals(self, terminals: List[Dict], threshold: float = 0.01) -> List[Dict]:
+        """Remove terminals that are too close together"""
+        if len(terminals) <= 1:
+            return terminals
         
-        # Build lookup: lowercase label/id -> component id
-        label_to_id = {}
-        for c in components:
-            if c.get('label'):
-                label_to_id[c['label'].lower().strip()] = c['id']
-            label_to_id[c['id'].lower()] = c['id']
+        unique = []
+        for term in terminals:
+            is_duplicate = False
+            for existing in unique:
+                dist = np.sqrt((term['x'] - existing['x'])**2 + (term['y'] - existing['y'])**2)
+                if dist < threshold:
+                    is_duplicate = True
+                    break
+            if not is_duplicate:
+                unique.append(term)
+        
+        return unique
+    
+    def _detect_connections(self, components: List[Dict], img_array: np.ndarray) -> List[Dict]:
+        """
+        Detect connections between components using multiple methods:
+        1. Line detection (Hough transform)
+        2. Wire/trace following (edge detection + path finding)
+        3. Terminal proximity analysis
+        """
         
         connections = []
-        seen = set()
         
-        # Match patterns like "Source -> Target", "Source → Target", "Source - Target", "Source to Target"
-        arrow_pattern = re.compile(r'(.+?)\s*(?:->|→|--|—|=>|to)\s*(.+)', re.IGNORECASE)
+        # Convert to grayscale
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY) if len(img_array.shape) == 3 else img_array
+        h, w = gray.shape
         
-        for line in text.splitlines():
-            line = line.strip(' -•*·0123456789.)')
-            if not line:
-                continue
-            
-            match = arrow_pattern.match(line)
-            if not match:
-                continue
-            
-            src_text = match.group(1).strip().lower().strip('"\'')
-            tgt_text = match.group(2).strip().lower().strip('"\'')
-            
-            # Fuzzy match to component labels
-            src_id = self._fuzzy_match_component(src_text, label_to_id)
-            tgt_id = self._fuzzy_match_component(tgt_text, label_to_id)
-            
-            if src_id and tgt_id and src_id != tgt_id:
-                pair = tuple(sorted([src_id, tgt_id]))
-                if pair not in seen:
-                    seen.add(pair)
-                    src_comp = next(c for c in components if c['id'] == src_id)
-                    tgt_comp = next(c for c in components if c['id'] == tgt_id)
+        # Create mask of all components
+        component_mask = np.zeros((h, w), dtype=np.uint8)
+        for comp in components:
+            if 'segmentation' in comp:
+                component_mask = np.logical_or(component_mask, comp['segmentation'])
+        
+        # Invert to get potential connection regions
+        connection_regions = ~component_mask
+        
+        # Method 1: Detect lines using Hough transform
+        edges = cv2.Canny(gray, 50, 150)
+        # Mask out component regions
+        edges = edges * connection_regions.astype(np.uint8)
+        
+        lines = cv2.HoughLinesP(
+            edges,
+            rho=1,
+            theta=np.pi/180,
+            threshold=50,
+            minLineLength=20,
+            maxLineGap=10
+        )
+        
+        if lines is not None:
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                
+                # Normalize coordinates
+                x1_norm, y1_norm = x1 / w, y1 / h
+                x2_norm, y2_norm = x2 / w, y2 / h
+                
+                # Find which components this line connects
+                connected_comps = self._find_connected_components(
+                    (x1_norm, y1_norm),
+                    (x2_norm, y2_norm),
+                    components
+                )
+                
+                if len(connected_comps) >= 2:
                     connections.append({
-                        'from': src_id,
-                        'to': tgt_id,
-                        'from_label': src_comp.get('label', src_id),
-                        'to_label': tgt_comp.get('label', tgt_id),
-                        'type': 'vision',
-                        'distance': float(self._distance(src_comp, tgt_comp)),
-                        'edge_distance': float(self._edge_distance(src_comp, tgt_comp)),
+                        'from': connected_comps[0],
+                        'to': connected_comps[1],
+                        'type': 'line',
+                        'start': {'x': x1_norm, 'y': y1_norm},
+                        'end': {'x': x2_norm, 'y': y2_norm},
+                        'confidence': 0.9
                     })
         
+        # Method 2: Terminal-based proximity connections
+        proximity_connections = self._detect_proximity_connections(components)
+        connections.extend(proximity_connections)
+        
+        # Method 3: Path tracing between components
+        path_connections = self._trace_connection_paths(components, edges, w, h)
+        connections.extend(path_connections)
+        
+        # Remove duplicate connections
+        connections = self._deduplicate_connections(connections)
+        
+        # Update component connection counts
+        for comp in components:
+            comp['connection_count'] = sum(
+                1 for conn in connections 
+                if conn['from'] == comp['id'] or conn['to'] == comp['id']
+            )
+        
         return connections
     
-    def _fuzzy_match_component(self, text: str, label_to_id: Dict[str, str]) -> Optional[str]:
-        """Match text to the closest component label.
+    def _find_connected_components(
+        self, 
+        point1: Tuple[float, float], 
+        point2: Tuple[float, float], 
+        components: List[Dict],
+        proximity_threshold: float = 0.02
+    ) -> List[str]:
+        """Find components that are near the endpoints of a line"""
+        connected = []
         
-        Uses strict matching to avoid hallucinated connections:
-        - Exact match first
-        - Then requires high overlap (>= 0.75) between label and text
-        """
-        # Exact match
-        if text in label_to_id:
-            return label_to_id[text]
+        for comp in components:
+            # Check distance to component center or terminals
+            comp_center = (comp['center_x'], comp['center_y'])
+            
+            # Distance from line endpoints to component
+            dist1 = np.sqrt((point1[0] - comp_center[0])**2 + (point1[1] - comp_center[1])**2)
+            dist2 = np.sqrt((point2[0] - comp_center[0])**2 + (point2[1] - comp_center[1])**2)
+            
+            if dist1 < proximity_threshold or dist2 < proximity_threshold:
+                connected.append(comp['id'])
+            
+            # Also check terminals
+            for terminal in comp.get('terminals', []):
+                term_pos = (terminal['x'], terminal['y'])
+                dist1 = np.sqrt((point1[0] - term_pos[0])**2 + (point1[1] - term_pos[1])**2)
+                dist2 = np.sqrt((point2[0] - term_pos[0])**2 + (point2[1] - term_pos[1])**2)
+                
+                if dist1 < proximity_threshold or dist2 < proximity_threshold:
+                    if comp['id'] not in connected:
+                        connected.append(comp['id'])
         
-        # Strict substring match: only if one string fully contains the other
-        # AND the overlap ratio is very high
-        best_id = None
-        best_score = 0
-        for label, comp_id in label_to_id.items():
-            if label.startswith('component_'):
-                continue  # Skip IDs, prefer label matches
-            # Check if either fully contains the other
-            if label == text:
-                return comp_id
-            if label in text or text in label:
-                shorter = min(len(label), len(text))
-                longer = max(len(label), len(text))
-                score = shorter / longer
-                if score > best_score and score >= 0.75:
-                    best_score = score
-                    best_id = comp_id
-        
-        return best_id
+        return connected
     
-    def _merge_connections(self, proximity: List[Dict], vision: List[Dict]) -> List[Dict]:
-        """Merge proximity and vision connections.
+    def _detect_proximity_connections(self, components: List[Dict], threshold: float = 0.05) -> List[Dict]:
+        """Detect connections based on terminal proximity"""
+        connections = []
         
-        Strategy:
-        - Proximity connections (edge-distance < threshold) are kept as-is
-          since they represent nearly-touching / overlapping components.
-        - Vision connections are included only if the two components are
-          within a reasonable spatial range (edge-distance < 0.30), to
-          discard hallucinated long-range links the model might produce.
-        """
-        merged = {}
+        for i, comp1 in enumerate(components):
+            for comp2 in components[i+1:]:
+                # Check all terminal pairs
+                for term1 in comp1.get('terminals', []):
+                    for term2 in comp2.get('terminals', []):
+                        dist = np.sqrt(
+                            (term1['x'] - term2['x'])**2 + 
+                            (term1['y'] - term2['y'])**2
+                        )
+                        
+                        if dist < threshold:
+                            connections.append({
+                                'from': comp1['id'],
+                                'to': comp2['id'],
+                                'type': 'proximity',
+                                'distance': float(dist),
+                                'confidence': max(0.5, 1.0 - dist / threshold)
+                            })
         
-        # Add proximity connections (already filtered by tight threshold)
-        for conn in proximity:
+        return connections
+    
+    def _trace_connection_paths(
+        self, 
+        components: List[Dict], 
+        edges: np.ndarray,
+        width: int,
+        height: int
+    ) -> List[Dict]:
+        """Trace paths between nearby component terminals using skeleton connectivity."""
+        connections = []
+        
+        # Skip expensive skeletonization if too few components
+        if len(components) < 2:
+            return connections
+        
+        # Skeletonize edge image to get thin paths
+        skeleton = skeletonize(edges > 0)
+        
+        # Only check nearby component pairs (within reasonable distance)
+        for i, comp1 in enumerate(components):
+            for comp2 in components[i+1:]:
+                # Quick distance check — skip far-apart pairs
+                center_dist = np.sqrt(
+                    (comp1['center_x'] - comp2['center_x'])**2 + 
+                    (comp1['center_y'] - comp2['center_y'])**2
+                )
+                if center_dist > 0.3:  # normalized, ~30% of image
+                    continue
+                
+                found = False
+                # Check only 2 terminals per component
+                for term1 in comp1.get('terminals', [])[:2]:
+                    if found:
+                        break
+                    for term2 in comp2.get('terminals', [])[:2]:
+                        x1, y1 = int(term1['x'] * width), int(term1['y'] * height)
+                        x2, y2 = int(term2['x'] * width), int(term2['y'] * height)
+                        
+                        if self._has_path(skeleton, (y1, x1), (y2, x2)):
+                            connections.append({
+                                'from': comp1['id'],
+                                'to': comp2['id'],
+                                'type': 'traced_path',
+                                'confidence': 0.8
+                            })
+                            found = True
+                            break
+        
+        return connections
+    
+    def _has_path(self, skeleton: np.ndarray, start: Tuple[int, int], end: Tuple[int, int]) -> bool:
+        """Check if there's a path in skeleton between two points"""
+        # Simple flood fill to check connectivity
+        # For performance, limit search to nearby region
+        
+        y1, x1 = start
+        y2, x2 = end
+        
+        # Only check if points are reasonably close
+        dist = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+        if dist > 200:  # Pixel distance threshold
+            return False
+        
+        # Create search region
+        min_y = max(0, min(y1, y2) - 50)
+        max_y = min(skeleton.shape[0], max(y1, y2) + 50)
+        min_x = max(0, min(x1, x2) - 50)
+        max_x = min(skeleton.shape[1], max(x1, x2) + 50)
+        
+        region = skeleton[min_y:max_y, min_x:max_x]
+        
+        # Check if both points are on skeleton
+        if not (skeleton[y1, x1] and skeleton[y2, x2]):
+            return False
+        
+        # Simple connectivity check - if skeleton is continuous in region
+        labeled = cv2.connectedComponents(region.astype(np.uint8))[1]
+        
+        # Adjust coordinates to region
+        y1_local = y1 - min_y
+        x1_local = x1 - min_x
+        y2_local = y2 - min_y
+        x2_local = x2 - min_x
+        
+        # Check bounds
+        if (0 <= y1_local < labeled.shape[0] and 0 <= x1_local < labeled.shape[1] and
+            0 <= y2_local < labeled.shape[0] and 0 <= x2_local < labeled.shape[1]):
+            return labeled[y1_local, x1_local] == labeled[y2_local, x2_local] and labeled[y1_local, x1_local] > 0
+        
+        return False
+    
+    def _deduplicate_connections(self, connections: List[Dict]) -> List[Dict]:
+        """Remove duplicate connections between same component pairs"""
+        seen = set()
+        unique = []
+        
+        for conn in connections:
+            # Create unique key (order-independent)
             pair = tuple(sorted([conn['from'], conn['to']]))
-            merged[pair] = conn
-        
-        # Add vision connections only if spatially plausible
-        # (max edge distance 0.30 of image — roughly nearby components)
-        for conn in vision:
-            pair = tuple(sorted([conn['from'], conn['to']]))
-            if conn.get('edge_distance', 0) <= 0.30:
-                merged[pair] = conn  # Overwrites proximity if same pair
+            
+            if pair not in seen:
+                seen.add(pair)
+                unique.append(conn)
             else:
-                print(f"   🗑️ Discarded vision connection {conn.get('from_label','?')} → "
-                      f"{conn.get('to_label','?')} (edge dist {conn.get('edge_distance', 0):.3f} too large)")
+                # Keep connection with higher confidence
+                existing_idx = next(
+                    i for i, c in enumerate(unique)
+                    if tuple(sorted([c['from'], c['to']])) == pair
+                )
+                if conn.get('confidence', 0) > unique[existing_idx].get('confidence', 0):
+                    unique[existing_idx] = conn
         
-        return list(merged.values())
+        return unique
     
-    def _distance(self, comp1: Dict, comp2: Dict) -> float:
-        """Calculate center-to-center distance"""
-        dx = comp1['center_x'] - comp2['center_x']
-        dy = comp1['center_y'] - comp2['center_y']
-        return (dx**2 + dy**2) ** 0.5
+    def _build_connection_graph(self, components: List[Dict], connections: List[Dict]) -> nx.Graph:
+        """Build graph representation of component connections"""
+        G = nx.Graph()
+        
+        # Add nodes
+        for comp in components:
+            G.add_node(comp['id'], **comp)
+        
+        # Add edges
+        for conn in connections:
+            G.add_edge(
+                conn['from'],
+                conn['to'],
+                type=conn['type'],
+                confidence=conn.get('confidence', 0.8)
+            )
+        
+        return G
+    
+    def _analyze_relationships(
+        self, 
+        components: List[Dict], 
+        connections: List[Dict], 
+        graph: nx.Graph
+    ) -> Dict:
+        """Analyze spatial and connectivity relationships"""
+        
+        # Group analysis
+        groups = self._find_component_groups(components, connections)
+        
+        # Topology analysis
+        topology = {
+            'total_components': len(components),
+            'total_connections': len(connections),
+            'connected_components': len([c for c in components if c.get('connection_count', 0) > 0]),
+            'isolated_components': len([c for c in components if c.get('connection_count', 0) == 0]),
+            'average_connections': np.mean([c.get('connection_count', 0) for c in components]),
+            'max_connections': max([c.get('connection_count', 0) for c in components]) if components else 0
+        }
+        
+        # Network analysis using graph
+        if len(graph.nodes) > 0:
+            topology['connected_clusters'] = nx.number_connected_components(graph)
+            
+            # Find central components (high degree)
+            degrees = dict(graph.degree())
+            if degrees:
+                central_nodes = sorted(degrees.items(), key=lambda x: x[1], reverse=True)[:3]
+                topology['central_components'] = [node for node, degree in central_nodes]
+        
+        # Spatial patterns
+        spatial_patterns = self._detect_spatial_patterns(components)
+        
+        return {
+            'connections': connections,
+            'groups': groups,
+            'topology': topology,
+            'spatial_patterns': spatial_patterns
+        }
+    
+    def _find_component_groups(self, components: List[Dict], connections: List[Dict]) -> List[List[str]]:
+        """Find groups of connected components"""
+        # Build adjacency list
+        adjacency = defaultdict(set)
+        for conn in connections:
+            adjacency[conn['from']].add(conn['to'])
+            adjacency[conn['to']].add(conn['from'])
+        
+        # Find connected groups using DFS
+        visited = set()
+        groups = []
+        
+        def dfs(comp_id, group):
+            if comp_id in visited:
+                return
+            visited.add(comp_id)
+            group.append(comp_id)
+            for neighbor in adjacency[comp_id]:
+                dfs(neighbor, group)
+        
+        for comp in components:
+            if comp['id'] not in visited:
+                group = []
+                dfs(comp['id'], group)
+                if len(group) > 1:  # Only include groups with multiple components
+                    groups.append(group)
+        
+        return groups
+    
+    def _detect_spatial_patterns(self, components: List[Dict]) -> Dict:
+        """Detect spatial arrangement patterns"""
+        if len(components) < 3:
+            return {'pattern': 'sparse', 'alignment': 'none'}
+        
+        # Extract centers
+        centers = np.array([[c['center_x'], c['center_y']] for c in components])
+        
+        # Check for linear arrangement
+        if len(centers) >= 3:
+            # Use PCA to find principal direction
+            from sklearn.decomposition import PCA
+            pca = PCA(n_components=1)
+            pca.fit(centers)
+            
+            # If variance ratio is high, components are linearly arranged
+            if pca.explained_variance_ratio_[0] > 0.9:
+                return {'pattern': 'linear', 'alignment': 'strong'}
+        
+        # Check for grid arrangement
+        x_coords = centers[:, 0]
+        y_coords = centers[:, 1]
+        
+        # Count unique x and y coordinates (with tolerance)
+        unique_x = len(np.unique(np.round(x_coords, 1)))
+        unique_y = len(np.unique(np.round(y_coords, 1)))
+        
+        if unique_x >= 3 and unique_y >= 3:
+            return {'pattern': 'grid', 'rows': unique_y, 'cols': unique_x}
+        
+        # Check for clustered arrangement
+        distances = cdist(centers, centers)
+        avg_distance = distances[distances > 0].mean()
+        
+        if avg_distance < 0.2:  # Normalized coordinates
+            return {'pattern': 'clustered', 'density': 'high'}
+        elif avg_distance > 0.5:
+            return {'pattern': 'sparse', 'density': 'low'}
+        else:
+            return {'pattern': 'distributed', 'density': 'medium'}
+    
+    def analyze_component_relationships(self, components: List[Dict]) -> Dict:
+        """Legacy method for backward compatibility"""
+        # Simple spatial relationship analysis
+        connections = []
+        
+        for i, comp1 in enumerate(components):
+            for comp2 in components[i+1:]:
+                # Calculate distance
+                dist = np.sqrt(
+                    (comp1['center_x'] - comp2['center_x'])**2 + 
+                    (comp1['center_y'] - comp2['center_y'])**2
+                )
+                
+                # If close, mark as related
+                if dist < 0.15:  # Threshold in normalized coordinates
+                    connections.append({
+                        'from': comp1['id'],
+                        'to': comp2['id'],
+                        'distance': float(dist),
+                        'type': 'proximity'
+                    })
+        
+        return {
+            'connections': connections,
+            'total': len(connections)
+        }
 
 
-# Singleton instance
-ar_service = ARService()
+# Global instance
+ar_service = ImprovedARService()

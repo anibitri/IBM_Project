@@ -18,6 +18,7 @@ except ImportError:
 from app.services.granite_vision_service import analyze_images  # Function
 from app.services.granite_ai_service import ai_service  # Singleton instance
 from app.services.ar_service import ar_service  # Singleton instance
+from app.services.prompt_builder import DIAGRAM_CLASSIFICATION_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -232,22 +233,16 @@ class PreprocessService:
 
         from app.services.granite_vision_service import query_image
 
-        CLASSIFICATION_PROMPT = (
-            "Is this image a technical diagram (e.g. schematic, flowchart, UML)? "
-            "Demos or photos of real-world objects (e.g. devices, people, screenshots) should be classified as non-diagrams. "
-            "Answer with ONLY 'yes' or 'no'."
-        )
-
         # Keywords that signal diagram vs non-diagram in ambiguous answers
-        YES_SIGNALS = {'yes', 'diagram', 'schematic', 'flowchart', 'UML',
+        YES_SIGNALS = {'yes', 'diagram', 'schematic', 'flowchart', 'UML', 'sequence', 'class', 'activity', 'state diagram',
                        'architecture', 'technical'}
         NO_SIGNALS  = {'no', 'photograph', 'photo', 'screenshot', 'picture',
-                       'selfie', 'landscape'}
+                       'selfie', 'landscape', 'timetable', 'schedule', 'gantt'}
 
         filtered = []
         for img_info in images:
             try:
-                answer = query_image(img_info['path'], CLASSIFICATION_PROMPT)
+                answer = query_image(img_info['path'], DIAGRAM_CLASSIFICATION_PROMPT)
                 answer_lower = answer.strip().lower()
 
                 # Check for explicit yes/no first
@@ -389,15 +384,16 @@ class PreprocessService:
                 
                 if extract_ar:
                     try:
-                        ar_components = ar_service.extract_document_features(
+                        ar_result = ar_service.extract_document_features(
                             img_path,
                             hints=vision_components
                         )
+                        ar_components = ar_result.get('components', [])
+                        relationships = ar_result.get('relationships', {})
                         
                         if ar_components:
-                            relationships = ar_service.analyze_component_relationships(ar_components, image_path=img_path)
                             all_ar_components.extend(ar_components)
-                            all_connections.extend(relationships.get('connections', []))
+                            all_connections.extend(ar_result.get('connections', []))
                     
                     except Exception as e:
                         logger.warning(f"AR extraction failed for page {page_num}: {e}")
@@ -559,19 +555,18 @@ class PreprocessService:
             if extract_ar:
                 logger.info("🎯 Extracting AR components...")
                 try:
-                    ar_components = ar_service.extract_document_features(
+                    ar_result = ar_service.extract_document_features(
                         file_path,
                         hints=vision_components
                     )
-                    
-                    if ar_components:
-                        relationships = ar_service.analyze_component_relationships(ar_components, image_path=file_path)
+                    ar_components = ar_result.get('components', [])
+                    relationships = ar_result.get('relationships', {})
                     
                     ar_result = {
                         'status': 'success',
                         'components': ar_components,
                         'componentCount': len(ar_components),
-                        'connections': relationships.get('connections', []) if isinstance(relationships, dict) else [],
+                        'connections': ar_result.get('connections', []),
                         'relationships': relationships
                     }
                     

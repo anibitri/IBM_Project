@@ -270,18 +270,20 @@ class ModelManager:
         Determine best device for SAM based on available VRAM.
         Returns 'cuda' if enough VRAM is free, 'cpu' otherwise.
         """
-        if not torch.cuda.is_available():
-            return "cpu"
+        # if not torch.cuda.is_available():
+        #     return "cpu"
 
-        free_vram_gb = self._get_free_vram_gb()
+        # free_vram_gb = self._get_free_vram_gb()
 
-        # MobileSAM is ~40MB; need some headroom for inference activations
-        if free_vram_gb > 0.5:
-            print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on GPU")
-            return "cuda"
-        else:
-            print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on CPU")
-            return "cpu"
+        # # MobileSAM is ~40MB; need some headroom for inference activations
+        # if free_vram_gb > 0.5:
+        #     print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on GPU")
+        #     return "cuda"
+        # else:
+        #     print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on CPU")
+        #     return "cpu"
+
+        return "cpu"
 
     def _get_free_vram_gb(self) -> float:
         """Get current free VRAM in GB"""

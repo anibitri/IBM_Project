@@ -62,12 +62,9 @@ def generate_ar_overlay():
                 # Continue with manual hints only
         
         # Step 2: Extract AR components
-        components = ar_service.extract_document_features(resolved_path, hints=ar_hints)
-        
-        # Step 3: Analyze relationships
-        relationships = {}
-        if components:
-            relationships = ar_service.analyze_component_relationships(components, image_path=resolved_path)
+        result = ar_service.extract_document_features(resolved_path, hints=ar_hints)
+        components = result.get('components', [])
+        relationships = result.get('relationships', {})
         
         logger.info(f"✅ Extracted {len(components)} AR components")
         
@@ -75,9 +72,11 @@ def generate_ar_overlay():
             'status': 'success',
             'components': components,
             'componentCount': len(components),
+            'connections': result.get('connections', []),
             'relationships': relationships,
             'hints': ar_hints,
             'vision_analysis': vision_analysis,
+            'metadata': result.get('metadata', {}),
             'file': {
                 'path': resolved_path
             }
@@ -185,7 +184,8 @@ def extract_from_multiple():
                         pass
                 
                 # Extract components
-                components = ar_service.extract_document_features(resolved_path, hints=hints)
+                result = ar_service.extract_document_features(resolved_path, hints=hints)
+                components = result.get('components', [])
                 all_components.extend(components)
                 
                 results.append({

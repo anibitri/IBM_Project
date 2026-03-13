@@ -1,7 +1,12 @@
 import torch
 from PIL import Image
 from app.services.model_manager import manager
-from app.services.prompt_builder import AR_EXTRACTION_PROMPT
+from app.services.prompt_builder import (
+    AR_EXTRACTION_PROMPT,
+    GENERAL_IMAGE_ANALYSIS_PROMPT,
+    build_vision_chat_text,
+    build_vision_qa_prompt,
+)
 import re
 
 
@@ -126,9 +131,9 @@ def analyze_images(input_data, task="general_analysis", **kwargs):
         if task == "ar_extraction":
             user_prompt = AR_EXTRACTION_PROMPT
         else:
-            user_prompt = "Describe the image in detail and list all visible technical components."
-        
-        chat_text = f"<|user|>\n<image>\n{user_prompt}\n<|assistant|>\n"
+            user_prompt = GENERAL_IMAGE_ANALYSIS_PROMPT
+
+        chat_text = build_vision_chat_text(user_prompt)
 
         # Process inputs
         inputs = manager.vision_processor(
@@ -231,13 +236,9 @@ def query_image(image_path: str, question: str) -> str:
             new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
             image = image.resize(new_size, Image.LANCZOS)
 
-        prompt = (
-            f"Look at this technical diagram carefully.\n\n"
-            f"Question: {question}\n\n"
-            f"Give a direct, concise answer based on what you see in the image."
-        )
+        prompt = build_vision_qa_prompt(question)
 
-        chat_text = f"<|user|>\n<image>\n{prompt}\n<|assistant|>\n"
+        chat_text = build_vision_chat_text(prompt)
 
         inputs = manager.vision_processor(
             images=[image],
