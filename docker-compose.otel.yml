@@ -1,0 +1,21 @@
+version: "3.8"
+
+services:
+  # OpenTelemetry Collector — receives traces from the Flask backend
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:latest
+    command: ["--config=/etc/otel/config.yaml"]
+    volumes:
+      - ./otel-collector-config.yaml:/etc/otel/config.yaml
+    ports:
+      - "4317:4317"   # OTLP gRPC — Flask backend sends here
+      - "4318:4318"   # OTLP HTTP
+      - "8888:8888"   # Collector metrics
+
+  # Optional: Jaeger for local trace visualisation
+  # Traces visible at http://localhost:16686
+  jaeger:
+    image: jaegertracing/all-in-one:latest
+    ports:
+      - "16686:16686"  # Jaeger UI
+      - "14317:4317"   # OTLP gRPC input (mapped to avoid port clash)

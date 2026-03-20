@@ -81,15 +81,42 @@ def _extract_components_from_text(text: str) -> list:
 def analyze_images(input_data, task="general_analysis", **kwargs):
     """
     Analyze images using Granite Vision model.
-    
+
     Args:
         input_data: Image path (str), PIL Image, or list of PIL Images
         task: Analysis task type ("general_analysis", "ar_extraction", etc.)
-    
+
     Returns:
         dict with 'analysis', 'components', 'answer' keys
     """
+    import os
+
+    # Validate inputs before any model/mock check
+    if isinstance(input_data, list) and len(input_data) == 0:
+        return {
+            "status": "error",
+            "error": "No images provided",
+            "analysis": {"summary": "No images provided."},
+            "components": [],
+            "answer": ""
+        }
+    if isinstance(input_data, str) and not os.path.isfile(input_data):
+        return {
+            "status": "error",
+            "error": f"File not found: {input_data}",
+            "analysis": {"summary": "File not found."},
+            "components": [],
+            "answer": ""
+        }
+
     if not manager.vision_model or not manager.vision_processor:
+        if manager.mock_mode:
+            return {
+                "status": "success",
+                "analysis": {"summary": "Mock vision analysis: diagram contains interconnected components."},
+                "components": ["Component A", "Component B", "Component C"],
+                "answer": "Mock response (GRANITE_MOCK=1): vision model not loaded."
+            }
         return {
             "status": "error",
             "error": "Vision model not loaded",
@@ -120,8 +147,8 @@ def analyze_images(input_data, task="general_analysis", **kwargs):
             }
         
         # Resize large images
-        if max(image.size) > 800:
-            ratio = 800.0 / max(image.size)
+        if max(image.size) > 560:
+            ratio = 560.0 / max(image.size)
             new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
             image = image.resize(new_size, Image.LANCZOS)
 
@@ -136,6 +163,7 @@ def analyze_images(input_data, task="general_analysis", **kwargs):
         chat_text = build_vision_chat_text(user_prompt)
 
         # Process inputs
+        print(f"   ⏳ Preparing inputs (device={manager.vision_device_map})...")
         inputs = manager.vision_processor(
             images=[image],
             text=chat_text,
@@ -161,20 +189,26 @@ def analyze_images(input_data, task="general_analysis", **kwargs):
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
 
+        print(f"   ⏳ Running generation (max_new_tokens=300, device={device})...")
+        print(f"      ⚠️  CPU inference can take 5–15 min on large models — still running...")
+        import time as _time
+        _t0 = _time.time()
+
         # Generate
         with torch.no_grad():
             output_ids = manager.vision_model.generate(
                 **processed_inputs,
-                max_new_tokens=300,
-                do_sample=True,
-                temperature=0.6,
-                top_p=0.9,
+                max_new_tokens=150,
+                do_sample=False,
                 repetition_penalty=1.1
             )
 
+        print(f"   ✅ Generation done in {_time.time() - _t0:.1f}s")
+
         prompt_len = processed_inputs.get("input_ids", torch.empty(1, 0)).shape[1]
-        
+
         # Decode
+        print(f"   ⏳ Decoding output...")
         generated_text = ""
         if output_ids.shape[1] > prompt_len:
             new_tokens = output_ids[:, prompt_len:]
@@ -231,8 +265,8 @@ def query_image(image_path: str, question: str) -> str:
         image = Image.open(image_path).convert("RGB")
 
         # Resize large images to fit model context
-        if max(image.size) > 800:
-            ratio = 800.0 / max(image.size)
+        if max(image.size) > 560:
+            ratio = 560.0 / max(image.size)
             new_size = (int(image.size[0] * ratio), int(image.size[1] * ratio))
             image = image.resize(new_size, Image.LANCZOS)
 
@@ -268,9 +302,8 @@ def query_image(image_path: str, question: str) -> str:
         with torch.no_grad():
             output_ids = manager.vision_model.generate(
                 **processed_inputs,
-                max_new_tokens=200,
+                max_new_tokens=100,
                 do_sample=False,
-                temperature=1.0,
             )
 
         prompt_len = processed_inputs.get("input_ids", torch.empty(1, 0)).shape[1]

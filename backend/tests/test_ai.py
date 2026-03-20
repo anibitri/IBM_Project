@@ -1,7 +1,11 @@
 """
 test_ai.py
 Tests for the AI route (/api/ai/) and granite_ai_service.py
-These use the real Granite Chat model.
+
+The Granite Vision model is used for BOTH vision analysis and text chat.
+No separate chat model exists. Service tests skip if not in mock mode and
+the vision model is not loaded (i.e. running on a machine without a GPU).
+Set GRANITE_MOCK=1 to run all tests without a GPU using IBM OTel mock responses.
 """
 
 import pytest
@@ -15,7 +19,7 @@ class TestAIServiceAnalyzeContext:
 
     @pytest.fixture(autouse=True)
     def service(self, manager):
-        if manager.chat_model is None:
+        if not manager.mock_mode and manager.vision_model is None:
             pytest.skip("Chat model not loaded")
         from app.services.granite_ai_service import ai_service
         self.ai = ai_service
@@ -97,7 +101,7 @@ class TestAIServiceChat:
 
     @pytest.fixture(autouse=True)
     def service(self, manager):
-        if manager.chat_model is None:
+        if not manager.mock_mode and manager.vision_model is None:
             pytest.skip("Chat model not loaded")
         from app.services.granite_ai_service import ai_service
         self.ai = ai_service
@@ -162,7 +166,7 @@ class TestAIServiceSummarizeComponents:
 
     @pytest.fixture(autouse=True)
     def service(self, manager):
-        if manager.chat_model is None:
+        if not manager.mock_mode and manager.vision_model is None:
             pytest.skip("Chat model not loaded")
         from app.services.granite_ai_service import ai_service
         self.ai = ai_service
@@ -196,7 +200,7 @@ class TestAIServiceGenerateInsights:
 
     @pytest.fixture(autouse=True)
     def service(self, manager):
-        if manager.chat_model is None:
+        if not manager.mock_mode and manager.vision_model is None:
             pytest.skip("Chat model not loaded")
         from app.services.granite_ai_service import ai_service
         self.ai = ai_service
@@ -384,3 +388,106 @@ class TestAIRouteHealth:
     def test_health_model_loaded(self, client):
         data = client.get('/api/ai/health').get_json()
         assert data['ai_model_loaded'] is True
+
+    def test_health_mock_mode_field_present(self, client):
+        data = client.get('/api/ai/health').get_json()
+        assert 'mock_mode' in data
+        assert isinstance(data['mock_mode'], bool)
+
+
+# ═══════════════════════════════════════════════════════════════
+# MOCK MODE — IBM OTel response tests
+# Run with GRANITE_MOCK=1 (no GPU required).
+# Verify that mock responses are IBM OTel-aware, not generic placeholders.
+# ═══════════════════════════════════════════════════════════════
+
+class TestAIMockResponses:
+
+    @pytest.fixture(autouse=True)
+    def require_mock_mode(self, manager):
+        if not manager.mock_mode:
+            pytest.skip("Mock mode tests only run with GRANITE_MOCK=1")
+        from app.services.granite_ai_service import ai_service
+        self.ai = ai_service
+
+    # ── _mock_chat_response keyword routing ──────────────────
+
+    def test_component_query_returns_component_info(self):
+        result = self.ai.chat_with_document(
+            query="What components are in this diagram?",
+            context="IBM OTel pipeline"
+        )
+        answer = result['answer'].lower()
+        assert any(w in answer for w in ['collector', 'instana', 'app', 'exporter', 'component'])
+
+    def test_flow_query_returns_flow_info(self):
+        result = self.ai.chat_with_document(
+            query="How does data flow through the pipeline?",
+            context="IBM OTel pipeline"
+        )
+        answer = result['answer'].lower()
+        assert any(w in answer for w in ['flow', 'data', 'collector', 'instana', 'otlp'])
+
+    def test_collector_query_returns_collector_info(self):
+        result = self.ai.chat_with_document(
+            query="What does the OpenTelemetry Collector do?",
+            context="IBM OTel pipeline"
+        )
+        answer = result['answer'].lower()
+        assert 'collector' in answer
+
+    def test_instana_query_returns_instana_info(self):
+        result = self.ai.chat_with_document(
+            query="What is Instana?",
+            context="IBM OTel pipeline"
+        )
+        answer = result['answer'].lower()
+        assert 'instana' in answer
+
+    def test_otlp_query_returns_protocol_info(self):
+        result = self.ai.chat_with_document(
+            query="What is the OTLP protocol?",
+            context="IBM OTel pipeline"
+        )
+        answer = result['answer'].lower()
+        assert 'otlp' in answer or 'opentelemetry' in answer
+
+    def test_unrecognised_query_returns_default_response(self):
+        result = self.ai.chat_with_document(
+            query="xyz123 totally unrelated",
+            context="IBM OTel pipeline"
+        )
+        assert isinstance(result['answer'], str)
+        assert len(result['answer']) > 20
+
+    # ── analyze_context returns IBM OTel summary ─────────────
+
+    def test_analyze_context_returns_otel_summary(self):
+        result = self.ai.analyze_context(text_excerpt="IBM OTel pipeline diagram")
+        assert result['status'] == 'ok'
+        answer = result['answer'].lower()
+        assert any(w in answer for w in ['opentelemetry', 'instana', 'collector', 'pipeline'])
+
+    def test_analyze_context_answer_is_not_placeholder(self):
+        result = self.ai.analyze_context(text_excerpt="some content")
+        assert 'placeholder' not in result['answer'].lower()
+        assert 'implement' not in result['answer'].lower()
+
+    # ── Route-level mock mode ─────────────────────────────────
+
+    def test_route_ask_returns_200_in_mock_mode(self, client):
+        resp = client.post('/api/ai/ask', json={
+            'query':   'What is the OTel Collector?',
+            'context': 'IBM OTel pipeline'
+        })
+        assert resp.status_code == 200
+        assert len(resp.get_json()['answer']) > 10
+
+    def test_route_analyze_returns_200_in_mock_mode(self, client):
+        resp = client.post('/api/ai/analyze', json={
+            'text_excerpt': 'IBM OpenTelemetry observability pipeline'
+        })
+        assert resp.status_code == 200
+        data = resp.get_json()
+        assert data['status'] == 'success'
+        assert len(data['ai']['answer']) > 10

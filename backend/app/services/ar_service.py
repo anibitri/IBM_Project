@@ -25,7 +25,7 @@ from app.services.model_manager import manager
 logger = logging.getLogger(__name__)
 
 
-class ImprovedARService:
+class ARService:
     def __init__(self):
         self.debug = False
         
@@ -135,16 +135,14 @@ class ImprovedARService:
         masks = self._run_sam(img_array)
         print(f"   SAM detected {len(masks)} initial masks")
         
-        # Step 2b: Classical contour detection
-        # Only run contour supplement when diagram type was explicitly
-        # requested via hints — auto-detected types rely on SAM alone
-        # to avoid flooding with false positives on architecture diagrams.
-        if self._hint_diagram_type in ('uml', 'flowchart', 'sequence'):
-            print("🔲 Running contour-based detection...")
-            contour_masks = self._detect_contour_components(img)
-            print(f"   Contour detection found {len(contour_masks)} candidates")
-            masks = self._merge_detection_results(masks, contour_masks)
-            print(f"   Merged to {len(masks)} total masks")
+        # Step 2b: Classical contour detection — always run, not just for hinted types.
+        # Contour detection reliably finds closed rectangular/circular shapes (components),
+        # which SAM often over-segments into sub-regions or misses entirely.
+        print("🔲 Running contour-based detection...")
+        contour_masks = self._detect_contour_components(img)
+        print(f"   Contour detection found {len(contour_masks)} candidates")
+        masks = self._merge_detection_results(masks, contour_masks)
+        print(f"   Merged to {len(masks)} total masks")
         
         # Step 3: Filter and score masks
         filtered_masks = self._filter_masks_adaptive(masks, img)
@@ -248,17 +246,20 @@ class ImprovedARService:
                     else:
                         clusters.append([vld])
                 for cluster in clusters:
-                    if len(cluster) < 5:
+                    if len(cluster) < 3:
                         continue
                     # Vertical span of all segments in this cluster
                     span_lo = min(d[1] for d in cluster)
                     span_hi = max(d[2] for d in cluster)
-                    if (span_hi - span_lo) > img_h_px * 0.50:
+                    if (span_hi - span_lo) > img_h_px * 0.40:
                         lifeline_count += 1
         
         # --- Rectangle counting (strong signal for UML / flowcharts) ---
-        _, binary = cv2.threshold(img_array, 0, 255,
-                                  cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # For dark backgrounds, THRESH_BINARY_INV makes the dark background white and
+        # box interiors black — contours then trace the interior fill, not the box border.
+        # Use THRESH_BINARY instead so light shapes on dark backgrounds become foreground.
+        _thresh_flag = cv2.THRESH_BINARY_INV if self._is_light_background else cv2.THRESH_BINARY
+        _, binary = cv2.threshold(img_array, 0, 255, _thresh_flag + cv2.THRESH_OTSU)
         contours_all, _ = cv2.findContours(binary, cv2.RETR_TREE,
                                            cv2.CHAIN_APPROX_SIMPLE)
         rect_count = 0
@@ -314,30 +315,26 @@ class ImprovedARService:
         _hint = getattr(self, '_hint_diagram_type', None)
         if _hint == 'sequence':
             self.diagram_type = 'sequence'
-            self.confidence_threshold = 0.40
             self.min_component_area = max(200, int(img_area * 0.001))
             self.max_component_area = int(img_area * 0.25)
             self.max_aspect_ratio = 8.0
             self.min_aspect_ratio = 0.10
         elif _hint == 'uml':
             self.diagram_type = 'uml'
-            self.confidence_threshold = 0.40
             self.min_component_area = max(200, int(img_area * 0.001))
             self.max_component_area = int(img_area * 0.20)
             self.max_aspect_ratio = 6.0
             self.min_aspect_ratio = 0.15
         elif _hint == 'flowchart':
             self.diagram_type = 'flowchart'
-            self.confidence_threshold = 0.40
             self.min_component_area = max(200, int(img_area * 0.002))
             self.max_component_area = int(img_area * 0.18)
             self.max_aspect_ratio = 5.0
             self.min_aspect_ratio = 0.15
-        elif (lifeline_count >= 3 and h_lines > v_lines * 2 and
-              lifeline_count >= compartmented and rect_count >= 3):
+        elif (lifeline_count >= 3 and h_lines > v_lines * 2.5 and
+              lifeline_count > compartmented and rect_count >= 3):
             # Sequence diagram: parallel vertical lifelines, many horizontal messages
             self.diagram_type = 'sequence'
-            self.confidence_threshold = 0.45
             self.min_component_area = max(300, int(img_area * 0.002))
             self.max_component_area = int(img_area * 0.20)
             self.max_aspect_ratio = 8.0
@@ -346,49 +343,41 @@ class ImprovedARService:
               rect_count >= 5 and diamond_count <= 1):
             # Strong UML evidence: many compartmented rectangles
             self.diagram_type = 'uml'
-            self.confidence_threshold = 0.45
             self.min_component_area = max(300, int(img_area * 0.003))
             self.max_component_area = int(img_area * 0.18)
             self.max_aspect_ratio = 6.0
             self.min_aspect_ratio = 0.15
-        elif (diamond_count >= 2 or
+        elif (diamond_count >= 1 or
               (diamond_count >= 1 and circle_count >= 2) or
-              (rect_count >= 5 and d_lines > total_lines * 0.20)):
-            # Strong flowchart evidence
+              (rect_count >= 3 and d_lines > total_lines * 0.15)):
+            # Flowchart evidence — one diamond is sufficient
             self.diagram_type = 'flowchart'
-            self.confidence_threshold = 0.45
             self.min_component_area = max(300, int(img_area * 0.003))
             self.max_component_area = int(img_area * 0.18)
             self.max_aspect_ratio = 5.0
             self.min_aspect_ratio = 0.15
         elif edge_density > 0.05:
             self.diagram_type = 'dense'
-            self.confidence_threshold = 0.6
             self.max_aspect_ratio = 4.0
-            self.min_component_area = max(500, int(img_area * 0.005))
-            self.max_component_area = int(img_area * 0.12)
+            self.min_component_area = max(500, int(img_area * 0.002))
+            self.max_component_area = int(img_area * 0.20)
         elif edge_density > 0.02:
             self.diagram_type = 'medium'
-            self.confidence_threshold = 0.5
             self.max_aspect_ratio = 5.0
-            self.min_component_area = max(500, int(img_area * 0.005))
-            self.max_component_area = int(img_area * 0.12)
+            self.min_component_area = max(500, int(img_area * 0.002))
+            self.max_component_area = int(img_area * 0.20)
         else:
             self.diagram_type = 'sparse'
-            self.confidence_threshold = 0.4
             self.max_aspect_ratio = 6.0
-            self.min_component_area = max(500, int(img_area * 0.005))
-            self.max_component_area = int(img_area * 0.12)
+            self.min_component_area = max(500, int(img_area * 0.002))
+            self.max_component_area = int(img_area * 0.20)
         
-        print(f"📊 Diagram type detected: {self.diagram_type}")
+        print(f"📊 Diagram type: {self.diagram_type}  bg={'light' if self._is_light_background else 'dark'}  "
+              f"lifelines={lifeline_count}  rects={rect_count}  h/v={h_lines}/{v_lines}  compartmented={compartmented}")
         if self.debug:
-            print(f"   H/V ratio: {hv_ratio:.2f}  rects: {rect_count}  diamonds: {diamond_count}  circles: {circle_count}")
-            print(f"   Lifelines: {lifeline_count}  compartmented: {compartmented}")
-            print(f"   v_lines: {v_lines}  h_lines: {h_lines}  d_lines: {d_lines}")
-            print(f"   Edge density: {edge_density:.4f}")
-            print(f"   Variance: {overall_variance:.1f}")
-            print(f"   Min area: {self.min_component_area} px²")
-            print(f"   Max area: {self.max_component_area} px²")
+            print(f"   diamonds: {diamond_count}  circles: {circle_count}  d_lines: {d_lines}")
+            print(f"   Edge density: {edge_density:.4f}  Variance: {overall_variance:.1f}")
+            print(f"   Min area: {self.min_component_area} px²  Max area: {self.max_component_area} px²")
 
     def _estimate_background_model(self, rgb_array: np.ndarray):
         """Estimate dominant background colour (robust for light/dark themes)."""
@@ -516,9 +505,9 @@ class ImprovedARService:
             # Calculate score
             score = self._calculate_mask_score(mask, segmentation, img_array, img_rgb)
             
-            # Only lower keep-threshold when there's an explicit hint
-            _hint = getattr(self, '_hint_diagram_type', None)
-            if _hint in ('uml', 'flowchart', 'sequence'):
+            # Lower threshold for structured diagram types (explicit hint OR auto-detected)
+            _diag = getattr(self, '_hint_diagram_type', None) or getattr(self, 'diagram_type', 'medium')
+            if _diag in ('uml', 'flowchart', 'sequence'):
                 keep_threshold = 0.40
             else:
                 keep_threshold = self.confidence_threshold
@@ -557,17 +546,40 @@ class ImprovedARService:
         # Hard reject: mask covers > 40% of image (background)
         if area / img_area > 0.40:
             return 0.0
-        
+
         # Hard reject: bounding box spans > 80% in both dims (full-image)
         if w / img_w > 0.80 and h / img_h > 0.80:
             return 0.0
+
+        # Hard reject: large canvas / whitespace segments on light backgrounds.
+        # On light-background diagrams SAM often produces a single large mask
+        # that covers the empty canvas area (grid or plain white).  These regions
+        # have norm_area > 0.12 but contain almost no meaningful content —
+        # check the interior of the bbox directly here before expensive scoring.
+        if (w * h) / img_area > 0.12 and self._is_light_background:
+            y1c, y2c = max(0, y), min(img_h, y + h)
+            x1c, x2c = max(0, x), min(img_w, x + w)
+            region_check = img_array[y1c:y2c, x1c:x2c]
+            if region_check.size > 0:
+                rh, rw = region_check.shape[:2]
+                mry = max(3, int(rh * 0.15))
+                mrx = max(3, int(rw * 0.15))
+                interior_check = region_check[mry:rh - mry, mrx:rw - mrx]
+                if interior_check.size > 0:
+                    ic_edges = cv2.Canny(interior_check, 50, 150)
+                    ic_edge_density = ic_edges.sum() / interior_check.size
+                    ic_variance = float(np.var(interior_check))
+                    # Very low content → canvas artifact, not a component
+                    if ic_edge_density < 0.005 and ic_variance < 40:
+                        return 0.0
         
         # Hard reject: normalised bbox area too small or too large
-        # Only use relaxed thresholds when there's an explicit hint
+        # Use relaxed thresholds for structured diagram types (explicit hint OR auto-detected)
         norm_area = (w * h) / img_area
         _hint = getattr(self, '_hint_diagram_type', None)
-        _min_norm = 0.001 if _hint in ('uml', 'flowchart', 'sequence') else 0.004
-        _max_norm = 0.25  if _hint in ('uml', 'flowchart', 'sequence') else 0.20
+        _diag = _hint or getattr(self, 'diagram_type', 'medium')
+        _min_norm = 0.001 if _diag in ('uml', 'flowchart', 'sequence') else 0.004
+        _max_norm = 0.25  if _diag in ('uml', 'flowchart', 'sequence') else 0.20
         if norm_area < _min_norm:
             return 0.0
         if norm_area > _max_norm:
@@ -577,6 +589,25 @@ class ImprovedARService:
         aspect_ratio_raw = max(w, h) / (min(w, h) + 1e-6)
         if aspect_ratio_raw > 6.0 and touches_any_border:
             return 0.0
+
+        # Hard reject: toolbar / UI elements at the very bottom of screen captures.
+        # The bottom 6% of a screenshot often contains application toolbars.
+        # Only applies to components that don't also touch the top (so we don't
+        # reject full-height elements like sidebars), and aren't unusually large.
+        bottom_margin = int(img_h * 0.06)
+        touches_bottom_only = (y + h >= img_h - bottom_margin) and (y > img_h * 0.5)
+        if touches_bottom_only and norm_area < 0.08:
+            return 0.0
+
+        # Hard reject: triangular shapes — these are arrowheads, not components
+        seg_contours_early, _ = cv2.findContours(
+            segmentation.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        )
+        if seg_contours_early:
+            peri_early = cv2.arcLength(seg_contours_early[0], True)
+            approx_early = cv2.approxPolyDP(seg_contours_early[0], 0.04 * peri_early, True)
+            if len(approx_early) == 3:
+                return 0.0
         
         # Hard reject: large irregular blobs (merged segments covering multiple components)
         # Real components are roughly rectangular; blobs have low fill ratio
@@ -593,8 +624,8 @@ class ImprovedARService:
             size_score = 0.0
         else:
             relative_area = area / img_area
-            if _hint in ('uml', 'flowchart', 'sequence'):
-                # Relaxed only with explicit hint
+            if _diag in ('uml', 'flowchart', 'sequence'):
+                # Relaxed for structured diagram types
                 if 0.002 < relative_area < 0.08:
                     size_score = 1.0
                 elif 0.001 < relative_area <= 0.002:
@@ -668,8 +699,21 @@ class ImprovedARService:
                         if interior_edge_density < 8 and interior_variance < 800:
                             return 0.0
                     else:
+                        # Only reject uniform interiors that are also background-coloured
+                        # AND have no visible border frame.
+                        # Solid-fill components on dark backgrounds have low interior
+                        # variance/edge-density (dark fill ≈ dark background) but they
+                        # DO have a visible border — _has_rect_frame catches those.
                         if interior_edge_density < 0.002 and interior_variance < 15:
-                            return 0.0
+                            interior_rgb = region_rgb[margin_y:rh - margin_y, margin_x:rw - margin_x]
+                            if interior_rgb.size > 0:
+                                interior_color = np.mean(interior_rgb.reshape(-1, 3), axis=0)
+                                bg_diff = float(np.linalg.norm(interior_color - self._bg_rgb))
+                                if bg_diff < 40 and not self._has_rect_frame(region):
+                                    return 0.0
+                            else:
+                                if not self._has_rect_frame(region):
+                                    return 0.0
         
         # Factor 5: Shape compactness (prefer regular shapes)
         contours_found = cv2.findContours(
@@ -700,15 +744,29 @@ class ImprovedARService:
         else:
             border_penalty = 0.0
         
+        # Factor 7: Rectangularity bonus — clearly rectangular shapes are almost always
+        # real components in technical diagrams, not noise or background regions
+        rectangularity_bonus = 0.0
+        if seg_contours_early:
+            cnt_r = max(seg_contours_early, key=cv2.contourArea)
+            bx_r, by_r, bw_r, bh_r = cv2.boundingRect(cnt_r)
+            bb_area_r = bw_r * bh_r
+            if bb_area_r > 0:
+                rect_fill = cv2.contourArea(cnt_r) / bb_area_r
+                if rect_fill > 0.82:
+                    rectangularity_bonus = 0.10
+                elif rect_fill > 0.70:
+                    rectangularity_bonus = 0.05
+
         # Weighted composite score (capped at 1.0)
         total_score = (
-            0.25 * size_score +
-            0.20 * aspect_score +
+            0.22 * size_score +
+            0.18 * aspect_score +
             0.20 * edge_score +
             0.15 * texture_score +
             0.10 * compactness_score +
             0.10 * min(1.0, mask.get('predicted_iou', 0.8))
-        ) - border_penalty
+        ) - border_penalty + rectangularity_bonus
         
         total_score = max(0.0, min(1.0, total_score))
         
@@ -717,7 +775,7 @@ class ImprovedARService:
         
         return total_score
     
-    def _non_maximum_suppression(self, masks: List[Dict], iou_threshold: float = 0.3) -> List[Dict]:
+    def _non_maximum_suppression(self, masks: List[Dict], iou_threshold: float = 0.25) -> List[Dict]:
         """Remove overlapping and contained masks using mask IoU and containment."""
         if len(masks) == 0:
             return []
@@ -735,8 +793,10 @@ class ImprovedARService:
                 containment_of_current = self._calculate_containment(m, current)
                 max_containment = max(containment_in_current, containment_of_current)
                 
-                # Suppress if mask overlap or containment is too high
-                if iou >= iou_threshold or max_containment >= 0.65:
+                # Suppress if mask overlap or containment is too high.
+                # Threshold raised to 0.85 to allow legitimate nested components
+                # (e.g. inner boxes inside a container box) to coexist.
+                if iou >= iou_threshold or max_containment >= 0.85:
                     continue
                 remaining.append(m)
             masks = remaining
@@ -988,20 +1048,22 @@ class ImprovedARService:
         """Detect rectangular / diamond / circular components using classical
         contour detection.  Supplements SAM for UML class boxes and flowchart
         shapes that SAM may miss.
-        
-        Uses two complementary approaches:
-        1. Edge-based detection with morphological closing (handles connected lines)
-        2. Binary threshold detection with containment filtering
+
+        Uses four complementary approaches:
+        1. Edge-based detection with small closing (solid borders, connected lines)
+        2. Binary threshold detection (filled shapes)
+        3. Blur + sensitive Canny (suppresses hatch-fill texture, finds clean borders)
+        4. Large-kernel closing (closes dashed/dotted outline gaps of up to ~15px)
         """
         img_array = np.array(img.convert('L'))
         h, w = img_array.shape
         img_area = h * w
-        
+
         all_candidates: List[Dict] = []
-        
+
         # --- Approach 1: Edge-based contour detection ---
-        # Edges + morphological close to form enclosed regions
-        edges = cv2.Canny(img_array, 50, 150)
+        # Edges + small morphological close to form enclosed regions from solid borders.
+        edges = cv2.Canny(img_array, 30, 100)
         kernel = np.ones((3, 3), dtype=np.uint8)
         closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
         contours_edge, _ = cv2.findContours(closed, cv2.RETR_LIST,
@@ -1010,13 +1072,47 @@ class ImprovedARService:
             cand = self._contour_to_candidate(contour, h, w, img_area)
             if cand is not None:
                 all_candidates.append(cand)
-        
+
         # --- Approach 2: Binary threshold (catches filled shapes) ---
-        _, binary = cv2.threshold(img_array, 0, 255,
-                                  cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        # Use background-aware thresholding: on dark backgrounds THRESH_BINARY keeps
+        # light shapes (boxes/borders) as foreground; INV would invert that and merge
+        # the dark background with box interiors, destroying contour boundaries.
+        _thresh_flag = cv2.THRESH_BINARY_INV if self._is_light_background else cv2.THRESH_BINARY
+        _, binary = cv2.threshold(img_array, 0, 255, _thresh_flag + cv2.THRESH_OTSU)
         contours_bin, _ = cv2.findContours(binary, cv2.RETR_LIST,
                                            cv2.CHAIN_APPROX_SIMPLE)
         for contour in contours_bin:
+            cand = self._contour_to_candidate(contour, h, w, img_area)
+            if cand is not None:
+                all_candidates.append(cand)
+
+        # --- Approach 3: Blur + sensitive Canny for structural borders ---
+        # Strong Gaussian blur suppresses fine texture (hatch-fill diagonal lines,
+        # text, noise) while preserving thicker box borders.  More sensitive Canny
+        # thresholds then pick up borders that may have low contrast on dark
+        # backgrounds.  This reliably finds the outer border of hatched-interior boxes
+        # that Approach 1 misses because the hatch lines generate competing contours.
+        blurred = cv2.GaussianBlur(img_array, (11, 11), 0)
+        edges_blur = cv2.Canny(blurred, 20, 80)
+        kernel_med = np.ones((5, 5), dtype=np.uint8)
+        closed_blur = cv2.morphologyEx(edges_blur, cv2.MORPH_CLOSE, kernel_med, iterations=2)
+        contours_blur, _ = cv2.findContours(closed_blur, cv2.RETR_LIST,
+                                            cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours_blur:
+            cand = self._contour_to_candidate(contour, h, w, img_area)
+            if cand is not None:
+                all_candidates.append(cand)
+
+        # --- Approach 4: Large-kernel closing for dashed/dotted outlines ---
+        # Diagram container boxes are often drawn with dashed borders whose gaps are
+        # 8-15px wide.  Approach 1's 3×3 kernel only bridges gaps ≤ 3px.  A 15×15
+        # kernel (7px reach) closes gaps up to ~14px, turning dashed outlines into
+        # solid closed contours that findContours can trace.
+        kernel_large = np.ones((15, 15), dtype=np.uint8)
+        closed_large = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel_large, iterations=3)
+        contours_large, _ = cv2.findContours(closed_large, cv2.RETR_LIST,
+                                             cv2.CHAIN_APPROX_SIMPLE)
+        for contour in contours_large:
             cand = self._contour_to_candidate(contour, h, w, img_area)
             if cand is not None:
                 all_candidates.append(cand)
@@ -1031,9 +1127,10 @@ class ImprovedARService:
                 if iou > 0.3:
                     duplicate = True
                     break
-                # Also check bbox containment
+                # Also check bbox containment. Raised to 0.85 so that inner
+                # nested boxes are not discarded during deduplication.
                 cont = self._calculate_containment(kept, cand)
-                if cont > 0.7:
+                if cont > 0.85:
                     duplicate = True
                     break
             if not duplicate:
@@ -1056,8 +1153,8 @@ class ImprovedARService:
             return None
         
         norm_area = (bw * bh) / img_area
-        _hint = getattr(self, '_hint_diagram_type', None)
-        _min_norm = 0.001 if _hint in ('uml', 'flowchart', 'sequence') else 0.004
+        _diag = getattr(self, '_hint_diagram_type', None) or getattr(self, 'diagram_type', 'medium')
+        _min_norm = 0.001 if _diag in ('uml', 'flowchart', 'sequence') else 0.002
         if norm_area < _min_norm:
             return None
         
@@ -1209,25 +1306,31 @@ class ImprovedARService:
         if lines is not None:
             for line in lines:
                 x1, y1, x2, y2 = line[0]
-                
                 # Normalize coordinates
                 x1_norm, y1_norm = x1 / w, y1 / h
                 x2_norm, y2_norm = x2 / w, y2 / h
-                
                 # Find which components this line connects
                 connected_comps = self._find_connected_components(
                     (x1_norm, y1_norm),
                     (x2_norm, y2_norm),
                     components
                 )
-                
                 if len(connected_comps) >= 2:
+                    # Arrow direction detection
+                    direction = self._detect_arrow_direction((x1, y1), (x2, y2), img_array)
+                    if direction == 'forward':
+                        from_id, to_id = connected_comps[0], connected_comps[1]
+                    elif direction == 'backward':
+                        from_id, to_id = connected_comps[1], connected_comps[0]
+                    else:
+                        from_id, to_id = connected_comps[0], connected_comps[1]
                     connections.append({
-                        'from': connected_comps[0],
-                        'to': connected_comps[1],
+                        'from': from_id,
+                        'to': to_id,
                         'type': 'line',
                         'start': {'x': x1_norm, 'y': y1_norm},
                         'end': {'x': x2_norm, 'y': y2_norm},
+                        'direction': direction,
                         'confidence': 0.9
                     })
         
@@ -1252,38 +1355,78 @@ class ImprovedARService:
         return connections
     
     def _find_connected_components(
-        self, 
-        point1: Tuple[float, float], 
-        point2: Tuple[float, float], 
+        self,
+        point1: Tuple[float, float],
+        point2: Tuple[float, float],
         components: List[Dict],
-        proximity_threshold: float = 0.02
+        proximity_threshold: float = 0.03
     ) -> List[str]:
-        """Find components that are near the endpoints of a line"""
+        """Find components whose bounding boxes are near the endpoints of a line.
+
+        Uses bounding-box proximity rather than center-point distance so that
+        lines touching a component's edge (not its center) are matched correctly.
+        """
         connected = []
-        
+        margin = proximity_threshold
+
+        def _near_box(pt, comp):
+            """True if pt is inside the component bbox (expanded by margin)."""
+            x, y = pt
+            return (
+                comp['x'] - margin <= x <= comp['x'] + comp['width']  + margin and
+                comp['y'] - margin <= y <= comp['y'] + comp['height'] + margin
+            )
+
         for comp in components:
-            # Check distance to component center or terminals
-            comp_center = (comp['center_x'], comp['center_y'])
-            
-            # Distance from line endpoints to component
-            dist1 = np.sqrt((point1[0] - comp_center[0])**2 + (point1[1] - comp_center[1])**2)
-            dist2 = np.sqrt((point2[0] - comp_center[0])**2 + (point2[1] - comp_center[1])**2)
-            
-            if dist1 < proximity_threshold or dist2 < proximity_threshold:
+            if comp['id'] in connected:
+                continue
+            if _near_box(point1, comp) or _near_box(point2, comp):
                 connected.append(comp['id'])
-            
-            # Also check terminals
-            for terminal in comp.get('terminals', []):
-                term_pos = (terminal['x'], terminal['y'])
-                dist1 = np.sqrt((point1[0] - term_pos[0])**2 + (point1[1] - term_pos[1])**2)
-                dist2 = np.sqrt((point2[0] - term_pos[0])**2 + (point2[1] - term_pos[1])**2)
-                
-                if dist1 < proximity_threshold or dist2 < proximity_threshold:
-                    if comp['id'] not in connected:
-                        connected.append(comp['id'])
-        
+
         return connected
     
+    def _detect_arrow_direction(self, pt1: Tuple[int, int], pt2: Tuple[int, int],
+                                img_array: np.ndarray, roi_size: int = 15) -> str:
+        """
+        Detect arrow direction by looking for arrowhead-like features near endpoints.
+        Returns 'forward', 'backward', or 'undirected'.
+        """
+        x1, y1 = pt1
+        x2, y2 = pt2
+        h, w = img_array.shape[:2]
+
+        def has_arrowhead(roi):
+            if roi.size == 0:
+                return False
+            roi_gray = cv2.cvtColor(roi, cv2.COLOR_RGB2GRAY) if len(roi.shape) == 3 else roi
+            edges = cv2.Canny(roi_gray, 50, 150)
+            contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                if cv2.contourArea(cnt) < 5:
+                    continue
+                approx = cv2.approxPolyDP(cnt, 0.2 * cv2.arcLength(cnt, True), True)
+                if 3 <= len(approx) <= 5:
+                    return True
+            return False
+
+        roi1 = img_array[
+            max(0, y1 - roi_size):min(h, y1 + roi_size),
+            max(0, x1 - roi_size):min(w, x1 + roi_size)
+        ]
+        roi2 = img_array[
+            max(0, y2 - roi_size):min(h, y2 + roi_size),
+            max(0, x2 - roi_size):min(w, x2 + roi_size)
+        ]
+
+        arrow1 = has_arrowhead(roi1)
+        arrow2 = has_arrowhead(roi2)
+
+        if arrow2 and not arrow1:
+            return 'forward'
+        if arrow1 and not arrow2:
+            return 'backward'
+        return 'undirected'
+
     def _detect_proximity_connections(self, components: List[Dict], threshold: float = 0.05) -> List[Dict]:
         """Detect connections based on terminal proximity"""
         connections = []
@@ -1581,4 +1724,4 @@ class ImprovedARService:
 
 
 # Global instance
-ar_service = ImprovedARService()
+ar_service = ARService()

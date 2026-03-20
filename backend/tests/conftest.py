@@ -1,6 +1,7 @@
 """
 conftest.py
 Shared fixtures. Models load ONCE per session - no mocking.
+Set GRANITE_MOCK=1 in the environment to run without GPU/models.
 """
 
 import os
@@ -12,45 +13,78 @@ from PIL import Image, ImageDraw
 BACKEND_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..'))
 sys.path.insert(0, BACKEND_ROOT)
 
-os.environ['HF_HOME'] = r"/dcs/large/u2287990/AI_models"
-os.environ['GRANITE_MOCK'] = '0'
+# os.environ['HF_HOME'] = r"/dcs/large/u2287990/AI_models"
+# Respect the environment variable; default to real-model mode.
+# Override: GRANITE_MOCK=1 pytest  (runs without GPU — uses IBM OTel mock responses)
+from dotenv import load_dotenv
+load_dotenv(os.path.join(BACKEND_ROOT, '.env'))
+
+os.environ.setdefault('GRANITE_MOCK', '0')
+
+# Disable OpenTelemetry SDK during tests — no collector is running,
+# which causes constant gRPC errors and "I/O on closed file" noise
+# when the OTel background thread outlives the test process.
+os.environ.setdefault('OTEL_SDK_DISABLED', 'true')
+
+API_ACCESS_TOKEN = os.environ.get('API_ACCESS_TOKEN', 'ibm-project-dev-token')
 
 
 # ── Image helpers ────────────────────────────────────────────
 
-def make_diagram_png(path: str):
-    img  = Image.new("RGB", (800, 600), color=(240, 240, 245))
+def make_otel_diagram_png(path: str):
+    """
+    Draw a minimal IBM OpenTelemetry → Instana pipeline diagram.
+    Matches the project's subject matter: App → OTel Collector →
+    OTLP/Instana Exporter → Instana Agent → Instana.
+    """
+    W, H = 900, 300
+    img  = Image.new("RGB", (W, H), color=(245, 247, 250))
     draw = ImageDraw.Draw(img)
-    for x in range(0, 800, 40):
-        draw.line([(x, 0), (x, 600)], fill=(220, 225, 235), width=1)
-    for y in range(0, 600, 40):
-        draw.line([(0, y), (800, y)], fill=(220, 225, 235), width=1)
-    draw.rectangle([0, 0, 800, 35], fill=(50, 50, 70))
-    draw.text((400, 17), "System Architecture Diagram", fill="white", anchor="mm")
-    for (x1, y1, x2, y2), color, label in [
-        ((80,  80,  280, 200), (70,  130, 180), "CPU"),
-        ((340, 80,  520, 160), (60,  160, 80),  "RAM"),
-        ((340, 180, 460, 240), (180, 100, 60),  "Cache"),
-        ((560, 80,  700, 220), (160, 60,  180), "CLK"),
-        ((80,  280, 300, 380), (200, 160, 40),  "Storage"),
-        ((340, 280, 620, 420), (180, 50,  50),  "GPU"),
-        ((80,  440, 220, 520), (80,  160, 160), "I/O"),
-        ((280, 440, 480, 520), (100, 80,  180), "Network"),
-    ]:
-        draw.rectangle([x1, y1, x2, y2], fill=color, outline=(30, 30, 30), width=3)
-        draw.text(((x1+x2)//2, (y1+y2)//2), label, fill="white", anchor="mm")
-    for s, e in [((280,140),(340,120)),((190,200),(190,280)),((430,160),(480,280))]:
-        draw.line([s, e], fill=(80, 80, 100), width=2)
+
+    # Title bar
+    draw.rectangle([0, 0, W, 30], fill=(30, 50, 80))
+    draw.text((W // 2, 15), "IBM OpenTelemetry → Instana Pipeline", fill="white", anchor="mm")
+
+    # Five component boxes with labels
+    boxes = [
+        (30,  80, 170, 200, (70,  130, 180), "App"),
+        (210, 80, 380, 200, (60,  160,  80), "OTel\nCollector"),
+        (420, 80, 590, 200, (180, 100,  60), "OTLP/Instana\nExporter"),
+        (630, 80, 760, 200, (160,  60, 180), "Instana\nAgent"),
+        (800, 80, 880, 200, (180,  50,  50), "Instana"),
+    ]
+    for (x1, y1, x2, y2, color, label) in boxes:
+        draw.rectangle([x1, y1, x2, y2], fill=color, outline=(20, 20, 20), width=3)
+        cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+        draw.text((cx, cy), label, fill="white", anchor="mm")
+
+    # Connecting arrows between boxes
+    arrows = [
+        (170, 140, 210, 140),
+        (380, 140, 420, 140),
+        (590, 140, 630, 140),
+        (760, 140, 800, 140),
+    ]
+    for (x1, y1, x2, y2) in arrows:
+        draw.line([(x1, y1), (x2, y2)], fill=(40, 40, 60), width=3)
+        draw.polygon([(x2, y2), (x2 - 8, y2 - 5), (x2 - 8, y2 + 5)], fill=(40, 40, 60))
+
+    # Protocol labels
+    draw.text((190, 155), "OTLP", fill=(60, 60, 90), anchor="mm")
+    draw.text((400, 155), "OTLP", fill=(60, 60, 90), anchor="mm")
+    draw.text((610, 155), "HTTPS", fill=(60, 60, 90), anchor="mm")
+    draw.text((780, 155), "internal", fill=(60, 60, 90), anchor="mm")
+
     img.save(path)
 
 
 def make_simple_png(path: str):
     img  = Image.new("RGB", (400, 300), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
-    draw.rectangle([30,  30,  180, 130], fill=(100, 149, 237), outline=(0,0,0), width=3)
-    draw.rectangle([220, 30,  370, 130], fill=(60,  179, 113), outline=(0,0,0), width=3)
-    draw.rectangle([100, 170, 300, 270], fill=(220, 100, 60),  outline=(0,0,0), width=3)
-    draw.line([(180, 80), (220, 80)],   fill=(0,0,0), width=2)
+    draw.rectangle([30,  30,  180, 130], fill=(100, 149, 237), outline=(0, 0, 0), width=3)
+    draw.rectangle([220, 30,  370, 130], fill=(60,  179, 113), outline=(0, 0, 0), width=3)
+    draw.rectangle([100, 170, 300, 270], fill=(220, 100,  60), outline=(0, 0, 0), width=3)
+    draw.line([(180, 80), (220, 80)], fill=(0, 0, 0), width=2)
     img.save(path)
 
 
@@ -83,14 +117,22 @@ def flask_app(manager):
 
 @pytest.fixture(scope="session")
 def client(flask_app):
+    test_client = flask_app.test_client()
+    # Most API routes require a static bearer token.
+    test_client.environ_base['HTTP_AUTHORIZATION'] = f'Bearer {API_ACCESS_TOKEN}'
+    return test_client
+
+
+@pytest.fixture(scope="session")
+def unauthenticated_client(flask_app):
     return flask_app.test_client()
 
 
 @pytest.fixture(scope="session")
 def test_images_dir(tmp_path_factory):
     d = tmp_path_factory.mktemp("imgs")
-    make_diagram_png(str(d / "diagram.png"))
-    make_simple_png(str(d  / "simple.png"))
+    make_otel_diagram_png(str(d / "diagram.png"))
+    make_simple_png(str(d / "simple.png"))
     large = Image.new("RGB", (5000, 4000), color=(200, 200, 210))
     large.save(str(d / "large.png"))
     tiny = Image.new("RGB", (8, 8), color=(255, 0, 0))

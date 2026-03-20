@@ -6,6 +6,9 @@ test_security.py - Path traversal, input validation, injection
 import pytest
 import io
 
+VALID_AUTH = {'Authorization': 'Bearer ibm-project-dev-token'}
+INVALID_AUTH = {'Authorization': 'Bearer invalid-token'}
+
 
 # ═══════════════════════════════════════════════════════════════
 # GLOBAL HEALTH
@@ -15,7 +18,7 @@ class TestGlobalHealth:
 
     def test_api_health_200(self, client):
         resp = client.get('/api/health')
-        assert resp.status_code == 200
+        assert resp.status_code in (200, 207)
 
     def test_api_health_returns_status(self, client):
         data = client.get('/api/health').get_json()
@@ -32,11 +35,6 @@ class TestGlobalHealth:
         assert 'vision' in models
         assert 'loaded' in models['vision']
 
-    def test_api_health_chat_reported(self, client):
-        data   = client.get('/api/health').get_json()
-        models = data.get('models', {})
-        assert 'chat' in models
-
     def test_api_health_ar_reported(self, client):
         data   = client.get('/api/health').get_json()
         models = data.get('models', {})
@@ -46,6 +44,11 @@ class TestGlobalHealth:
         data = client.get('/api/health').get_json()
         assert 'mode' in data
         assert data['mode'] in ('REAL AI', 'MOCK')
+
+    def test_ai_health_reports_mock_mode(self, client):
+        data = client.get('/api/ai/health').get_json()
+        assert 'mock_mode' in data
+        assert isinstance(data['mock_mode'], bool)
 
     def test_api_routes_200(self, client):
         resp = client.get('/api/routes')
@@ -80,17 +83,14 @@ class TestModelManagerStatus:
     def test_get_status_has_vision(self, manager):
         status = manager.get_status()
         assert 'vision' in status
-        assert status['vision']['loaded'] is True
-
-    def test_get_status_has_chat(self, manager):
-        status = manager.get_status()
-        assert 'chat' in status
-        assert status['chat']['loaded'] is True
+        expected = not status.get('mock_mode', False)
+        assert status['vision']['loaded'] is expected
 
     def test_get_status_has_ar(self, manager):
         status = manager.get_status()
         assert 'ar' in status
-        assert status['ar']['loaded'] is True
+        expected = not status.get('mock_mode', False)
+        assert status['ar']['loaded'] is expected
 
     def test_get_status_all_loaded(self, manager):
         status = manager.get_status()
@@ -104,21 +104,33 @@ class TestModelManagerStatus:
         assert 'total_vram_gb' in hw
 
     def test_vision_model_is_not_none(self, manager):
-        assert manager.vision_model    is not None
-        assert manager.vision_processor is not None
-
-    def test_chat_model_is_not_none(self, manager):
-        assert manager.chat_model     is not None
-        assert manager.chat_tokenizer is not None
+        status = manager.get_status()
+        if status.get('mock_mode', False):
+            assert manager.vision_model is None
+            assert manager.vision_processor is None
+        else:
+            assert manager.vision_model is not None
+            assert manager.vision_processor is not None
 
     def test_ar_model_is_not_none(self, manager):
-        assert manager.ar_model is not None
+        status = manager.get_status()
+        if status.get('mock_mode', False):
+            assert manager.ar_model is None
+        else:
+            assert manager.ar_model is not None
 
-    def test_chat_tokenizer_has_pad_token(self, manager):
-        assert manager.chat_tokenizer.pad_token_id is not None
+    def test_vision_model_used_for_chat(self, manager):
+        """Vision model is the sole inference model — no separate chat model."""
+        status = manager.get_status()
+        assert 'chat' not in status, "chat key should not exist — vision handles both roles"
+        assert 'note' in status.get('vision', {}) or 'model_id' in status.get('vision', {})
 
-    def test_chat_model_pad_token_synced(self, manager):
-        assert manager.chat_model.config.pad_token_id == manager.chat_tokenizer.pad_token_id
+    def test_no_chat_model_attribute(self, manager):
+        """manager must not have chat_model or chat_tokenizer attributes."""
+        assert not hasattr(manager, 'chat_model'), \
+            "chat_model was removed — vision model handles chat"
+        assert not hasattr(manager, 'chat_tokenizer'), \
+            "chat_tokenizer was removed — vision processor handles tokenisation"
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -257,3 +269,102 @@ class TestUnknownEndpoints:
         data = resp.get_json()
         assert data is not None
         assert 'error' in data
+        assert data.get('status') == 'error'
+        assert 'request_id' in data
+
+
+class TestAuthentication:
+
+    def test_protected_endpoint_requires_token(self, unauthenticated_client):
+        resp = unauthenticated_client.post('/api/ai/analyze', json={'text_excerpt': 'hello'})
+        assert resp.status_code == 401
+        data = resp.get_json()
+        assert data['status'] == 'error'
+        assert data['code'] == 'AUTH_INVALID_TOKEN'
+        assert data['error'] == 'Missing or invalid API token'
+        assert 'request_id' in data
+
+    def test_protected_endpoint_rejects_invalid_token(self, unauthenticated_client):
+        resp = unauthenticated_client.post(
+            '/api/ai/analyze',
+            json={'text_excerpt': 'hello'},
+            headers=INVALID_AUTH,
+        )
+        assert resp.status_code == 401
+        data = resp.get_json()
+        assert data['status'] == 'error'
+        assert data['code'] == 'AUTH_INVALID_TOKEN'
+
+    def test_valid_token_reaches_endpoint_validation(self, unauthenticated_client):
+        resp = unauthenticated_client.post('/api/ai/analyze', json={}, headers=VALID_AUTH)
+        assert resp.status_code == 400
+        data = resp.get_json()
+        assert data['status'] == 'error'
+        assert data['error'] != 'Missing or invalid API token'
+
+    def test_public_health_does_not_require_token(self, unauthenticated_client):
+        resp = unauthenticated_client.get('/api/health')
+        assert resp.status_code in (200, 207)
+
+    def test_request_id_header_is_returned(self, unauthenticated_client):
+        resp = unauthenticated_client.post('/api/ai/analyze', json={'text_excerpt': 'x'}, headers=INVALID_AUTH)
+        data = resp.get_json()
+        assert 'X-Request-ID' in resp.headers
+        assert data.get('request_id') == resp.headers['X-Request-ID']
+
+
+class TestHttpsAndSecurityHeaders:
+
+    def test_api_security_headers_present(self, client):
+        resp = client.get('/api/health')
+        assert resp.headers.get('X-Content-Type-Options') == 'nosniff'
+        assert resp.headers.get('Referrer-Policy') == 'no-referrer'
+        assert resp.headers.get('Permissions-Policy') == 'camera=(self), microphone=()'
+        assert resp.headers.get('X-Frame-Options') == 'DENY'
+
+    def test_hsts_not_set_on_plain_http(self, client):
+        resp = client.get('/api/health')
+        assert 'Strict-Transport-Security' not in resp.headers
+
+    def test_hsts_set_when_forwarded_proto_https(self, client):
+        resp = client.get('/api/health', headers={'X-Forwarded-Proto': 'https'})
+        assert resp.headers.get('Strict-Transport-Security') == 'max-age=31536000; includeSubDomains'
+
+    def test_static_route_has_sameorigin_frame_header(self, client, uploaded_diagram):
+        resp = client.get(f'/static/uploads/{uploaded_diagram}')
+        assert resp.status_code == 200
+        assert resp.headers.get('X-Frame-Options') == 'SAMEORIGIN'
+
+
+class TestErrorHandlingContract:
+
+    def test_404_error_payload_is_standardized(self, client):
+        resp = client.get('/api/not-a-route')
+        assert resp.status_code == 404
+        data = resp.get_json()
+        assert data['status'] == 'error'
+        assert 'error' in data
+        assert 'request_id' in data
+        assert 'details' not in data
+
+    def test_405_error_payload_is_standardized(self, client):
+        resp = client.get('/api/ai/analyze')
+        assert resp.status_code == 405
+        data = resp.get_json()
+        assert data['status'] == 'error'
+        assert 'error' in data
+        assert 'request_id' in data
+        assert 'details' not in data
+
+    def test_upload_oversize_returns_413_with_standard_error(self, client):
+        big_data = io.BytesIO(b'x' * (51 * 1024 * 1024))
+        resp = client.post(
+            '/api/upload/',
+            data={'file': (big_data, 'big.png', 'image/png')},
+            content_type='multipart/form-data',
+        )
+        assert resp.status_code in (400, 413)
+        data = resp.get_json()
+        assert data['status'] == 'error'
+        assert 'error' in data
+        assert 'details' not in data

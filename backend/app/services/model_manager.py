@@ -3,26 +3,32 @@
 
 import torch
 import os
-os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
+# os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
 import logging
 from typing import Optional
 
 logger = logging.getLogger(__name__)
 
+# IBM Granite Vision model — used for BOTH vision analysis and text chat
+VISION_MODEL_ID = "ibm-granite/granite-vision-3.3-2b"
+
 class ModelManager:
     def __init__(self):
+        self.mock_mode = os.environ.get("GRANITE_MOCK") == "1"
         self._configure_hardware()
         self._configure_vision()
-        self._configure_chat()
         self._initialise_model_refs()
-        self.load_models()
+        if self.mock_mode:
+            print("🧪 GRANITE_MOCK=1 detected - skipping model loading")
+        else:
+            self.load_models()
 
     # ============================================================
     # 1. HARDWARE CONFIGURATION
     # ============================================================
 
     def _configure_hardware(self):
-        """Detect and configure available hardware"""
+        """Detect and configure available hardware. Priority: CUDA → MPS → CPU"""
         if torch.cuda.is_available():
             self.device = "cuda"
             self.dtype = torch.float16
@@ -35,13 +41,26 @@ class ModelManager:
             print(f"🚀 GPU Detected: {self.gpu_name}")
             print(f"   VRAM         : {self.total_vram_gb:.1f} GB")
             print(f"   BF16 Support : {'✅' if self.bf16_supported else '❌'}")
+
+        elif torch.backends.mps.is_available():
+            self.device = "mps"
+            self.dtype = torch.float16
+            self.gpu_name = "Apple MPS"
+            self.total_vram_gb = 0      # unified memory — not separately reported
+            self.bf16_supported = False  # MPS does not support bfloat16
+            print("🍎 Apple MPS detected - Running on GPU (Metal)")
+
         else:
             self.device = "cpu"
             self.dtype = torch.float32
             self.gpu_name = None
             self.total_vram_gb = 0
             self.bf16_supported = False
-            print("⚠️ No GPU detected - Running on CPU")
+            # Use all available CPU cores for inference
+            cpu_cores = os.cpu_count() or 4
+            torch.set_num_threads(cpu_cores)
+            torch.set_num_interop_threads(max(1, cpu_cores // 2))
+            print(f"⚠️ No GPU detected - Running on CPU ({cpu_cores} threads)")
 
     # ============================================================
     # 2. VISION MODEL CONFIGURATION
@@ -56,13 +75,18 @@ class ModelManager:
         - 8-bit: Can cause NaN/assertion errors in image preprocessing
         - Safe choice: Native fp16/bf16 on GPU, fp32 on CPU
         """
-        if torch.cuda.is_available():
+        if self.device == "cuda":
             # bf16 is safer for vision models - avoids NaN issues seen with fp16
             self.vision_compute_dtype = (
-                torch.bfloat16 if self.bf16_supported 
+                torch.bfloat16 if self.bf16_supported
                 else torch.float16
             )
             self.vision_device_map = "cuda"
+        elif self.device == "mps":
+            # Try MPS first — on 16GB+ unified memory Macs this works and is
+            # 5-10x faster than CPU. Falls back to CPU in _load_vision_model if OOM.
+            self.vision_compute_dtype = torch.float16
+            self.vision_device_map = "mps"
         else:
             self.vision_compute_dtype = torch.float32
             self.vision_device_map = "cpu"
@@ -127,10 +151,9 @@ class ModelManager:
         """Initialise all model references to None"""
         self.vision_model = None
         self.vision_processor = None
-        self.chat_model = None
-        self.chat_tokenizer = None
         self.ar_model = None
         self.ar_device = "cpu"
+        # No separate chat model — vision model handles both vision and text tasks
 
     # ============================================================
     # 5. MODEL LOADING
@@ -138,11 +161,8 @@ class ModelManager:
 
     def load_models(self):
         """
-        Load all models in order.
-        Order matters for VRAM management:
-        1. Vision (largest, loads first while VRAM is free)
-        2. Chat (4-bit quantized, loads second)
-        3. SAM (CPU or GPU depending on remaining VRAM)
+        Load models. Vision model handles both vision analysis and text chat.
+        AR model (MobileSAM) is loaded separately for component detection.
         """
         print("\n" + "=" * 55)
         print("  MODEL MANAGER: Loading Models")
@@ -150,114 +170,76 @@ class ModelManager:
 
         self._load_vision_model()
         self._clear_cuda_cache()
-
-        self._load_chat_model()
-        self._clear_cuda_cache()
-
         self._load_ar_model()
         self._clear_cuda_cache()
-
-        print("=" * 55)
         self._print_status()
-        print("=" * 55 + "\n")
 
     def _load_vision_model(self):
-        """Load Granite Vision model"""
+        """
+        Load IBM Granite Vision model (LLaVA-Next architecture).
+        Used for BOTH image analysis and text-only chat generation.
+        """
         try:
             from transformers import AutoProcessor, AutoModelForImageTextToText
-
-            print("\n👁️  Loading Granite Vision...")
+            print(f"\n👁️  Loading Vision Model: {VISION_MODEL_ID}...")
             self._log_vram("Before vision load")
 
-            vision_path = "ibm-granite/granite-vision-3.3-2b"
-
-            self.vision_processor = AutoProcessor.from_pretrained(vision_path)
-
-            self.vision_model = AutoModelForImageTextToText.from_pretrained(
-                vision_path,
-                device_map=self.vision_device_map,
-                torch_dtype=self.vision_compute_dtype,
+            self.vision_processor = AutoProcessor.from_pretrained(
+                VISION_MODEL_ID,
                 trust_remote_code=True,
-                quantization_config=self.vision_quant_config
             )
-            self.vision_model.eval()  # Set to eval mode (disables dropout)
+            self.vision_model = AutoModelForImageTextToText.from_pretrained(
+                VISION_MODEL_ID,
+                device_map=self.vision_device_map,
+                dtype=self.vision_compute_dtype,
+                trust_remote_code=True,
+            )
+            self.vision_model.eval()
 
             self._log_vram("After vision load")
-            print("   ✅ Granite Vision loaded")
-
+            print(f"   ✅ Vision model loaded on {self.vision_device_map.upper()}")
         except Exception as e:
-            print(f"   ❌ Vision load failed: {e}")
+            if self.vision_device_map == "mps":
+                print(f"   ⚠️ MPS load failed ({e}) — retrying on CPU...")
+                self.vision_compute_dtype = torch.float32
+                self.vision_device_map = "cpu"
+                try:
+                    self.vision_model = AutoModelForImageTextToText.from_pretrained(
+                        VISION_MODEL_ID,
+                        device_map="cpu",
+                        dtype=torch.float32,
+                        trust_remote_code=True,
+                    )
+                    self.vision_model.eval()
+                    print("   ✅ Vision model loaded on CPU (fallback)")
+                    return
+                except Exception as e2:
+                    print(f"   ❌ CPU fallback also failed: {e2}")
+            else:
+                print(f"   ❌ Vision model load failed: {e}")
             logger.exception("Vision model load failed")
             self.vision_model = None
             self.vision_processor = None
 
-    def _load_chat_model(self):
-        """Load Granite Chat model"""
-        try:
-            from transformers import AutoModelForCausalLM, AutoTokenizer
-
-            print("\n💬 Loading Granite Chat...")
-            self._log_vram("Before chat load")
-
-            chat_path = "ibm-granite/granite-3.3-2b-instruct"
-
-            # Load tokenizer
-            self.chat_tokenizer = AutoTokenizer.from_pretrained(chat_path)
-            self.chat_tokenizer.padding_side = "left"
-
-            # Ensure pad token is defined
-            if self.chat_tokenizer.pad_token_id is None:
-                self.chat_tokenizer.pad_token = self.chat_tokenizer.eos_token
-
-            # Load model
-            self.chat_model = AutoModelForCausalLM.from_pretrained(
-                chat_path,
-                device_map=self.chat_device,
-                torch_dtype=self.chat_compute_dtype,
-                quantization_config=self.chat_quant_config
-            )
-            self.chat_model.eval()  # Set to eval mode
-
-            # Sync pad token config
-            if self.chat_model.config.pad_token_id is None:
-                self.chat_model.config.pad_token_id = self.chat_tokenizer.pad_token_id
-
-            self._log_vram("After chat load")
-            print("   ✅ Granite Chat loaded")
-
-        except Exception as e:
-            print(f"   ❌ Chat load failed: {e}")
-            logger.exception("Chat model load failed")
-            self.chat_model = None
-            self.chat_tokenizer = None
-
     def _load_ar_model(self):
         """
-        Load MobileSAM model for AR segmentation.
-        
-        Device strategy:
-        - Checks remaining VRAM after vision + chat are loaded
-        - If > 0.5GB free: loads on GPU for faster inference
-        - Otherwise: loads on CPU to avoid OOM errors
+        Load SAM 2 (Tiny) for AR component detection.
+        SAM 2 is faster and more accurate than MobileSAM with the same ultralytics API.
+        ar_service.py calls: manager.ar_model(img_array, device=manager.ar_device, ...)
         """
         try:
             from ultralytics import SAM
+            print("\n🎯 Loading SAM 2 (AR Model)...")
+            self._log_vram("Before SAM 2 load")
 
-            print("\n📐 Loading MobileSAM (AR Model)...")
-            self._log_vram("Before SAM load")
-
-            self.ar_model = SAM('mobile_sam.pt')
-
-            # Determine SAM device based on remaining VRAM
             self.ar_device = self._get_ar_device()
-            self.ar_model.to(self.ar_device)
+            self.ar_model = SAM("sam2_t.pt")
 
-            self._log_vram("After SAM load")
-            print(f"   ✅ MobileSAM loaded on {self.ar_device.upper()}")
-
+            self._log_vram("After SAM 2 load")
+            print(f"   ✅ SAM 2 loaded on {self.ar_device.upper()}")
         except Exception as e:
-            print(f"   ❌ SAM load failed: {e}")
-            logger.exception("SAM model load failed")
+            print(f"   ❌ SAM 2 load failed: {e}")
+            logger.exception("SAM 2 load failed")
             self.ar_model = None
             self.ar_device = "cpu"
 
@@ -267,22 +249,20 @@ class ModelManager:
 
     def _get_ar_device(self) -> str:
         """
-        Determine best device for SAM based on available VRAM.
-        Returns 'cuda' if enough VRAM is free, 'cpu' otherwise.
+        Determine best device for SAM 2 based on available hardware.
+        Priority: CUDA (with free VRAM check) → MPS → CPU
         """
-        # if not torch.cuda.is_available():
-        #     return "cpu"
-
-        # free_vram_gb = self._get_free_vram_gb()
-
-        # # MobileSAM is ~40MB; need some headroom for inference activations
-        # if free_vram_gb > 0.5:
-        #     print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on GPU")
-        #     return "cuda"
-        # else:
-        #     print(f"   💡 {free_vram_gb:.1f}GB VRAM free - Loading SAM on CPU")
-        #     return "cpu"
-
+        if torch.cuda.is_available():
+            free_vram_gb = self._get_free_vram_gb()
+            if free_vram_gb > 0.5:
+                print(f"   💡 {free_vram_gb:.1f}GB VRAM free — SAM 2 on CUDA")
+                return "cuda"
+            else:
+                print(f"   💡 {free_vram_gb:.1f}GB VRAM free — SAM 2 falling back to CPU")
+                return "cpu"
+        if torch.backends.mps.is_available():
+            print("   💡 SAM 2 on MPS")
+            return "mps"
         return "cpu"
 
     def _get_free_vram_gb(self) -> float:
@@ -353,12 +333,11 @@ class ModelManager:
     def _print_status(self):
         """Print final model loading status"""
         print("\n📦 MODEL STATUS:")
-        print(f"   Vision Model  : {'✅ Loaded' if self.vision_model else '❌ Failed'}")
-        print(f"   Chat Model    : {'✅ Loaded' if self.chat_model else '❌ Failed'}")
+        print(f"   Vision Model  : {'✅ Loaded' if self.vision_model else '❌ Failed'} (handles vision + chat)")
         if self.ar_model:
-            print(f"   MobileSAM(AR) : ✅ Loaded on {self.ar_device.upper()}")
+            print(f"   SAM 2 (AR)    : ✅ Loaded on {self.ar_device.upper()}")
         else:
-            print("   MobileSAM(AR) : ❌ Failed")
+            print("   SAM 2 (AR)    : ❌ Failed")
 
         if torch.cuda.is_available():
             used = self._get_used_vram_gb()
@@ -371,40 +350,31 @@ class ModelManager:
         Used by health check endpoints.
         """
         status = {
+            'mock_mode': self.mock_mode,
             'vision': {
                 'loaded': self.vision_model is not None,
                 'processor_loaded': self.vision_processor is not None,
+                'model_id': VISION_MODEL_ID,
                 'dtype': str(self.vision_compute_dtype),
                 'device': self.vision_device_map,
-                'quantization': 'none'
-            },
-            'chat': {
-                'loaded': self.chat_model is not None,
-                'tokenizer_loaded': self.chat_tokenizer is not None,
-                'dtype': str(self.chat_compute_dtype),
-                'device': self.chat_device,
-                'quantization': '4-bit NF4' if self.chat_quant_config else 'none'
+                'note': 'handles both vision analysis and text chat'
             },
             'ar': {
                 'loaded': self.ar_model is not None,
-                'model': 'MobileSAM',
+                'model': 'SAM2-Tiny',
                 'device': self.ar_device
             },
             'hardware': {
                 'device': self.device,
                 'gpu_name': self.gpu_name,
                 'total_vram_gb': round(self.total_vram_gb, 1),
-                'free_vram_gb': round(self._get_free_vram_gb(), 1),
+                'free_vram_gb': round(self._get_free_vram_gb(), 1) if self.device == 'cuda' else None,
                 'bf16_supported': self.bf16_supported
             }
         }
 
-        # All models loaded = healthy
-        status['all_loaded'] = all([
-            self.vision_model is not None,
-            self.chat_model is not None,
-            self.ar_model is not None
-        ])
+        # Healthy = mock mode OR vision model loaded
+        status['all_loaded'] = self.mock_mode or (self.vision_model is not None)
 
         return status
 
@@ -424,10 +394,6 @@ class ModelManager:
         if model_name == 'vision':
             self._load_vision_model()
             return self.vision_model is not None
-
-        elif model_name == 'chat':
-            self._load_chat_model()
-            return self.chat_model is not None
 
         elif model_name == 'ar':
             self._load_ar_model()

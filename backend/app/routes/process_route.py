@@ -1,9 +1,10 @@
 from flask import Blueprint, request, jsonify
 import logging
-import traceback
 
 from app.services.preprocess_service import preprocess_service
 from app.utils.shared_utils import resolve_file_path
+from app.utils.response_formatter import error_response
+from app.utils.validators import ensure_json_object
 
 process_bp = Blueprint('process', __name__)
 logger = logging.getLogger(__name__)
@@ -17,6 +18,11 @@ def process_document():
     """
     try:
         data = request.get_json(silent=True) or {}
+        ok, message = ensure_json_object(data)
+        if not ok:
+            body, status = error_response(message, status=400)
+            return jsonify(body), status
+
         stored_name = data.get('stored_name')
         file_path = data.get('file_path')
         mock = data.get('mock', False)
@@ -46,10 +52,8 @@ def process_document():
     
     except Exception as e:
         logger.exception("Document processing failed")
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        body, status = error_response('Document processing failed', status=500)
+        return jsonify(body), status
 
 
 @process_bp.route('/health', methods=['GET'])

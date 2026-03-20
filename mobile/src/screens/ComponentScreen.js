@@ -12,13 +12,31 @@ import ComponentCard from '../components/ComponentCard';
 import { colors, spacing, typography } from '../styles/theme';
 
 export default function ComponentsScreen({ navigation }) {
-  const { document } = useDocumentContext();
+  const { document, accessibilitySettings } = useDocumentContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('confidence'); // confidence | label | position
+  const darkMode = !!accessibilitySettings?.darkMode;
+  const palette = darkMode
+    ? {
+        bg: '#121417',
+        card: '#1b1f24',
+        border: '#303741',
+        text: '#f4f7fb',
+        subtext: '#9aa3ad',
+        primary: '#4ea3ff',
+      }
+    : {
+        bg: colors.background,
+        card: colors.white,
+        border: colors.border,
+        text: colors.text,
+        subtext: colors.textLight,
+        primary: colors.primary,
+      };
 
   useEffect(() => {
     if (!document) {
-      navigation.replace('HomeMain');
+      navigation.popToTop();
     }
   }, [document, navigation]);
 
@@ -48,17 +66,17 @@ export default function ComponentsScreen({ navigation }) {
   });
 
   const handleComponentPress = (component) => {
-    navigation.navigate('Diagram');
-    // Could also pass component to highlight it
+    navigation.navigate('Diagram', { selectedComponent: component });
   };
 
   return (
-    <View style={styles.container}>
+    <View style={[styles.container, { backgroundColor: palette.bg }]}> 
       {/* Search Bar */}
-      <View style={styles.searchContainer}>
+      <View style={[styles.searchContainer, { backgroundColor: palette.card, borderBottomColor: palette.border }]}> 
         <TextInput
-          style={styles.searchInput}
+          style={[styles.searchInput, { backgroundColor: palette.bg, borderColor: palette.border, color: palette.text }]}
           placeholder="Search components..."
+          placeholderTextColor={palette.subtext}
           value={searchQuery}
           onChangeText={setSearchQuery}
           clearButtonMode="while-editing"
@@ -66,15 +84,20 @@ export default function ComponentsScreen({ navigation }) {
       </View>
 
       {/* Sort Options */}
-      <View style={styles.sortContainer}>
-        <Text style={styles.sortLabel}>Sort by:</Text>
+      <View style={[styles.sortContainer, { backgroundColor: palette.card, borderBottomColor: palette.border }]}> 
+        <Text style={[styles.sortLabel, { color: palette.subtext }]}>Sort by:</Text>
         <TouchableOpacity
-          style={[styles.sortButton, sortBy === 'confidence' && styles.sortButtonActive]}
+          style={[
+            styles.sortButton,
+            { backgroundColor: darkMode ? '#242a31' : colors.background },
+            sortBy === 'confidence' && [styles.sortButtonActive, { backgroundColor: palette.primary }],
+          ]}
           onPress={() => setSortBy('confidence')}
         >
           <Text
             style={[
               styles.sortButtonText,
+              { color: palette.subtext },
               sortBy === 'confidence' && styles.sortButtonTextActive,
             ]}
           >
@@ -82,21 +105,29 @@ export default function ComponentsScreen({ navigation }) {
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.sortButton, sortBy === 'label' && styles.sortButtonActive]}
+          style={[
+            styles.sortButton,
+            { backgroundColor: darkMode ? '#242a31' : colors.background },
+            sortBy === 'label' && [styles.sortButtonActive, { backgroundColor: palette.primary }],
+          ]}
           onPress={() => setSortBy('label')}
         >
           <Text
-            style={[styles.sortButtonText, sortBy === 'label' && styles.sortButtonTextActive]}
+            style={[styles.sortButtonText, { color: palette.subtext }, sortBy === 'label' && styles.sortButtonTextActive]}
           >
             Name
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.sortButton, sortBy === 'position' && styles.sortButtonActive]}
+          style={[
+            styles.sortButton,
+            { backgroundColor: darkMode ? '#242a31' : colors.background },
+            sortBy === 'position' && [styles.sortButtonActive, { backgroundColor: palette.primary }],
+          ]}
           onPress={() => setSortBy('position')}
         >
           <Text
-            style={[styles.sortButtonText, sortBy === 'position' && styles.sortButtonTextActive]}
+            style={[styles.sortButtonText, { color: palette.subtext }, sortBy === 'position' && styles.sortButtonTextActive]}
           >
             Position
           </Text>
@@ -104,8 +135,8 @@ export default function ComponentsScreen({ navigation }) {
       </View>
 
       {/* Stats */}
-      <View style={styles.statsBar}>
-        <Text style={styles.statsText}>
+      <View style={[styles.statsBar, { backgroundColor: palette.card, borderBottomColor: palette.border }]}> 
+        <Text style={[styles.statsText, { color: palette.subtext }] }>
           Showing {sortedComponents.length} of {components.length} components
         </Text>
       </View>
@@ -114,8 +145,8 @@ export default function ComponentsScreen({ navigation }) {
       {sortedComponents.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Text style={styles.emptyIcon}>🔍</Text>
-          <Text style={styles.emptyText}>No components found</Text>
-          <Text style={styles.emptySubtext}>Try a different search term</Text>
+          <Text style={[styles.emptyText, { color: palette.text }]}>No components found</Text>
+          <Text style={[styles.emptySubtext, { color: palette.subtext }]}>Try a different search term</Text>
         </View>
       ) : (
         <FlatList
@@ -126,6 +157,7 @@ export default function ComponentsScreen({ navigation }) {
               component={item}
               index={index}
               onPress={() => handleComponentPress(item)}
+              palette={palette}
             />
           )}
           contentContainerStyle={styles.listContent}

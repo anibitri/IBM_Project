@@ -1,39 +1,49 @@
-import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+// Replaced @expo/vector-icons with react-native-vector-icons
+import Ionicons from 'react-native-vector-icons/Ionicons';
 import { colors, spacing, typography } from '../styles/theme';
 
-export default function ComponentCard({ component, index, onPress }) {
+export default function ComponentCard({ component, index, onPress, palette }) {
   const confidencePercent = (component.confidence * 100).toFixed(1);
   const position = `(${(component.x * 100).toFixed(1)}%, ${(component.y * 100).toFixed(1)}%)`;
 
+  const cardBg = palette?.card || colors.white;
+  const cardBorder = palette?.border || colors.border;
+  const labelColor = palette?.text || colors.text;
+  const metaColor = palette?.subtext || colors.textLight;
+  const primaryColor = palette?.primary || colors.primary;
+
   return (
     <TouchableOpacity
-      style={styles.card}
+      style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}
       onPress={onPress}
       activeOpacity={0.7}
     >
       <View style={styles.header}>
-        <View style={styles.badge}>
+        <View style={[styles.badge, { backgroundColor: primaryColor }]}>
           <Text style={styles.badgeText}>#{index + 1}</Text>
         </View>
         <View style={styles.headerContent}>
-          <Text style={styles.label}>{component.label}</Text>
-          <Text style={styles.confidence}>{confidencePercent}%</Text>
+          <Text style={[styles.label, { color: labelColor }]}>{component.label}</Text>
+          <Text style={[styles.confidence, { color: primaryColor }]}>{confidencePercent}%</Text>
         </View>
       </View>
 
       {component.description && (
-        <Text style={styles.description} numberOfLines={2}>
+        <Text style={[styles.description, { color: metaColor }]} numberOfLines={2}>
           {component.description}
         </Text>
       )}
 
       <View style={styles.meta}>
-        <Text style={styles.metaItem}><Ionicons name="location-outline" size={14} color="#666" /> {position}</Text>
-        <Text style={styles.metaItem}>
-          <Ionicons name="resize-outline" size={14} color="#666" /> {(component.width * 100).toFixed(1)}% x {(component.height * 100).toFixed(1)}%
-        </Text>
+        <View style={styles.metaItem}>
+          <Ionicons name="location-outline" size={13} color={metaColor} />
+          <Text style={[styles.metaText, { color: metaColor }]}>{position}</Text>
+        </View>
+        <View style={styles.metaItem}>
+          <Ionicons name="resize-outline" size={13} color={metaColor} />
+          <Text style={[styles.metaText, { color: metaColor }]}>{(component.width * 100).toFixed(1)}% × {(component.height * 100).toFixed(1)}%</Text>
+        </View>
       </View>
     </TouchableOpacity>
   );
@@ -100,8 +110,14 @@ const styles = StyleSheet.create({
   meta: {
     flexDirection: 'row',
     justifyContent: 'space-between',
+    marginTop: spacing.xs,
   },
   metaItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  metaText: {
     ...typography.caption,
     color: colors.textLight,
   },

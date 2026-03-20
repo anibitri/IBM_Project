@@ -20,8 +20,8 @@ BACKEND_ROOT = os.path.abspath(os.path.dirname(__file__))
 sys.path.insert(0, BACKEND_ROOT)
 
 # Set environment before any imports
-os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
-os.environ['GRANITE_MOCK'] = '0'
+# os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
+# os.environ['GRANITE_MOCK'] = '0'
 
 
 # ═══════════════════════════════════════════════════════════
@@ -163,10 +163,11 @@ def print_statistics(components: list, img_width: int, img_height: int):
 def main():
     parser = argparse.ArgumentParser(description='Visual AR Service Test')
     parser.add_argument('--image', type=str, required=True, help='Path to test image')
-    parser.add_argument('--output', type=str, default='ar_output_annotated.png', help='Output path')
+    parser.add_argument('--output', type=str, default='', help='Output path (auto-named if omitted)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--hints', type=str, default='', help='Comma-separated hints')
-    parser.add_argument('--legacy-service', action='store_true', help='Use legacy ARv1 service')
+    parser.add_argument('--version', type=str, choices=['v1', 'v2'], default='v2',
+                        help='AR service version: v2 = ar_service (default), v1 = ARv1')
     args = parser.parse_args()
     
     print("\n" + "=" * 60)
@@ -182,48 +183,56 @@ def main():
     img_width, img_height = img.size
     print(f"\n📷 Image: {args.image}")
     print(f"   Size: {img_width} × {img_height} px")
-    
+    print(f"   Version: {args.version.upper()}")
+
     # Parse hints
     hints = [h.strip() for h in args.hints.split(',') if h.strip()] if args.hints else []
     if hints:
         print(f"   Hints: {hints}")
-    
+
     # Enable debug mode if requested
     if args.debug:
         print("\n🔍 DEBUG MODE ENABLED")
-    
-    # Load AR service
+
+    # Load the requested AR service version
     print("\n⏳ Loading AR service...")
-    if args.legacy_service:
+    if args.version == 'v1':
         from app.services.ARv1 import ar_service
-        print("   Using legacy service: app.services.ARv1")
+        print("   Using: app.services.ARv1")
     else:
         from app.services.ar_service import ar_service
-        print("   Using improved service: app.services.ar_service")
-    
-    # Enable debug if requested
+        print("   Using: app.services.ar_service")
+
+    # Enable debug if requested — v1 uses debug_complexity, v2 uses debug
     if args.debug:
-        if args.legacy_service:
+        if hasattr(ar_service, 'debug_complexity'):
             ar_service.debug_complexity = True
-        else:
+        if hasattr(ar_service, 'debug'):
             ar_service.debug = True
-    
+
     # Run AR extraction
     print("\n🎯 Running AR extraction...")
     print("-" * 60)
-    
+
     import time
     start = time.time()
     result = ar_service.extract_document_features(args.image, hints=hints)
     elapsed = time.time() - start
-    
+
     print("-" * 60)
     print(f"⏱️  Extraction took {elapsed:.2f}s")
-    
-    if args.legacy_service:
-        components = result if isinstance(result, list) else []
+
+    # v2 returns {'components': [...], ...}; v1 returns the list directly
+    print(f"\n🔎 Raw result type: {type(result).__name__}", end="")
+    if isinstance(result, dict):
+        components = result.get('components', [])
+        print(f"  keys={list(result.keys())}")
+    elif isinstance(result, list):
+        components = result
+        print(f"  length={len(result)}")
     else:
-        components = result.get('components', []) if isinstance(result, dict) else []
+        components = []
+        print(f"  value={result!r}")
 
     if not components:
         print("\n❌ No components detected!")
@@ -239,22 +248,30 @@ def main():
     print_statistics(components, img_width, img_height)
     
     # Analyze relationships
-    print("\n🔗 Analyzing spatial relationships...")
-    relationships = ar_service.analyze_component_relationships(components)
+    # print("\n🔗 Analyzing spatial relationships...")
+    # relationships = ar_service.analyze_component_relationships(components)
     
-    connections = relationships.get('connections', [])
-    if connections:
-        print(f"   Found {len(connections)} close component pairs:")
-        for conn in connections[:5]:  # Show first 5
-            print(f"      {conn['from']} ↔ {conn['to']} (distance: {conn['distance']:.3f})")
-        if len(connections) > 5:
-            print(f"      ... and {len(connections) - 5} more")
+    # connections = relationships.get('connections', [])
+    # if connections:
+    #     print(f"   Found {len(connections)} close component pairs:")
+    #     for conn in connections[:5]:  # Show first 5
+    #         print(f"      {conn['from']} ↔ {conn['to']} (distance: {conn['distance']:.3f})")
+    #     if len(connections) > 5:
+    #         print(f"      ... and {len(connections) - 5} more")
+    # else:
+    #     print("   No close component pairs detected")
+    
+    # Build output path: use explicit --output if given, otherwise auto-name
+    # as  <image_stem>_ar_<version>.png  so v1 and v2 results don't overwrite each other.
+    if args.output:
+        output_path_final = args.output
     else:
-        print("   No close component pairs detected")
-    
+        base = os.path.splitext(os.path.basename(args.image))[0]
+        output_path_final = f"{base}_ar_{args.version}.png"
+
     # Draw bounding boxes
     print(f"\n🎨 Creating annotated visualization...")
-    output_path = draw_bounding_boxes(args.image, components, args.output)
+    output_path = draw_bounding_boxes(args.image, components, output_path_final)
     
     # Summary
     print("\n" + "=" * 60)
@@ -262,7 +279,7 @@ def main():
     print("=" * 60)
     print(f"   Components Detected : {len(components)}")
     print(f"   Annotated Image     : {output_path}")
-    print(f"   Relationships       : {len(connections)} connections")
+    #print(f"   Relationships       : {len(connections)} connections")
     print("=" * 60 + "\n")
 
 

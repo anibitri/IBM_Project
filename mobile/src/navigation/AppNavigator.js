@@ -1,9 +1,10 @@
 import React from 'react';
-import { View, Text, StyleSheet } from 'react-native';
-import { NavigationContainer } from '@react-navigation/native';
+import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Ionicons } from '@expo/vector-icons';
+// Replaced @expo/vector-icons
+import Ionicons from 'react-native-vector-icons/Ionicons';
+import { useMobileDocumentContext } from '../context/MobileDocumentContext';
 
 import HomeScreen from '../screens/HomeScreen';
 import UploadScreen from '../screens/UploadScreen';
@@ -12,6 +13,13 @@ import ComponentsScreen from '../screens/ComponentScreen';
 import ChatScreen from '../screens/ChatScreen';
 import SettingsScreen from '../screens/SettingsScreen';
 import ARMockScreen from '../mocks/ARMockScreen';
+
+let ARScreen;
+try {
+  ARScreen = require('../screens/ARScreen').default;
+} catch (e) {
+  ARScreen = () => null;
+}
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -23,21 +31,10 @@ const TAB_ICONS = {
   Settings: { outline: 'settings-outline', filled: 'settings' },
 };
 
-function TabIcon({ label, focused }) {
-  const icon = TAB_ICONS[label] || { outline: 'ellipse-outline', filled: 'ellipse' };
+/* ── Home stack ── */
+function HomeStack({ stackOptions }) {
   return (
-    <Ionicons
-      name={focused ? icon.filled : icon.outline}
-      size={24}
-      color={focused ? '#007AFF' : '#8e8e93'}
-    />
-  );
-}
-
-/* ── Home stack (contains upload, diagram, components, AR mock) ── */
-function HomeStack() {
-  return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={stackOptions}>
       <Stack.Screen name="HomeMain" component={HomeScreen} />
       <Stack.Screen
         name="Upload"
@@ -59,40 +56,103 @@ function HomeStack() {
         component={ARMockScreen}
         options={{ headerShown: true, title: 'AR Mock Preview', headerBackTitle: 'Back' }}
       />
+      <Stack.Screen
+        name="AR"
+        component={ARScreen}
+        options={{ headerShown: true, title: 'AR Camera', headerBackTitle: 'Back' }}
+      />
     </Stack.Navigator>
   );
 }
 
 /* ── Chat stack ── */
-function ChatStack() {
+function ChatStack({ stackOptions }) {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={stackOptions}>
       <Stack.Screen name="ChatMain" component={ChatScreen} />
     </Stack.Navigator>
   );
 }
 
 /* ── Settings stack ── */
-function SettingsStack() {
+function SettingsStack({ stackOptions }) {
   return (
-    <Stack.Navigator screenOptions={{ headerShown: false }}>
+    <Stack.Navigator screenOptions={stackOptions}>
       <Stack.Screen name="SettingsMain" component={SettingsScreen} />
     </Stack.Navigator>
   );
 }
 
 export default function AppNavigator() {
+  const { accessibilitySettings } = useMobileDocumentContext();
+  const darkMode = !!accessibilitySettings?.darkMode;
+  const palette = darkMode
+    ? {
+        bg: '#121417',
+        card: '#1b1f24',
+        border: '#303741',
+        text: '#f4f7fb',
+        subtext: '#9aa3ad',
+        primary: '#4ea3ff',
+      }
+    : {
+        bg: '#ffffff',
+        card: '#ffffff',
+        border: '#e8e8e8',
+        text: '#111111',
+        subtext: '#8e8e93',
+        primary: '#007AFF',
+      };
+
+  const navTheme = darkMode
+    ? {
+        ...DarkTheme,
+        colors: {
+          ...DarkTheme.colors,
+          background: palette.bg,
+          card: palette.card,
+          border: palette.border,
+          text: palette.text,
+          primary: palette.primary,
+        },
+      }
+    : {
+        ...DefaultTheme,
+        colors: {
+          ...DefaultTheme.colors,
+          background: palette.bg,
+          card: palette.card,
+          border: palette.border,
+          text: palette.text,
+          primary: palette.primary,
+        },
+      };
+
+  const stackOptions = {
+    headerShown: false,
+    headerStyle: { backgroundColor: palette.card },
+    headerTintColor: palette.text,
+    headerTitleStyle: { color: palette.text },
+    contentStyle: { backgroundColor: palette.bg },
+  };
+
   return (
-    <NavigationContainer>
+    <NavigationContainer theme={navTheme}>
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: false,
-          tabBarIcon: ({ focused }) => <TabIcon label={route.name} focused={focused} />,
-          tabBarActiveTintColor: '#ff6347',
-          tabBarInactiveTintColor: '#999',
+          tabBarIcon: ({ focused }) => (
+            <Ionicons
+              name={focused ? (TAB_ICONS[route.name]?.filled || 'ellipse') : (TAB_ICONS[route.name]?.outline || 'ellipse-outline')}
+              size={24}
+              color={focused ? palette.primary : palette.subtext}
+            />
+          ),
+          tabBarActiveTintColor: palette.primary,
+          tabBarInactiveTintColor: palette.subtext,
           tabBarStyle: {
-            backgroundColor: '#fff',
-            borderTopColor: '#e8e8e8',
+            backgroundColor: palette.card,
+            borderTopColor: palette.border,
             paddingBottom: 6,
             paddingTop: 6,
             height: 60,
@@ -103,9 +163,15 @@ export default function AppNavigator() {
           },
         })}
       >
-        <Tab.Screen name="Home" component={HomeStack} />
-        <Tab.Screen name="Chat" component={ChatStack} />
-        <Tab.Screen name="Settings" component={SettingsStack} />
+        <Tab.Screen name="Home">
+          {() => <HomeStack stackOptions={stackOptions} />}
+        </Tab.Screen>
+        <Tab.Screen name="Chat">
+          {() => <ChatStack stackOptions={stackOptions} />}
+        </Tab.Screen>
+        <Tab.Screen name="Settings">
+          {() => <SettingsStack stackOptions={stackOptions} />}
+        </Tab.Screen>
       </Tab.Navigator>
     </NavigationContainer>
   );

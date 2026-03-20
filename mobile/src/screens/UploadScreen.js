@@ -7,35 +7,63 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  SafeAreaView,
 } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
-import * as DocumentPicker from 'expo-document-picker';
-import * as ImagePicker from 'expo-image-picker';
+// Replaced @expo/vector-icons
+import Ionicons from 'react-native-vector-icons/Ionicons';
+// Replaced expo-document-picker
+import DocumentPicker from 'react-native-document-picker';
+// Replaced expo-image-picker
+import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
+
 import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
 import { colors, spacing, typography } from '../styles/theme';
 
 export default function UploadScreen({ navigation }) {
-  const { uploadAndProcess, loading, error } = useDocumentContext();
+  const { uploadAndProcess, loading, error, clearDocument, accessibilitySettings } = useDocumentContext();
   const [preview, setPreview] = useState(null);
+  const darkMode = !!accessibilitySettings?.darkMode;
+  const palette = darkMode
+    ? {
+        bg: '#121417',
+        card: '#1b1f24',
+        border: '#303741',
+        text: '#f4f7fb',
+        subtext: '#9aa3ad',
+        primary: '#4ea3ff',
+      }
+    : {
+        bg: colors.background,
+        card: colors.white,
+        border: colors.border,
+        text: colors.text,
+        subtext: colors.textLight,
+        primary: colors.primary,
+      };
 
   const handleImagePicker = async () => {
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsEditing: false,
+      const result = await launchImageLibrary({
+        mediaType: 'photo',
         quality: 1,
       });
 
-      if (!result.canceled) {
-        const file = {
-          uri: result.assets[0].uri,
-          type: 'image/png',
-          name: 'diagram.png',
-        };
-        setPreview(result.assets[0].uri);
-        await uploadAndProcess(file);
-        navigation.navigate('Diagram');
+      if (result.didCancel) return;
+      
+      if (result.errorCode) {
+        Alert.alert('Error', result.errorMessage || 'Failed to open gallery');
+        return;
       }
+
+      const asset = result.assets[0];
+      const file = {
+        uri: asset.uri,
+        type: asset.type || 'image/png',
+        name: asset.fileName || 'diagram.png',
+      };
+      setPreview(asset.uri);
+      await uploadAndProcess(file);
+      navigation.navigate('Diagram');
     } catch (err) {
       Alert.alert('Error', 'Failed to pick image');
       console.error(err);
@@ -44,51 +72,55 @@ export default function UploadScreen({ navigation }) {
 
   const handleDocumentPicker = async () => {
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: ['image/*', 'application/pdf'],
-        copyToCacheDirectory: true,
+      const result = await DocumentPicker.pickSingle({
+        // Allow images and PDFs
+        type: [DocumentPicker.types.images, DocumentPicker.types.pdf],
+        copyTo: 'cachesDirectory', // Copies file to a safe temp folder for uploading
       });
 
-      if (!result.canceled && result.assets && result.assets.length > 0) {
-        const asset = result.assets[0];
-        const file = {
-          uri: asset.uri,
-          type: asset.mimeType || 'application/pdf',
-          name: asset.name || 'document',
-        };
-        await uploadAndProcess(file);
-        navigation.navigate('Diagram');
-      }
+      const file = {
+        uri: result.fileCopyUri || result.uri,
+        type: result.type || 'application/pdf',
+        name: result.name || 'document.pdf',
+      };
+      await uploadAndProcess(file);
+      navigation.navigate('Diagram');
     } catch (err) {
+      if (DocumentPicker.isCancel(err)) {
+        // User cancelled the picker, do nothing
+        return;
+      }
       Alert.alert('Error', 'Failed to pick document');
       console.error(err);
     }
   };
 
   const handleCamera = async () => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    
-    if (status !== 'granted') {
-      Alert.alert('Permission needed', 'Camera permission is required');
-      return;
-    }
-
     try {
-      const result = await ImagePicker.launchCameraAsync({
-        allowsEditing: false,
+      const result = await launchCamera({
+        mediaType: 'photo',
         quality: 1,
+        saveToPhotos: false,
       });
 
-      if (!result.canceled) {
-        const file = {
-          uri: result.assets[0].uri,
-          type: 'image/png',
-          name: 'diagram.png',
-        };
-        setPreview(result.assets[0].uri);
-        await uploadAndProcess(file);
-        navigation.navigate('Diagram');
+      if (result.didCancel) return;
+
+      if (result.errorCode) {
+        // react-native-image-picker automatically handles requesting permissions.
+        // If they denied it, it throws a 'camera_unavailable' or 'permission' error code.
+        Alert.alert('Camera Error', result.errorMessage || 'Camera permission is required');
+        return;
       }
+
+      const asset = result.assets[0];
+      const file = {
+        uri: asset.uri,
+        type: asset.type || 'image/png',
+        name: asset.fileName || 'diagram.png',
+      };
+      setPreview(asset.uri);
+      await uploadAndProcess(file);
+      navigation.navigate('Diagram');
     } catch (err) {
       Alert.alert('Error', 'Failed to take photo');
       console.error(err);
@@ -96,10 +128,10 @@ export default function UploadScreen({ navigation }) {
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>AR Diagram Viewer</Text>
-        <Text style={styles.subtitle}>
+    <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
+      <View style={[styles.header, { backgroundColor: palette.card, borderBottomColor: palette.border }]}>
+        <Text style={[styles.title, { color: palette.text }]}>AR Diagram Viewer</Text>
+        <Text style={[styles.subtitle, { color: palette.subtext }] }>
           Upload technical diagrams for AI-powered analysis
         </Text>
       </View>
@@ -112,16 +144,22 @@ export default function UploadScreen({ navigation }) {
 
       {loading ? (
         <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.loadingText}>Processing document...</Text>
-          <Text style={styles.loadingSubtext}>
+          <ActivityIndicator size="large" color={palette.primary} />
+          <Text style={[styles.loadingText, { color: palette.text }]}>Processing document...</Text>
+          <Text style={[styles.loadingSubtext, { color: palette.subtext }]}>
             Running Vision → AR → AI pipeline
           </Text>
+          <TouchableOpacity
+            style={[styles.cancelButton, { borderColor: palette.border }]}
+            onPress={() => { clearDocument(); setPreview(null); }}
+          >
+            <Text style={[styles.cancelButtonText, { color: palette.subtext }]}>Cancel</Text>
+          </TouchableOpacity>
         </View>
       ) : (
         <View style={styles.buttonsContainer}>
           <TouchableOpacity
-            style={[styles.button, styles.buttonPrimary]}
+            style={[styles.button, styles.buttonPrimary, { backgroundColor: palette.primary }]}
             onPress={handleImagePicker}
           >
             <Ionicons name="images-outline" size={22} color="#fff" style={styles.buttonIcon} />
@@ -129,7 +167,14 @@ export default function UploadScreen({ navigation }) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.button, styles.buttonSecondary]}
+            style={[
+              styles.button,
+              styles.buttonSecondary,
+              {
+                backgroundColor: darkMode ? '#242a31' : colors.secondary,
+                borderColor: palette.primary,
+              },
+            ]}
             onPress={handleCamera}
           >
             <Ionicons name="camera-outline" size={22} color="#fff" style={styles.buttonIcon} />
@@ -137,7 +182,14 @@ export default function UploadScreen({ navigation }) {
           </TouchableOpacity>
 
           <TouchableOpacity
-            style={[styles.button, styles.buttonSecondary]}
+            style={[
+              styles.button,
+              styles.buttonSecondary,
+              {
+                backgroundColor: darkMode ? '#242a31' : colors.secondary,
+                borderColor: palette.primary,
+              },
+            ]}
             onPress={handleDocumentPicker}
           >
             <Ionicons name="document-outline" size={22} color="#fff" style={styles.buttonIcon} />
@@ -148,7 +200,10 @@ export default function UploadScreen({ navigation }) {
 
       {error && (
         <View style={styles.errorContainer}>
-          <Text style={styles.errorText}><Ionicons name="alert-circle-outline" size={16} color="#ff3b30" /> {error}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm }}>
+            <Ionicons name="alert-circle-outline" size={16} color="#ff3b30" />
+            <Text style={[styles.errorText, { marginBottom: 0, marginLeft: 6 }]}>{error}</Text>
+          </View>
           <TouchableOpacity
             style={styles.retryButton}
             onPress={() => setPreview(null)}
@@ -158,12 +213,12 @@ export default function UploadScreen({ navigation }) {
         </View>
       )}
 
-      <View style={styles.footer}>
-        <Text style={styles.footerText}>
+      <View style={[styles.footer, { backgroundColor: palette.card, borderTopColor: palette.border }]}>
+        <Text style={[styles.footerText, { color: palette.subtext }] }>
           Supports: PNG, JPG, PDF (max 50MB)
         </Text>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -267,6 +322,17 @@ const styles = StyleSheet.create({
   retryButtonText: {
     color: colors.error,
     fontWeight: '600',
+  },
+  cancelButton: {
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.xl,
+    paddingVertical: spacing.sm,
+    borderRadius: 8,
+    borderWidth: 1,
+  },
+  cancelButtonText: {
+    fontSize: 15,
+    fontWeight: '500',
   },
   footer: {
     padding: spacing.md,

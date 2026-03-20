@@ -1,9 +1,10 @@
 from flask import Blueprint, request, jsonify
 import logging
-import traceback
 
 from app.services.granite_ai_service import ai_service
 from app.utils.shared_utils import resolve_file_path
+from app.utils.response_formatter import error_response
+from app.utils.validators import ensure_json_object, validate_components_list
 
 ai_bp = Blueprint('ai', __name__)
 logger = logging.getLogger(__name__)
@@ -24,6 +25,10 @@ def analyze():
     """
     try:
         payload = request.get_json(silent=True) or {}
+        ok, message = ensure_json_object(payload)
+        if not ok:
+            body, status = error_response(message, status=400)
+            return jsonify(body), status
         
         text_excerpt = payload.get('text_excerpt', '').strip()
         vision = payload.get('vision', {})
@@ -32,10 +37,17 @@ def analyze():
         
         # Validate input
         if not text_excerpt and not vision and not components:
-            return jsonify({
-                'status': 'error',
-                'error': 'At least one of text_excerpt, vision, or components is required'
-            }), 400
+            body, status = error_response(
+                'At least one of text_excerpt, vision, or components is required',
+                status=400
+            )
+            return jsonify(body), status
+
+        if components:
+            ok, message = validate_components_list(components)
+            if not ok:
+                body, status = error_response(message, status=400)
+                return jsonify(body), status
         
         logger.info(f"🤖 AI Analysis: type={context_type}")
         
@@ -58,14 +70,12 @@ def analyze():
     
     except Exception as e:
         logger.exception("AI analysis failed")
-        return jsonify({
-            'status': 'error',
-            'error': str(e),
-            'details': traceback.format_exc()
-        }), 500
+        body, status = error_response('AI analysis failed', status=500)
+        return jsonify(body), status
 
 
 @ai_bp.route('/ask', methods=['POST'])
+@ai_bp.route('/chat', methods=['POST'])
 def ask():
     """
     Interactive Q&A with document context.
@@ -79,6 +89,10 @@ def ask():
     """
     try:
         payload = request.get_json(silent=True) or {}
+        ok, message = ensure_json_object(payload)
+        if not ok:
+            body, status = error_response(message, status=400)
+            return jsonify(body), status
         
         query = payload.get('query', '').strip()
         context = payload.get('context')
@@ -86,16 +100,12 @@ def ask():
         
         # Validate input
         if not query:
-            return jsonify({
-                'status': 'error',
-                'error': 'Query is required'
-            }), 400
+            body, status = error_response('Query is required', status=400)
+            return jsonify(body), status
         
         if not context:
-            return jsonify({
-                'status': 'error',
-                'error': 'Context is required'
-            }), 400
+            body, status = error_response('Context is required', status=400)
+            return jsonify(body), status
         
         logger.info(f"💬 AI Chat: {query[:50]}...")
         
@@ -118,11 +128,8 @@ def ask():
     
     except Exception as e:
         logger.exception("AI chat failed")
-        return jsonify({
-            'status': 'error',
-            'error': str(e),
-            'details': traceback.format_exc()
-        }), 500
+        body, status = error_response('AI chat failed', status=500)
+        return jsonify(body), status
 
 
 @ai_bp.route('/summarize-components', methods=['POST'])
@@ -139,16 +146,23 @@ def summarize_components_endpoint():
     """
     try:
         payload = request.get_json(silent=True) or {}
+        ok, message = ensure_json_object(payload)
+        if not ok:
+            body, status = error_response(message, status=400)
+            return jsonify(body), status
         
         components = payload.get('components', [])
         relationships = payload.get('relationships', {})
         document_type = payload.get('document_type', 'general')
         
+        ok, message = validate_components_list(components)
+        if not ok:
+            body, status = error_response(message, status=400)
+            return jsonify(body), status
+
         if not components:
-            return jsonify({
-                'status': 'error',
-                'error': 'Components array is required'
-            }), 400
+            body, status = error_response('Components array is required', status=400)
+            return jsonify(body), status
         
         logger.info(f"📝 Summarizing {len(components)} components")
         
@@ -171,10 +185,8 @@ def summarize_components_endpoint():
     
     except Exception as e:
         logger.exception("Component summarization failed")
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        body, status = error_response('Component summarization failed', status=500)
+        return jsonify(body), status
 
 
 @ai_bp.route('/generate-insights', methods=['POST'])
@@ -192,6 +204,10 @@ def generate_insights_endpoint():
     """
     try:
         payload = request.get_json(silent=True) or {}
+        ok, message = ensure_json_object(payload)
+        if not ok:
+            body, status = error_response(message, status=400)
+            return jsonify(body), status
         
         vision_analysis = payload.get('vision_analysis', {})
         ar_components = payload.get('ar_components', [])
@@ -219,10 +235,8 @@ def generate_insights_endpoint():
     
     except Exception as e:
         logger.exception("Insight generation failed")
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        body, status = error_response('Insight generation failed', status=500)
+        return jsonify(body), status
 
 
 @ai_bp.route('/compare-documents', methods=['POST'])
@@ -239,16 +253,18 @@ def compare_documents():
     """
     try:
         payload = request.get_json(silent=True) or {}
+        ok, message = ensure_json_object(payload)
+        if not ok:
+            body, status = error_response(message, status=400)
+            return jsonify(body), status
         
         doc1 = payload.get('document1')
         doc2 = payload.get('document2')
         comparison_type = payload.get('comparison_type', 'general')
         
         if not doc1 or not doc2:
-            return jsonify({
-                'status': 'error',
-                'error': 'Both document1 and document2 are required'
-            }), 400
+            body, status = error_response('Both document1 and document2 are required', status=400)
+            return jsonify(body), status
         
         logger.info(f"🔍 Comparing documents: type={comparison_type}")
         
@@ -274,20 +290,19 @@ def compare_documents():
     
     except Exception as e:
         logger.exception("Document comparison failed")
-        return jsonify({
-            'status': 'error',
-            'error': str(e)
-        }), 500
+        body, status = error_response('Document comparison failed', status=500)
+        return jsonify(body), status
 
 
 @ai_bp.route('/health', methods=['GET'])
 def health_check():
     """Check if AI model is loaded"""
     from app.services.model_manager import manager
-    
-    is_loaded = manager.chat_model is not None and manager.chat_tokenizer is not None
-    
+
+    is_ready = manager.mock_mode or manager.vision_model is not None
+
     return jsonify({
-        'status': 'healthy' if is_loaded else 'degraded',
-        'ai_model_loaded': is_loaded
+        'status': 'healthy' if is_ready else 'degraded',
+        'ai_model_loaded': is_ready,
+        'mock_mode': manager.mock_mode,
     }), 200

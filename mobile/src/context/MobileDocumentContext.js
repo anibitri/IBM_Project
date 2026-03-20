@@ -22,6 +22,10 @@ const backend = api || realBackend;
 
 const DocumentContext = createContext(null);
 
+function makeSessionId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 export const MobileDocumentProvider = ({ children }) => {
   const [document, setDocument] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -30,9 +34,73 @@ export const MobileDocumentProvider = ({ children }) => {
   const [pendingQuestion, setPendingQuestion] = useState(null);
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [recentSessions, setRecentSessions] = useState([]);
+  const [accessibilitySettings, setAccessibilitySettings] = useState({
+    darkMode: false,
+  });
 
   const chatHistoryRef = useRef(chatHistory);
   useEffect(() => { chatHistoryRef.current = chatHistory; }, [chatHistory]);
+
+  const getNextNewChatName = useCallback((extraNames = []) => {
+    const usedNumbers = new Set();
+    [...recentSessions.map((s) => s?.fileName), ...extraNames].forEach((rawName) => {
+      const name = (rawName || '').trim();
+      if (!name) return;
+      if (name === 'New Chat') {
+        usedNumbers.add(1);
+        return;
+      }
+
+      const match = name.match(/^New Chat\s+(\d+)$/i);
+      if (match) {
+        usedNumbers.add(Number(match[1]));
+      }
+    });
+
+    let next = 1;
+    while (usedNumbers.has(next)) {
+      next += 1;
+    }
+    return next === 1 ? 'New Chat' : `New Chat ${next}`;
+  }, [recentSessions]);
+
+  const upsertSession = useCallback((doc, historyOverride = null) => {
+    if (!doc) return;
+
+    const history = historyOverride || chatHistoryRef.current || [];
+    const sessionId = doc.sessionId || makeSessionId();
+    const componentCount = doc.ar?.components?.length || 0;
+
+    setRecentSessions((prev) => {
+      const existing = prev.find((s) => s.id === sessionId);
+      const fileName =
+        doc.sessionName ||
+        existing?.fileName ||
+        doc.file?.original_name ||
+        'Untitled';
+
+      const session = {
+        id: sessionId,
+        storedName: doc.storedName,
+        fileName,
+        timestamp: Date.now(),
+        componentCount,
+        messageCount: history.length,
+        documentSnapshot: { ...doc, sessionId, sessionName: fileName },
+        chatHistory: [...history],
+      };
+
+      const filtered = prev.filter((s) => s.id !== sessionId);
+      return [session, ...filtered].slice(0, 30);
+    });
+  }, []);
+
+  useEffect(() => {
+    if (document?.sessionId) {
+      upsertSession(document);
+    }
+  }, [document, chatHistory, upsertSession]);
 
   // ── Upload & Process ────────────────────────────────────
   const uploadAndProcess = useCallback(async (file) => {
@@ -48,13 +116,18 @@ export const MobileDocumentProvider = ({ children }) => {
       const storedName = uploadResult.file.stored_name;
       const processResult = await backend.processDocument(storedName, true, true);
 
-      setDocument({
+      const nextDocument = {
+        sessionId: makeSessionId(),
         storedName,
         file: { ...uploadResult.file, url: file.uri || uploadResult.file.url },
         ...processResult,
-      });
+      };
+      setDocument(nextDocument);
+      upsertSession(nextDocument, []);
+      return true;
     } catch (err) {
       setError(err.message || 'Failed to process document');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -70,7 +143,8 @@ export const MobileDocumentProvider = ({ children }) => {
 
     try {
       const processResult = await backend.processDocument('demo', true, true);
-      setDocument({
+      const nextDocument = {
+        sessionId: makeSessionId(),
         storedName: 'demo',
         file: {
           original_name: 'demo_architecture.png',
@@ -80,9 +154,13 @@ export const MobileDocumentProvider = ({ children }) => {
           url: null,
         },
         ...processResult,
-      });
+      };
+      setDocument(nextDocument);
+      upsertSession(nextDocument, []);
+      return true;
     } catch (err) {
       setError(err.message || 'Failed to load demo');
+      return false;
     } finally {
       setLoading(false);
     }
@@ -112,6 +190,7 @@ export const MobileDocumentProvider = ({ children }) => {
       const recentHistory = chatHistoryRef.current.slice(-10);
       const result = await backend.askQuestion(query, context, recentHistory);
       addMessage('assistant', result.answer);
+      upsertSession(document, [...recentHistory, { role: 'user', content: query }, { role: 'assistant', content: result.answer }]);
       return result.answer;
     } catch (err) {
       setError(err.message || 'Failed to get answer');
@@ -139,6 +218,34 @@ export const MobileDocumentProvider = ({ children }) => {
 
   const clearChat = useCallback(() => setChatHistory([]), []);
 
+  const startNewChat = useCallback(() => {
+    if (!document) {
+      setChatHistory([]);
+      setPendingQuestion(null);
+      setSelectedComponent(null);
+      setCurrentImageIndex(0);
+      return;
+    }
+
+    const currentHistory = chatHistoryRef.current || [];
+    upsertSession(document, currentHistory);
+
+    const nextName = getNextNewChatName([document.sessionName]);
+
+    const nextDocument = {
+      ...document,
+      sessionId: makeSessionId(),
+      sessionName: nextName,
+    };
+
+    setDocument(nextDocument);
+    setChatHistory([]);
+    setPendingQuestion(null);
+    setSelectedComponent(null);
+    setCurrentImageIndex(0);
+    upsertSession(nextDocument, []);
+  }, [document, getNextNewChatName, upsertSession]);
+
   const clearDocument = useCallback(() => {
     setDocument(null);
     setChatHistory([]);
@@ -150,6 +257,61 @@ export const MobileDocumentProvider = ({ children }) => {
 
   const clearError = useCallback(() => setError(null), []);
 
+  const restoreSession = useCallback((session) => {
+    if (!session?.documentSnapshot) return;
+    setDocument({
+      ...session.documentSnapshot,
+      sessionName: session.fileName || session.documentSnapshot?.sessionName,
+    });
+    setChatHistory(session.chatHistory || []);
+    setPendingQuestion(null);
+    setSelectedComponent(null);
+    setCurrentImageIndex(0);
+
+    setRecentSessions((prev) => {
+      const filtered = prev.filter((s) => s.id !== session.id);
+      return [{ ...session, timestamp: Date.now() }, ...filtered];
+    });
+  }, []);
+
+  const removeSession = useCallback((sessionId) => {
+    setRecentSessions((prev) => prev.filter((s) => s.id !== sessionId));
+    if (document?.sessionId === sessionId) {
+      clearDocument();
+    }
+  }, [document, clearDocument]);
+
+  const renameSession = useCallback((sessionId, newName) => {
+    const trimmed = (newName || '').trim();
+    if (!trimmed) return;
+
+    setDocument((prev) => {
+      if (!prev || prev.sessionId !== sessionId) return prev;
+      return { ...prev, sessionName: trimmed };
+    });
+
+    setRecentSessions((prev) => prev.map((s) => (
+      s.id === sessionId
+        ? {
+            ...s,
+            fileName: trimmed,
+            documentSnapshot: {
+              ...s.documentSnapshot,
+              sessionName: trimmed,
+            },
+          }
+        : s
+    )));
+  }, []);
+
+  const setDarkMode = useCallback((value) => {
+    setAccessibilitySettings((prev) => ({ ...prev, darkMode: !!value }));
+  }, []);
+
+  const clearAllHistory = useCallback(() => {
+    setRecentSessions([]);
+  }, []);
+
   const value = {
     document,
     loading,
@@ -160,7 +322,9 @@ export const MobileDocumentProvider = ({ children }) => {
     setSelectedComponent,
     currentImageIndex,
     setCurrentImageIndex,
-    recentSessions: [],
+    accessibilitySettings,
+    setDarkMode,
+    recentSessions,
     uploadAndProcess,
     loadDemo,
     askQuestion,
@@ -168,12 +332,13 @@ export const MobileDocumentProvider = ({ children }) => {
     consumePendingQuestion,
     addMessage,
     clearChat,
+    startNewChat,
     clearError,
     clearDocument,
-    restoreSession: () => {},
-    removeSession: () => {},
-    renameSession: () => {},
-    clearAllHistory: () => {},
+    restoreSession,
+    removeSession,
+    renameSession,
+    clearAllHistory,
   };
 
   return <DocumentContext.Provider value={value}>{children}</DocumentContext.Provider>;

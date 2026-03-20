@@ -1,0 +1,34 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # ── Local debug: print spans to the collector log ──────────────
+  debug:
+    verbosity: normal
+
+  # ── Jaeger: view traces at http://localhost:16686 ──────────────
+  otlp/jaeger:
+    endpoint: jaeger:4317
+    tls:
+      insecure: true
+
+  # ── Instana: uncomment and set your agent host when available ──
+  # otlp/instana:
+  #   endpoint: http://<instana-agent-host>:4317
+  #   tls:
+  #     insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug, otlp/jaeger]

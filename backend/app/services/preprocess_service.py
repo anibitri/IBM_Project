@@ -2,8 +2,20 @@ import os
 import logging
 from typing import Dict, Any, Optional, List
 from PIL import Image
-import fitz  # PyMuPDF for PDF image extraction
 from pathlib import Path
+
+# PyMuPDF import (avoid crashing if wrong 'fitz' package is installed)
+try:
+    import pymupdf as fitz  # Preferred modern import name
+    HAS_PYMUPDF = True
+except Exception:
+    try:
+        import fitz  # Backward-compatible import name
+        HAS_PYMUPDF = True
+    except Exception:
+        fitz = None
+        HAS_PYMUPDF = False
+        logging.warning("⚠️ PyMuPDF not installed or invalid fitz package detected. PDF image extraction unavailable.")
 
 # Docling for PDF text extraction
 try:
@@ -131,6 +143,10 @@ class PreprocessService:
             - filename: Extracted image filename
         """
         logger.info("📸 Extracting images from PDF...")
+
+        if not HAS_PYMUPDF or fitz is None:
+            logger.warning("PyMuPDF unavailable. Skipping PDF image extraction.")
+            return []
         
         extracted_images = []
         

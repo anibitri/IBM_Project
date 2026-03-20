@@ -21,82 +21,114 @@ class AIService:
         self.max_context_length = 3072
         self.default_max_tokens = 400
     
+    # ── IBM OTel mock responses (used when GRANITE_MOCK=1) ──────────────────
+    _MOCK_SUMMARY = (
+        "This diagram illustrates the IBM OpenTelemetry to Instana observability pipeline. "
+        "An instrumented application emits telemetry data (traces, metrics, logs) using the "
+        "OpenTelemetry SDK. The OTel Collector receives and processes this data, then forwards "
+        "it via the OTLP/Instana Exporter over HTTPS to the Instana Agent running on the host. "
+        "The Instana Agent delivers the data to the Instana backend for monitoring and analysis."
+    )
+
+    _MOCK_CHAT = {
+        "component": (
+            "The diagram contains five components: the instrumented Application (source of telemetry), "
+            "the OpenTelemetry Collector (receives and processes spans/metrics/logs), the OTLP/Instana "
+            "Exporter (formats and sends data to Instana), the Instana Agent (host-level receiver), "
+            "and the Instana backend (monitoring platform)."
+        ),
+        "flow": (
+            "Data flows left to right: the Application sends telemetry via OTLP to the OTel Collector. "
+            "The Collector processes the data and passes it to the OTLP/Instana Exporter, which sends "
+            "it over HTTPS to the Instana Agent. The Agent forwards it to the Instana backend."
+        ),
+        "collector": (
+            "The OpenTelemetry Collector is a vendor-agnostic proxy that receives, processes, and "
+            "exports telemetry data. It decouples instrumentation from the backend, allowing batching, "
+            "filtering, and routing without changes to application code."
+        ),
+        "instana": (
+            "Instana is IBM's AI-powered APM and observability platform. It provides automatic "
+            "discovery, continuous monitoring, and AI-driven root cause analysis for distributed "
+            "applications and infrastructure."
+        ),
+        "otlp": (
+            "OTLP (OpenTelemetry Protocol) is the native wire protocol for OpenTelemetry. It uses "
+            "gRPC or HTTP/protobuf to transport traces, metrics, and logs efficiently between "
+            "OTel-compatible components."
+        ),
+        "default": (
+            "This is an IBM OpenTelemetry observability pipeline connecting an instrumented "
+            "application to the Instana monitoring backend via the OTel Collector and Instana Agent. "
+            "The pipeline carries distributed traces, metrics, and logs in real time."
+        ),
+    }
+
+    def _mock_chat_response(self, query: str) -> str:
+        """Return an IBM OTel-specific canned response based on keywords in the query."""
+        q = query.lower()
+        if any(w in q for w in ["component", "part", "element", "what is", "what are"]):
+            return self._MOCK_CHAT["component"]
+        if any(w in q for w in ["flow", "path", "route", "travel", "move", "send", "data"]):
+            return self._MOCK_CHAT["flow"]
+        if any(w in q for w in ["collector", "otel", "opentelemetry"]):
+            return self._MOCK_CHAT["collector"]
+        if any(w in q for w in ["instana", "ibm", "backend", "monitor"]):
+            return self._MOCK_CHAT["instana"]
+        if any(w in q for w in ["otlp", "protocol", "grpc", "http"]):
+            return self._MOCK_CHAT["otlp"]
+        return self._MOCK_CHAT["default"]
+
     def _generate_text(
-        self, 
-        prompt: str, 
+        self,
+        prompt: str,
         max_tokens: int = None,
         temperature: float = 0.7,
         top_p: float = 0.9
     ) -> str:
         """
-        Generate text using the chat model with proper token management.
-        Includes OOM retry with progressive context truncation.
+        Generate text using the IBM Granite Vision model.
+        The vision model handles both image analysis and text-only chat.
+        In mock mode, returns IBM OTel-specific canned responses.
         """
-        if not manager.chat_model or not manager.chat_tokenizer:
-            return "Error: AI Model not available."
-        
-        if max_tokens is None:
-            max_tokens = self.default_max_tokens
+        if manager.mock_mode:
+            return self._mock_chat_response(prompt)
 
-        # Try generation with progressively shorter context on OOM
-        for attempt, max_len in enumerate([self.max_context_length, 1536, 768]):
-            try:
-                # Free cached VRAM before generation
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
+        if not manager.vision_model or not manager.vision_processor:
+            return "Error: AI model not loaded."
 
-                # Tokenize with truncation
-                enc = manager.chat_tokenizer(
-                    prompt,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=max_len
+        try:
+            # Text-only generation — pass text only (no image) for chat tasks.
+            device = manager.vision_model.device
+            chat_text = manager.vision_processor.apply_chat_template(
+                [{"role": "user", "content": prompt}],
+                tokenize=False,
+                add_generation_prompt=True,
+            )
+            inputs = manager.vision_processor(
+                text=chat_text,
+                return_tensors="pt",
+            ).to(device)
+
+            max_new = max_tokens or self.default_max_tokens
+            with torch.no_grad():
+                output_ids = manager.vision_model.generate(
+                    **inputs,
+                    max_new_tokens=max_new,
+                    do_sample=temperature > 0,
+                    temperature=temperature if temperature > 0 else 1.0,
+                    top_p=top_p,
+                    repetition_penalty=1.1,
                 )
 
-                # Move to same device as the chat model
-                enc = {k: v.to(manager.chat_device) for k, v in enc.items()}
-                if "attention_mask" in enc:
-                    enc["attention_mask"] = enc["attention_mask"].long()
+            prompt_len = inputs["input_ids"].shape[1]
+            new_tokens = output_ids[:, prompt_len:]
+            text = manager.vision_processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
+            return self._clean_response(text)
 
-                # Generate
-                prompt_len = enc["input_ids"].shape[1]
-                with torch.no_grad():
-                    output_ids = manager.chat_model.generate(
-                        **enc,
-                        max_new_tokens=max_tokens,
-                        do_sample=True,
-                        temperature=temperature,
-                        top_p=top_p,
-                        repetition_penalty=1.1,
-                        pad_token_id=manager.chat_tokenizer.pad_token_id,
-                        eos_token_id=manager.chat_tokenizer.eos_token_id
-                    )
-                
-                # Decode only newly generated tokens (skip the prompt)
-                new_token_ids = output_ids[0][prompt_len:]
-                response = manager.chat_tokenizer.decode(
-                    new_token_ids, 
-                    skip_special_tokens=True
-                ).strip()
-                
-                # Remove common artifacts
-                response = self._clean_response(response)
-                
-                return response
-
-            except torch.cuda.OutOfMemoryError:
-                print(f"⚠️ OOM on attempt {attempt+1} (max_len={max_len}), retrying shorter...")
-                if torch.cuda.is_available():
-                    torch.cuda.empty_cache()
-                if attempt == 2:
-                    return "Error: Not enough GPU memory to generate a response. Try a shorter question."
-        
-            except Exception as e:
-                print(f"❌ Text generation error: {e}")
-                return f"Error generating response: {str(e)}"
-        
-        return "Error generating response."
+        except Exception as e:
+            logger.exception("Text generation failed")
+            return f"Error generating response: {str(e)}"
     
     def _clean_response(self, text: str) -> str:
         """Clean up generated response"""
@@ -269,12 +301,15 @@ class AIService:
         
         if components and isinstance(components, list):
             comp_list = []
-            for comp in components[:15]:  # Show more components
-                label = comp.get('label', 'Unknown')
-                desc = comp.get('description', '')
-                comp_str = f"- {label}"
-                if desc:
-                    comp_str += f": {desc[:80]}"
+            for comp in components[:15]:
+                if isinstance(comp, dict):
+                    label = comp.get('label', 'Unknown')
+                    desc = comp.get('description', '')
+                    comp_str = f"- {label}"
+                    if desc:
+                        comp_str += f": {desc[:80]}"
+                else:
+                    comp_str = f"- {comp}"
                 comp_list.append(comp_str)
             
             if comp_list:
@@ -337,11 +372,18 @@ class AIService:
                 "answer": "No content provided for analysis."
             }
         
+        if manager.mock_mode:
+            return {
+                "status": "ok",
+                "answer": self._MOCK_SUMMARY,
+                "context_type": context_type,
+            }
+
         task = get_context_analysis_task(context_type)
         prompt = build_analyze_context_prompt(context_str, task)
-        
+
         answer = self._generate_text(prompt, max_tokens=400)
-        
+
         return {
             "status": "ok",
             "answer": answer,
@@ -391,9 +433,13 @@ class AIService:
         
         # ── Build context string from structured data ──
         if isinstance(context, dict):
+            # Accept both 'vision' (internal format) and 'analysis' (vision route response format)
+            vision_ctx = context.get('vision') or (
+                {'analysis': context['analysis']} if context.get('analysis') else None
+            )
             context_str = self._build_context_string(
                 text_excerpt=context.get('text_excerpt'),
-                vision=context.get('vision'),
+                vision=vision_ctx,
                 components=context.get('components'),
                 connections=context.get('connections'),
                 ai_summary=context.get('ai_summary'),

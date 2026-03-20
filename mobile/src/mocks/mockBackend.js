@@ -1,178 +1,206 @@
 /**
  * Mock Backend Service
  * Simulates all backend API responses for offline mobile development.
- * Components match the test System Architecture Diagram from conftest.py.
+ *
+ * Demo data represents the IBM OpenTelemetry → Instana observability pipeline
+ * as described in the IBM project brief.
  */
 
-// ─── Mock Data — System Architecture Diagram ─────────────────
-// Coordinates derived from the 800×600 test diagram in conftest.py
+// ─── IBM OpenTelemetry Diagram Components ─────────────────────
+// Matches the diagram from the IBM Instana documentation:
+// App → (OTLP) → OTel Collector → (OTLP or Instana Exporter) → Instana Agent → Instana
 
 const MOCK_COMPONENTS = [
   {
-    id: 'comp-1',
-    label: 'CPU',
-    description: 'Central Processing Unit — primary compute component responsible for executing instructions. Connected to RAM for data access and Storage for persistent I/O.',
-    x: 0.100, y: 0.133, width: 0.250, height: 0.200,
-    confidence: 0.96, center_x: 0.225, center_y: 0.233,
-    color: '#4682B4',
+    id: 'otel-1',
+    label: 'App',
+    model_label: 'App',
+    description: 'Instrumented application using the OpenTelemetry SDK. Emits telemetry data — traces, metrics, and logs — in OTLP format to the OTel Collector for processing.',
+    x: 0.04, y: 0.26, width: 0.16, height: 0.38,
+    confidence: 0.97, center_x: 0.120, center_y: 0.450,
+    color: '#2E86AB',
   },
   {
-    id: 'comp-2',
-    label: 'RAM',
-    description: 'Random Access Memory — volatile high-speed memory for active data and program instructions. Directly connected to the CPU via the memory bus.',
-    x: 0.425, y: 0.133, width: 0.225, height: 0.133,
-    confidence: 0.93, center_x: 0.538, center_y: 0.200,
-    color: '#3CA050',
+    id: 'otel-2',
+    label: 'OTel Collector',
+    model_label: 'OTel Collector',
+    description: 'OpenTelemetry Collector — vendor-agnostic telemetry pipeline component. Receives telemetry via OTLP, processes it (filtering, sampling, enrichment), and routes to configured exporters.',
+    x: 0.27, y: 0.04, width: 0.37, height: 0.28,
+    confidence: 0.96, center_x: 0.455, center_y: 0.180,
+    color: '#4A90D9',
   },
   {
-    id: 'comp-3',
-    label: 'Cache',
-    description: 'CPU Cache — small, fast memory layer between CPU and RAM that stores frequently accessed data to reduce latency.',
-    x: 0.425, y: 0.300, width: 0.150, height: 0.100,
-    confidence: 0.89, center_x: 0.500, center_y: 0.350,
-    color: '#B4643C',
+    id: 'otel-3',
+    label: 'OTLP or Instana Exporter',
+    model_label: 'Instana Exporter',
+    description: 'Exporter plugin within the OTel Collector. Converts processed telemetry and forwards it to the Instana Agent using either native OTLP or Instana-specific wire format.',
+    x: 0.27, y: 0.57, width: 0.31, height: 0.22,
+    confidence: 0.93, center_x: 0.425, center_y: 0.680,
+    color: '#E07B39',
   },
   {
-    id: 'comp-4',
-    label: 'CLK',
-    description: 'System Clock — generates timing signals that synchronize all components. Controls the operational frequency of the CPU and memory bus.',
-    x: 0.700, y: 0.133, width: 0.175, height: 0.233,
-    confidence: 0.91, center_x: 0.788, center_y: 0.250,
-    color: '#A03CB4',
+    id: 'otel-4',
+    label: 'Instana Agent',
+    model_label: 'Instana Agent',
+    description: 'IBM Instana host agent deployed on the monitored infrastructure. Receives telemetry from the exporter and forwards it securely to the Instana SaaS backend for storage and analysis.',
+    x: 0.62, y: 0.52, width: 0.19, height: 0.22,
+    confidence: 0.95, center_x: 0.715, center_y: 0.630,
+    color: '#E8192C',
   },
   {
-    id: 'comp-5',
-    label: 'Storage',
-    description: 'Persistent storage (SSD/HDD) for long-term data retention. Connected to the CPU through the I/O controller for read/write operations.',
-    x: 0.100, y: 0.467, width: 0.275, height: 0.167,
-    confidence: 0.94, center_x: 0.238, center_y: 0.550,
-    color: '#C8A028',
-  },
-  {
-    id: 'comp-6',
-    label: 'GPU',
-    description: 'Graphics Processing Unit — parallel compute architecture optimised for matrix operations, rendering, and machine learning workloads.',
-    x: 0.425, y: 0.467, width: 0.350, height: 0.233,
-    confidence: 0.97, center_x: 0.600, center_y: 0.583,
-    color: '#B43232',
-  },
-  {
-    id: 'comp-7',
-    label: 'I/O',
-    description: 'Input/Output controller — manages communication between the CPU and peripheral devices such as keyboard, mouse, and external interfaces.',
-    x: 0.100, y: 0.733, width: 0.175, height: 0.133,
-    confidence: 0.87, center_x: 0.188, center_y: 0.800,
-    color: '#50A0A0',
-  },
-  {
-    id: 'comp-8',
-    label: 'Network',
-    description: 'Network Interface Controller — handles Ethernet/Wi-Fi communication, packet routing, and network protocol processing.',
-    x: 0.350, y: 0.733, width: 0.250, height: 0.133,
-    confidence: 0.90, center_x: 0.475, center_y: 0.800,
-    color: '#6450B4',
+    id: 'otel-5',
+    label: 'Instana',
+    model_label: 'Instana',
+    description: 'IBM Instana Observability platform. Ingests and stores all telemetry. Provides real-time dashboards, automated anomaly detection, distributed trace visualisation, and alerting.',
+    x: 0.86, y: 0.04, width: 0.11, height: 0.90,
+    confidence: 0.98, center_x: 0.915, center_y: 0.490,
+    color: '#E8192C',
   },
 ];
 
 const MOCK_CONNECTIONS = [
-  { from: 'comp-1', to: 'comp-2', from_label: 'CPU', to_label: 'RAM', type: 'bus', distance: 0.31 },
-  { from: 'comp-1', to: 'comp-5', from_label: 'CPU', to_label: 'Storage', type: 'bus', distance: 0.32 },
-  { from: 'comp-2', to: 'comp-6', from_label: 'RAM', to_label: 'GPU', type: 'bus', distance: 0.39 },
-  { from: 'comp-2', to: 'comp-3', from_label: 'RAM', to_label: 'Cache', type: 'data_flow', distance: 0.17 },
-  { from: 'comp-1', to: 'comp-3', from_label: 'CPU', to_label: 'Cache', type: 'data_flow', distance: 0.30 },
-  { from: 'comp-4', to: 'comp-1', from_label: 'CLK', to_label: 'CPU', type: 'signal', distance: 0.56 },
-  { from: 'comp-5', to: 'comp-7', from_label: 'Storage', to_label: 'I/O', type: 'bus', distance: 0.25 },
-  { from: 'comp-7', to: 'comp-8', from_label: 'I/O', to_label: 'Network', type: 'bus', distance: 0.29 },
-  { from: 'comp-6', to: 'comp-8', from_label: 'GPU', to_label: 'Network', type: 'data_flow', distance: 0.25 },
+  {
+    from: 'otel-1', to: 'otel-2',
+    from_label: 'App', to_label: 'OTel Collector',
+    type: 'otlp', distance: 0.34,
+    description: 'Application sends telemetry (traces, metrics, logs) via OTLP protocol',
+  },
+  {
+    from: 'otel-2', to: 'otel-3',
+    from_label: 'OTel Collector', to_label: 'OTLP or Instana Exporter',
+    type: 'internal', distance: 0.50,
+    description: 'Collector routes processed telemetry to the configured exporter',
+  },
+  {
+    from: 'otel-3', to: 'otel-4',
+    from_label: 'OTLP or Instana Exporter', to_label: 'Instana Agent',
+    type: 'otlp', distance: 0.29,
+    description: 'Exporter forwards telemetry to the local Instana Agent over OTLP/HTTP',
+  },
+  {
+    from: 'otel-4', to: 'otel-5',
+    from_label: 'Instana Agent', to_label: 'Instana',
+    type: 'https', distance: 0.21,
+    description: 'Instana Agent securely transmits all telemetry to the Instana SaaS backend',
+  },
 ];
 
 const MOCK_AI_SUMMARY =
-  'This is a System Architecture Diagram showing the internal hardware components of a computer system. ' +
-  'The CPU is the central compute unit connected to RAM for volatile memory access and Cache for fast data retrieval. ' +
-  'A system Clock (CLK) synchronises operations across components. The GPU handles parallel workloads and graphics rendering. ' +
-  'Storage provides persistent data, while I/O and Network controllers manage external communication. ' +
-  'Components are connected via data buses and signal lines following a standard von Neumann architecture.';
+  'This is the IBM OpenTelemetry to Instana observability pipeline. It shows how application telemetry data ' +
+  '(traces, metrics, and logs) flows from an OpenTelemetry-instrumented App, through the OTel Collector, ' +
+  'via the OTLP or Instana Exporter, through the Instana Agent, and into the IBM Instana Observability ' +
+  'platform for real-time monitoring and analysis. The OTel Collector acts as a vendor-agnostic telemetry ' +
+  'pipeline hub, enabling flexible routing without vendor lock-in. IBM Granite AI powers the analysis.';
 
 const MOCK_VISION = {
-  description: 'A system architecture diagram illustrating hardware components (CPU, RAM, Cache, CLK, Storage, GPU, I/O, Network) with data bus connections and signal flow lines.',
-  diagram_type: 'hardware_architecture',
+  description: 'IBM OpenTelemetry observability pipeline diagram showing App, OTel Collector, OTLP/Instana Exporter, Instana Agent, and Instana platform with OTLP data flow arrows.',
+  diagram_type: 'observability_architecture',
   detected_elements: [
-    'Coloured rectangular blocks representing hardware components',
-    'Connection lines indicating data buses and signal paths',
-    'Title bar labelled "System Architecture Diagram"',
-    'Grid-pattern background',
+    'App box on the left emitting OTLP telemetry',
+    'OTel Collector as central processing hub',
+    'OTLP or Instana Exporter routing telemetry',
+    'Instana Agent forwarding to SaaS backend',
+    'Instana platform receiving all observability data',
   ],
 };
 
-// ─── AI Chat Responses ───────────────────────────────────────
+// ─── AI Chat Responses — IBM OTel specific ────────────────────
 
 const CHAT_RESPONSES = {
-  components: 'This diagram shows **8 hardware components**:\n\n' +
-    '1. **CPU** — Central Processing Unit, main compute core\n' +
-    '2. **RAM** — Random Access Memory, volatile storage\n' +
-    '3. **Cache** — Fast intermediate memory layer\n' +
-    '4. **CLK** — System Clock, synchronisation signal\n' +
-    '5. **Storage** — Persistent data (SSD/HDD)\n' +
-    '6. **GPU** — Graphics/parallel processing unit\n' +
-    '7. **I/O** — Input/Output controller\n' +
-    '8. **Network** — Network Interface Controller',
+  components:
+    'This diagram shows **5 components** of the IBM OpenTelemetry observability pipeline:\n\n' +
+    '1. **App** — Your instrumented application using the OpenTelemetry SDK\n' +
+    '2. **OTel Collector** — Vendor-agnostic telemetry pipeline (receives, processes, routes)\n' +
+    '3. **OTLP or Instana Exporter** — Exports telemetry to the Instana backend\n' +
+    '4. **Instana Agent** — Host agent that forwards data to Instana SaaS\n' +
+    '5. **Instana** — IBM Instana Observability platform for monitoring and analysis',
 
-  connections: 'The components are connected through data buses and signal lines:\n\n' +
-    '• **CPU → RAM**: Memory bus for data read/write\n' +
-    '• **CPU → Cache**: High-speed cache bus\n' +
-    '• **RAM → Cache**: Cache coherency path\n' +
-    '• **CLK → CPU**: Clock signal for synchronisation\n' +
-    '• **CPU → Storage**: I/O bus for persistent data\n' +
-    '• **RAM → GPU**: PCIe/memory bus for parallel compute\n' +
-    '• **Storage → I/O**: Peripheral data path\n' +
-    '• **I/O → Network**: External network communication\n' +
-    '• **GPU → Network**: Direct network access for distributed workloads',
+  flow:
+    'Telemetry data flows through the pipeline as follows:\n\n' +
+    '1. **App → OTel Collector**: Application sends traces, metrics, and logs via OTLP protocol\n' +
+    '2. **OTel Collector → Exporter**: Collector processes and routes data to the Instana Exporter\n' +
+    '3. **Exporter → Instana Agent**: Telemetry forwarded via OTLP/HTTP to the local Instana Agent\n' +
+    '4. **Instana Agent → Instana**: Agent transmits data securely to the IBM Instana SaaS backend',
 
-  purpose: 'This is a **System Architecture Diagram** illustrating the internal hardware layout of a computer system. ' +
-    'It follows a von Neumann architecture where the CPU is the central compute element connected to volatile memory (RAM) ' +
-    'and persistent storage. The Cache provides fast data access to reduce CPU wait times. A system Clock (CLK) synchronises ' +
-    'all operations. The GPU provides parallel processing capability, while I/O and Network controllers handle external communication.',
+  otelCollector:
+    '**OTel Collector** is the central component of this pipeline.\n\n' +
+    'It is a vendor-agnostic service that:\n' +
+    '• **Receives** telemetry from your app via OTLP\n' +
+    '• **Processes** data — filtering, sampling, attribute enrichment\n' +
+    '• **Routes** to one or more exporters (Instana, Jaeger, Prometheus, etc.)\n\n' +
+    'Using a Collector means your application is not locked to any single observability vendor.',
 
-  default: 'Based on the diagram analysis, this is a standard computer hardware architecture. ' +
-    'The CPU sits at the centre connected to RAM and Cache for memory operations, with a Clock for timing. ' +
-    'Storage provides persistence, the GPU handles parallel/graphics workloads, and I/O plus Network manage external interfaces. ' +
-    'The layout follows conventional computer architecture principles with clear data flow paths between components.',
+  instana:
+    '**IBM Instana** is an enterprise-grade Application Performance Monitoring (APM) and ' +
+    'observability platform.\n\n' +
+    'It provides:\n' +
+    '• Real-time distributed trace visualisation\n' +
+    '• Automated anomaly detection with AI\n' +
+    '• Infrastructure and application metrics dashboards\n' +
+    '• Alerting and incident management\n' +
+    '• Full-stack observability from infrastructure to code',
+
+  otlp:
+    '**OTLP** (OpenTelemetry Protocol) is the standard wire protocol for transmitting telemetry data.\n\n' +
+    'It supports three telemetry signals:\n' +
+    '• **Traces** — end-to-end request journeys across services\n' +
+    '• **Metrics** — numerical measurements over time (latency, throughput, errors)\n' +
+    '• **Logs** — structured event records\n\n' +
+    'OTLP runs over gRPC or HTTP/protobuf and is vendor-neutral.',
+
+  purpose:
+    'This diagram shows the **IBM OpenTelemetry observability pipeline** — a solution for monitoring ' +
+    'applications without modifying the core documentation.\n\n' +
+    'The goal is to instrument your application once with the OpenTelemetry SDK, then route all ' +
+    'telemetry through a flexible Collector pipeline into IBM Instana for deep observability. ' +
+    'This approach keeps the application code vendor-neutral while gaining full Instana monitoring capabilities.',
+
+  default:
+    'This diagram represents the IBM OpenTelemetry to Instana observability pipeline. ' +
+    'An instrumented application sends telemetry (traces, metrics, logs) via OTLP to the OTel Collector, ' +
+    'which processes and routes the data through the Instana Exporter to the Instana Agent, and finally ' +
+    'into the IBM Instana platform for real-time monitoring, anomaly detection, and distributed tracing.',
 };
 
 function getAIResponse(query) {
   const q = query.toLowerCase();
-  if (q.includes('component') && (q.includes('what') || q.includes('show') || q.includes('list'))) {
+
+  if (q.includes('component') || q.includes('show') || q.includes('list') || q.includes('what is in')) {
     return CHAT_RESPONSES.components;
   }
-  if (q.includes('connect') || q.includes('relationship') || q.includes('linked') || q.includes('interact')) {
-    return CHAT_RESPONSES.connections;
+  if (q.includes('flow') || q.includes('how does') || q.includes('path') || q.includes('travel') || q.includes('send') || q.includes('route')) {
+    return CHAT_RESPONSES.flow;
   }
-  if (q.includes('purpose') || q.includes('goal') || q.includes('why') || q.includes('function')) {
+  if (q.includes('collector') || q.includes('otel collector')) {
+    return CHAT_RESPONSES.otelCollector;
+  }
+  if (q.includes('instana') && !q.includes('exporter') && !q.includes('agent')) {
+    return CHAT_RESPONSES.instana;
+  }
+  if (q.includes('otlp') || q.includes('protocol') || q.includes('opentelemetry')) {
+    return CHAT_RESPONSES.otlp;
+  }
+  if (q.includes('purpose') || q.includes('goal') || q.includes('why') || q.includes('what does')) {
     return CHAT_RESPONSES.purpose;
   }
 
   // Component-specific queries
   for (const comp of MOCK_COMPONENTS) {
     if (q.includes(comp.label.toLowerCase())) {
-      return `**${comp.label}**\n\n${comp.description}\n\n` +
-        `It has a detection confidence of ${(comp.confidence * 100).toFixed(0)}% ` +
-        `and is positioned at (${comp.x.toFixed(2)}, ${comp.y.toFixed(2)}) in the diagram.`;
+      return `**${comp.label}**\n\n${comp.description}`;
     }
   }
 
   return CHAT_RESPONSES.default;
 }
 
-// ─── Simulated delay ─────────────────────────────────────────
-
-const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
-
-// ─── PDF Mock Data ───────────────────────────────────────────
+// ─── Generic PDF microservices mock (for uploaded PDFs) ───────
 
 const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-1',
     label: 'API Gateway',
+    model_label: 'API Gateway',
     description: 'Entry point for all client requests. Handles routing, rate limiting, authentication, and load balancing across backend micro-services.',
     x: 0.350, y: 0.080, width: 0.300, height: 0.120,
     confidence: 0.95, center_x: 0.500, center_y: 0.140,
@@ -181,7 +209,8 @@ const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-2',
     label: 'Auth Service',
-    description: 'Manages user authentication and authorization using JWT tokens and OAuth 2.0 flows. Issues and validates access tokens.',
+    model_label: 'Auth Service',
+    description: 'Manages user authentication and authorization using JWT tokens and OAuth 2.0 flows.',
     x: 0.050, y: 0.280, width: 0.250, height: 0.130,
     confidence: 0.92, center_x: 0.175, center_y: 0.345,
     color: '#4CAF50',
@@ -189,6 +218,7 @@ const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-3',
     label: 'User Service',
+    model_label: 'User Service',
     description: 'CRUD operations on user profiles, preferences, and account settings. Stores data in PostgreSQL.',
     x: 0.370, y: 0.280, width: 0.250, height: 0.130,
     confidence: 0.91, center_x: 0.495, center_y: 0.345,
@@ -197,7 +227,8 @@ const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-4',
     label: 'Data Service',
-    description: 'Handles data ingestion, transformation, and retrieval. Supports batch and streaming pipelines for real-time analytics.',
+    model_label: 'Data Service',
+    description: 'Handles data ingestion, transformation, and retrieval. Supports batch and streaming pipelines.',
     x: 0.690, y: 0.280, width: 0.260, height: 0.130,
     confidence: 0.93, center_x: 0.820, center_y: 0.345,
     color: '#9C27B0',
@@ -205,6 +236,7 @@ const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-5',
     label: 'PostgreSQL',
+    model_label: 'PostgreSQL',
     description: 'Primary relational database storing user data, metadata, and transactional records.',
     x: 0.050, y: 0.500, width: 0.200, height: 0.110,
     confidence: 0.90, center_x: 0.150, center_y: 0.555,
@@ -213,6 +245,7 @@ const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-6',
     label: 'Redis Cache',
+    model_label: 'Redis Cache',
     description: 'In-memory cache layer for session tokens, frequently accessed queries, and rate-limit counters.',
     x: 0.310, y: 0.500, width: 0.200, height: 0.110,
     confidence: 0.88, center_x: 0.410, center_y: 0.555,
@@ -221,7 +254,8 @@ const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-7',
     label: 'Message Queue',
-    description: 'Asynchronous message broker (RabbitMQ/Kafka) for decoupled event-driven communication between services.',
+    model_label: 'Message Queue',
+    description: 'Asynchronous message broker (Kafka/RabbitMQ) for decoupled event-driven communication.',
     x: 0.570, y: 0.500, width: 0.220, height: 0.110,
     confidence: 0.89, center_x: 0.680, center_y: 0.555,
     color: '#FF5722',
@@ -229,7 +263,8 @@ const MOCK_PDF_COMPONENTS = [
   {
     id: 'pdf-8',
     label: 'Object Storage',
-    description: 'S3-compatible blob store for documents, images, and large binary artefacts uploaded by users.',
+    model_label: 'Object Storage',
+    description: 'S3-compatible blob store for documents, images, and large binary artefacts.',
     x: 0.310, y: 0.700, width: 0.380, height: 0.120,
     confidence: 0.94, center_x: 0.500, center_y: 0.760,
     color: '#607D8B',
@@ -249,8 +284,7 @@ const MOCK_PDF_CONNECTIONS = [
 ];
 
 const MOCK_PDF_AI_SUMMARY =
-  'This is a Micro-services Architecture Diagram extracted from a multi-page PDF document. ' +
-  'Page 1 contains the high-level overview showing an API Gateway routing traffic to three backend services: ' +
+  'This is a Micro-services Architecture Diagram. An API Gateway routes traffic to three backend services: ' +
   'Auth Service, User Service, and Data Service. These connect to a PostgreSQL database, Redis cache, ' +
   'a message queue, and object storage. The architecture follows cloud-native best practices with ' +
   'stateless services, centralised authentication, and event-driven data pipelines.';
@@ -261,11 +295,13 @@ const MOCK_PDF_VISION = {
   detected_elements: [
     'Rounded rectangles representing micro-services',
     'Arrows indicating HTTP and TCP connections',
-    'Database cylinder icons',
-    'Cloud storage symbol',
-    'Title and legend on page header',
+    'Database and storage symbols',
   ],
 };
+
+// ─── Simulated delay ─────────────────────────────────────────
+
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
 // ─── Mock Backend API ────────────────────────────────────────
 
@@ -288,7 +324,7 @@ export const mockBackend = {
     };
   },
 
-  processDocument: async (storedName, extractAR = true, generateAI = true) => {
+  processDocument: async (storedName, _extractAR = true, _generateAI = true) => {
     await delay(2000);
     const isPdf = (storedName || '').endsWith('.pdf');
 
@@ -302,11 +338,12 @@ export const mockBackend = {
         },
         vision: MOCK_PDF_VISION,
         ai_summary: MOCK_PDF_AI_SUMMARY,
-        text_excerpt: 'Micro-services Architecture Diagram — API Gateway, Auth Service, User Service, Data Service, PostgreSQL, Redis Cache, Message Queue, Object Storage.',
+        text_excerpt: 'Micro-services Architecture — API Gateway, Auth Service, User Service, Data Service, PostgreSQL, Redis Cache, Message Queue, Object Storage.',
         meta: { width: 1000, height: 800, pages: 3, format: 'pdf' },
       };
     }
 
+    // Default demo: IBM OpenTelemetry diagram
     return {
       status: 'success',
       ar: {
@@ -316,17 +353,17 @@ export const mockBackend = {
       },
       vision: MOCK_VISION,
       ai_summary: MOCK_AI_SUMMARY,
-      text_excerpt: 'System Architecture Diagram — showing CPU, RAM, Cache, CLK, Storage, GPU, I/O, and Network hardware components with data bus connections.',
-      meta: { width: 800, height: 600, pages: 1, format: 'png' },
+      text_excerpt: 'IBM OpenTelemetry to Instana observability pipeline — App, OTel Collector, OTLP or Instana Exporter, Instana Agent, Instana platform.',
+      meta: { width: 900, height: 600, pages: 1, format: 'png' },
     };
   },
 
-  analyzeVision: async (storedName, task = 'general_analysis') => {
+  analyzeVision: async (_storedName, _task = 'general_analysis') => {
     await delay(1200);
     return { status: 'success', ...MOCK_VISION };
   },
 
-  generateAR: async (storedName) => {
+  generateAR: async (_storedName) => {
     await delay(1500);
     return {
       status: 'success',
@@ -335,8 +372,8 @@ export const mockBackend = {
     };
   },
 
-  askQuestion: async (query, context, history = []) => {
-    await delay(1000);
+  askQuestion: async (query, _context, _history = []) => {
+    await delay(900);
     return { status: 'success', answer: getAIResponse(query) };
   },
 

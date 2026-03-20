@@ -15,8 +15,8 @@ class TestARServiceDirect:
 
     @pytest.fixture(autouse=True)
     def service(self, manager):
-        if manager.ar_model is None:
-            pytest.skip("SAM model not loaded")
+        # AR service works with contour detection even without SAM loaded.
+        # Only skip if explicitly running in mock mode where we don't want real CV.
         from app.services.ar_service import ar_service
         self.ar_service = ar_service
 

@@ -1,4 +1,4 @@
-"""Quantitative evaluation for Legacy AR (ARv1) on 6 custom diagrams.
+"""Quantitative evaluation for AR service on 6 custom diagrams.
 
 This file is report-oriented, not threshold-gated. It prints and exports
 metrics so you can compare algorithm versions without pass/fail policies.
@@ -76,7 +76,7 @@ class TestARServiceMetrics:
         if manager.ar_model is None:
             pytest.skip("SAM model not loaded")
 
-        from app.services.ARv1 import ar_service
+        from app.services.ar_service import ar_service
 
         self.ar_service = ar_service
 
@@ -89,8 +89,9 @@ class TestARServiceMetrics:
     def _extract_with_timing(self, image_path: str) -> tuple[list[dict], float]:
         if image_path not in self._cache:
             t0 = time.perf_counter()
-            components = self.ar_service.extract_document_features(image_path)
+            result = self.ar_service.extract_document_features(image_path)
             dt = time.perf_counter() - t0
+            components = result.get('components', []) if isinstance(result, dict) else []
             self._cache[image_path] = (components, dt)
         return self._cache[image_path]
 
@@ -174,7 +175,7 @@ class TestARServiceMetrics:
             "rel_error": rel_error,
         }
 
-    def test_legacy_ar_metrics_report(self):
+    def test_ar_metrics_report(self):
         """Run full quantitative evaluation and emit a report (non-gating)."""
         self._validate_case_config()
 

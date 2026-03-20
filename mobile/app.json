@@ -1,6 +1,9 @@
 {
+  "name": "ARDiagramViewer",
+  "displayName": "AR Diagram Viewer",
   "expo": {
-    "name": "AR Diagram Viewer",
+    "name": "ARDiagramViewer",
+    "displayName": "AR Diagram Viewer",
     "slug": "ar-diagram-viewer",
     "version": "1.0.0",
     "orientation": "portrait",

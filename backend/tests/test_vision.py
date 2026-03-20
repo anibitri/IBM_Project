@@ -15,8 +15,8 @@ class TestVisionServiceDirect:
 
     @pytest.fixture(autouse=True)
     def service(self, manager):
-        """Ensure vision model is loaded before each test"""
-        if manager.vision_model is None or manager.vision_processor is None:
+        """Ensure vision model is loaded (or mock mode is active) before each test"""
+        if not manager.mock_mode and (manager.vision_model is None or manager.vision_processor is None):
             pytest.skip("Vision model not loaded")
         from app.services.granite_vision_service import analyze_images
         self.analyze_images = analyze_images

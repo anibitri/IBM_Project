@@ -1,20 +1,36 @@
 import os
 import logging
-import traceback
-from flask import Flask, request, jsonify, send_from_directory
+import uuid
+from flask import Flask, request, jsonify, send_from_directory, g
 from flask_cors import CORS
 from werkzeug.exceptions import HTTPException
+from dotenv import load_dotenv
+from app.utils.response_formatter import error_response
 
 # ============================================================
 # 1. ENVIRONMENT CONFIGURATION
 # Must be set BEFORE any model imports
 # ============================================================
 
-# Force HuggingFace model cache location
-# os.environ['HF_HOME'] = r'G:\AI_Models'
+# Load .env from the backend directory (one level up from app/)
+load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 
 # Set to "0" for real AI models, "1" for mock/testing mode
-os.environ["GRANITE_MOCK"] = "0"
+# Controlled via GRANITE_MOCK in .env — do not hardcode here
+os.environ.setdefault("GRANITE_MOCK", "0")
+
+# Static API token auth (no signup/login required)
+# Set API_ACCESS_TOKEN in .env — do not hardcode here
+API_ACCESS_TOKEN = os.environ.get("API_ACCESS_TOKEN", "ibm-project-dev-token")
+PUBLIC_API_PATHS = {
+    "/api/health",
+    "/api/routes",
+    "/api/upload/health",
+    "/api/vision/health",
+    "/api/ar/health",
+    "/api/ai/health",
+    "/api/process/health",
+}
 
 # ============================================================
 # 2. IMPORT ROUTES
@@ -40,6 +56,36 @@ except ImportError as e:
     logging.warning(f"⚠️ Model Manager import failed: {e}")
 
 # ============================================================
+# OPENTELEMETRY INSTRUMENTATION
+# Sends traces to the OTel Collector (see otel-collector-config.yaml)
+# Set OTEL_EXPORTER_OTLP_ENDPOINT env var to change collector address.
+# Gracefully skipped if opentelemetry packages are not installed.
+# ============================================================
+if os.getenv("OTEL_SDK_DISABLED", "false").lower() in ("true", "1"):
+    OTEL_AVAILABLE = False
+    logging.info("ℹ️  OpenTelemetry disabled via OTEL_SDK_DISABLED — tracing skipped")
+else:
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.resources import Resource
+
+        _otel_endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "http://localhost:4317")
+        _resource = Resource.create({"service.name": "ibm-ar-doc-backend"})
+        _provider = TracerProvider(resource=_resource)
+        _provider.add_span_processor(
+            BatchSpanProcessor(OTLPSpanExporter(endpoint=_otel_endpoint, insecure=True))
+        )
+        trace.set_tracer_provider(_provider)
+        OTEL_AVAILABLE = True
+        logging.info(f"✅ OpenTelemetry enabled → {_otel_endpoint}")
+    except ImportError:
+        OTEL_AVAILABLE = False
+        logging.info("ℹ️  OpenTelemetry packages not installed — tracing disabled")
+
+# ============================================================
 # 4. APP FACTORY
 # ============================================================
 
@@ -49,6 +95,12 @@ def create_app() -> Flask:
     Creates and configures the Flask app.
     """
     app = Flask(__name__)
+    app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
+
+    # Auto-instrument Flask so every request becomes an OTel span
+    if OTEL_AVAILABLE:
+        from opentelemetry.instrumentation.flask import FlaskInstrumentor
+        FlaskInstrumentor().instrument_app(app)
     
     # CORS - Allow React frontend to communicate
     allowed_origins = [
@@ -72,7 +124,14 @@ def create_app() -> Flask:
     
     # Configure logging
     _configure_logging(app)
-    
+
+    app.logger.info(
+        f"🛡️  Security: token auth ON | "
+        f"public paths: {len(PUBLIC_API_PATHS)} | "
+        f"CORS origins: {len(allowed_origins)} | "
+        f"max upload: 50 MB"
+    )
+
     # Register middleware
     _register_middleware(app)
     
@@ -98,31 +157,46 @@ def create_app() -> Flask:
 # 5. LOGGING CONFIGURATION
 # ============================================================
 
+class _ColourFormatter(logging.Formatter):
+    _RESET  = '\033[0m'
+    _BOLD   = '\033[1m'
+    _LEVEL_COLOURS = {
+        logging.DEBUG:    '\033[36m',   # cyan
+        logging.INFO:     '\033[32m',   # green
+        logging.WARNING:  '\033[33m',   # yellow
+        logging.ERROR:    '\033[31m',   # red
+        logging.CRITICAL: '\033[35m',   # magenta
+    }
+
+    def format(self, record: logging.LogRecord) -> str:
+        colour = self._LEVEL_COLOURS.get(record.levelno, '')
+        time_str  = self.formatTime(record, '%Y-%m-%d %H:%M:%S')
+        level_str = f'{colour}{self._BOLD}{record.levelname:<8}{self._RESET}'
+        name_str  = f'\033[90m{record.name}{self._RESET}'  # dark grey
+        msg       = record.getMessage()
+        return f'[{time_str}] {level_str} in {name_str}: {msg}'
+
+
 def _configure_logging(app: Flask):
-    """Configure application logging"""
+    """Configure application logging with coloured output"""
     log_level = logging.DEBUG if app.debug else logging.INFO
-    
-    logging.basicConfig(
-        level=log_level,
-        format='[%(asctime)s] %(levelname)s in %(name)s: %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
+
+    # Replace root handler with colour formatter
+    root = logging.getLogger()
+    root.setLevel(log_level)
+    if root.handlers:
+        root.handlers.clear()
+    root_handler = logging.StreamHandler()
+    root_handler.setFormatter(_ColourFormatter())
+    root.addHandler(root_handler)
+
     app.logger.setLevel(log_level)
-    
-    # Add stream handler if none exist
-    if not app.logger.handlers:
-        handler = logging.StreamHandler()
-        handler.setFormatter(logging.Formatter(
-            '[%(asctime)s] %(levelname)s in %(name)s: %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        ))
-        app.logger.addHandler(handler)
-    
+    app.logger.propagate = True   # let root handler do the printing
+
     # Suppress noisy werkzeug logs
     logging.getLogger('werkzeug').setLevel(logging.WARNING)
     logging.captureWarnings(True)
-    
+
     app.logger.info("✅ Logging configured")
 
 
@@ -136,16 +210,48 @@ def _register_middleware(app: Flask):
     @app.before_request
     def log_request():
         """Log all incoming requests"""
+        g.request_id = request.headers.get('X-Request-ID') or uuid.uuid4().hex
+
+        # Token-based authentication for API routes (excluding health/meta routes)
+        if request.path.startswith('/api/') and request.method != 'OPTIONS':
+            if request.path not in PUBLIC_API_PATHS:
+                auth_header = request.headers.get('Authorization', '').strip()
+                expected = f"Bearer {API_ACCESS_TOKEN}"
+                if auth_header != expected:
+                    # Mask token in log: show first 10 chars only
+                    masked = auth_header[:10] + '…' if auth_header else '(none)'
+                    app.logger.warning(
+                        f"🔒 AUTH FAIL [{g.request_id}] "
+                        f"{request.method} {request.path} "
+                        f"from {request.remote_addr} | token: {masked}"
+                    )
+                    body, status = error_response(
+                        'Missing or invalid API token',
+                        status=401,
+                        code='AUTH_INVALID_TOKEN',
+                        request_id=g.request_id,
+                    )
+                    return jsonify(body), status
+
+                app.logger.debug(
+                    f"🔓 AUTH OK  [{g.request_id}] "
+                    f"{request.method} {request.path} "
+                    f"from {request.remote_addr}"
+                )
+
         app.logger.info(
-            f"→ {request.method} {request.path} "
+            f"→ [{g.request_id}] {request.method} {request.path} "
             f"from {request.remote_addr}"
         )
     
     @app.after_request
     def log_response(response):
         """Log all outgoing responses"""
+        request_id = getattr(g, 'request_id', None)
+        if request_id:
+            response.headers['X-Request-ID'] = request_id
         app.logger.info(
-            f"← {request.method} {request.path} "
+            f"← [{request_id}] {request.method} {request.path} "
             f"→ {response.status_code}"
         )
         return response
@@ -154,6 +260,12 @@ def _register_middleware(app: Flask):
     def add_headers(response):
         """Add security and cache headers"""
         response.headers['X-Content-Type-Options'] = 'nosniff'
+        response.headers['Referrer-Policy'] = 'no-referrer'
+        response.headers['Permissions-Policy'] = 'camera=(self), microphone=()'
+        # Advertise HTTPS-only preference when deployed behind TLS.
+        if request.is_secure or request.headers.get('X-Forwarded-Proto') == 'https':
+            response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+            app.logger.debug(f"🔐 HSTS header set for {request.path}")
         # Allow static files (PDFs, images) to be embedded in iframes
         # from the same origin, but block cross-origin framing for API routes
         if request.path.startswith('/static/'):
@@ -173,76 +285,73 @@ def _register_error_handlers(app: Flask):
     @app.errorhandler(400)
     def bad_request(e):
         app.logger.warning(f"400 Bad Request: {e}")
-        return jsonify({
-            'status': 'error',
-            'error': 'Bad request',
-            'details': str(e)
-        }), 400
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response('Bad request', status=400, request_id=request_id)
+        return jsonify(body), status
     
     @app.errorhandler(401)
     def unauthorized(e):
         app.logger.warning(f"401 Unauthorized: {e}")
-        return jsonify({
-            'status': 'error',
-            'error': 'Unauthorized'
-        }), 401
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response('Unauthorized', status=401, request_id=request_id)
+        return jsonify(body), status
     
     @app.errorhandler(403)
     def forbidden(e):
         app.logger.warning(f"403 Forbidden: {e}")
-        return jsonify({
-            'status': 'error',
-            'error': 'Forbidden'
-        }), 403
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response('Forbidden', status=403, request_id=request_id)
+        return jsonify(body), status
     
     @app.errorhandler(404)
     def not_found(e):
         app.logger.warning(f"404 Not Found: {request.path}")
-        return jsonify({
-            'status': 'error',
-            'error': f'Endpoint not found: {request.path}'
-        }), 404
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response(
+            f'Endpoint not found: {request.path}',
+            status=404,
+            request_id=request_id
+        )
+        return jsonify(body), status
     
     @app.errorhandler(405)
     def method_not_allowed(e):
         app.logger.warning(f"405 Method Not Allowed: {request.method} {request.path}")
-        return jsonify({
-            'status': 'error',
-            'error': f'Method {request.method} not allowed for {request.path}'
-        }), 405
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response(
+            f'Method {request.method} not allowed for {request.path}',
+            status=405,
+            request_id=request_id
+        )
+        return jsonify(body), status
     
     @app.errorhandler(413)
     def file_too_large(e):
         app.logger.warning(f"413 File Too Large")
-        return jsonify({
-            'status': 'error',
-            'error': 'File too large'
-        }), 413
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response('File too large', status=413, request_id=request_id)
+        return jsonify(body), status
     
     @app.errorhandler(500)
     def internal_server_error(e):
         app.logger.error(f"500 Internal Server Error: {e}")
-        return jsonify({
-            'status': 'error',
-            'error': 'Internal server error'
-        }), 500
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response('Internal server error', status=500, request_id=request_id)
+        return jsonify(body), status
     
     @app.errorhandler(HTTPException)
     def handle_http_exception(e):
         app.logger.warning(f"HTTP Exception {e.code}: {e.description}")
-        return jsonify({
-            'status': 'error',
-            'error': e.description
-        }), e.code
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response(e.description, status=e.code, request_id=request_id)
+        return jsonify(body), status
     
     @app.errorhandler(Exception)
     def handle_exception(e):
         app.logger.exception(f"Unhandled exception: {e}")
-        return jsonify({
-            'status': 'error',
-            'error': 'Internal server error',
-            'details': str(e) if app.debug else 'Enable debug mode for details'
-        }), 500
+        request_id = getattr(g, 'request_id', None)
+        body, status = error_response('Internal server error', status=500, request_id=request_id)
+        return jsonify(body), status
 
 
 # ============================================================
@@ -351,23 +460,16 @@ def _register_health_routes(app: Flask):
             health['models'] = {
                 'vision': {
                     'loaded': manager.vision_model is not None,
-                    'processor_loaded': manager.vision_processor is not None
+                    'processor_loaded': manager.vision_processor is not None,
+                    'note': 'handles vision analysis and text chat'
                 },
                 'ar': {
                     'loaded': manager.ar_model is not None
                 },
-                'chat': {
-                    'loaded': manager.chat_model is not None,
-                    'tokenizer_loaded': manager.chat_tokenizer is not None
-                }
             }
-            
-            # Determine overall health
-            all_loaded = all([
-                manager.vision_model is not None,
-                manager.ar_model is not None,
-                manager.chat_model is not None
-            ])
+
+            # Healthy = mock mode OR vision model loaded
+            all_loaded = manager.mock_mode or manager.vision_model is not None
             health['status'] = 'healthy' if all_loaded else 'degraded'
         
         else:
@@ -440,9 +542,8 @@ if __name__ == '__main__':
     
     if MODEL_MANAGER_AVAILABLE and manager:
         print("\n📦 MODEL STATUS:")
-        print(f"   Vision Model  : {'✅ Loaded' if manager.vision_model else '❌ Not loaded'}")
+        print(f"   Vision Model  : {'✅ Loaded' if manager.vision_model else '❌ Not loaded'} (vision + chat)")
         print(f"   AR Model      : {'✅ Loaded' if manager.ar_model else '❌ Not loaded'}")
-        print(f"   Chat Model    : {'✅ Loaded' if manager.chat_model else '❌ Not loaded'}")
     else:
         print("\n⚠️  Model Manager not available")
     

@@ -1,17 +1,37 @@
-
-flask==3.0.0
+transformers>=4.36.0
+torch>=2.0.0
+Flask==3.0.0
 flask-cors==4.0.0
-requests==2.31.0
-python-dotenv==1.0.0
 Werkzeug==3.0.1
+python-dotenv==1.0.0
+requests==2.31.0
 
+# Core image/vision stack used by routes and services
 numpy>=1.24.0
 opencv-python>=4.8.0
 Pillow>=10.0.0
+scipy>=1.10.0
+scikit-image>=0.22.0
+networkx>=3.0
+PyMuPDF>=1.24.0
 
+# ML runtime (still imported in service modules even when mock mode is enabled)
+torch>=2.2.0
 transformers>=4.36.0
-bitsandbytes>=0.41.0
 accelerate>=0.26.0
+ultralytics>=8.2.0  # SAM 2 support added in 8.2
 
-ultralytics>=8.0.0
-docling>=1.0.0
+# Optional: docling is already guarded by try/except in preprocess_service
+docling
+
+# bitsandbytes is CUDA/Linux focused and can fail on macOS installs
+bitsandbytes>=0.41.0; platform_system == "Linux"
+
+# OTel 
+
+opentelemetry-api>=1.20.0
+opentelemetry-sdk>=1.20.0
+opentelemetry-exporter-otlp-proto-grpc>=1.20.0
+opentelemetry-instrumentation-flask>=0.41b0
+opentelemetry-instrumentation-requests>=0.41b0
+

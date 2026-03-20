@@ -5,7 +5,7 @@
  * that float beside detected components, data-stream connection curves,
  * depth-aware parallax motion, and a military-HUD aesthetic.
  */
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -19,16 +19,17 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
-import { Accelerometer } from 'expo-sensors';
+
+// Bare React Native Replacements
+import { Camera, useCameraDevice, useCameraPermission } from 'react-native-vision-camera';
+import { accelerometer, setUpdateIntervalForType, SensorTypes } from 'react-native-sensors';
+import Ionicons from 'react-native-vector-icons/Ionicons';
+
 import Svg, {
   Line as SvgLine,
   Circle,
-  G,
   Text as SvgText,
-  Path,
 } from 'react-native-svg';
-import { Ionicons } from '@expo/vector-icons';
 
 const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
 
@@ -47,10 +48,12 @@ export default function CameraARView({
   fullscreen: fullscreenProp = false,
   onToggleFullscreen,
 }) {
-  const [permission, requestPermission] = useCameraPermissions();
+  // Vision Camera hooks
+  const { hasPermission, requestPermission } = useCameraPermission();
+  const device = useCameraDevice('back');
+  
   const [showLabels, setShowLabels] = useState(showLabelsProp);
   const [internalSelected, setInternalSelected] = useState(null);
-  const [showConnections, setShowConnections] = useState(true);
 
   /* ── Device-motion parallax ── */
   const offsetX = useRef(new Animated.Value(0)).current;
@@ -59,14 +62,18 @@ export default function CameraARView({
   const smoothY = useRef(0);
 
   useEffect(() => {
-    Accelerometer.setUpdateInterval(SENSOR_INTERVAL);
-    const sub = Accelerometer.addListener(({ x, y }) => {
+    // Set update interval for react-native-sensors
+    setUpdateIntervalForType(SensorTypes.accelerometer, SENSOR_INTERVAL);
+    
+    // Subscribe to sensor stream
+    const subscription = accelerometer.subscribe(({ x, y }) => {
       smoothX.current += (x - smoothX.current) * SMOOTHING;
       smoothY.current += (y - smoothY.current) * SMOOTHING;
       offsetX.setValue(smoothX.current * PARALLAX_FACTOR);
       offsetY.setValue(-smoothY.current * PARALLAX_FACTOR);
     });
-    return () => sub.remove();
+    
+    return () => subscription.unsubscribe();
   }, []);
 
   /* ── Scan beam — sweeps top-to-bottom like a lidar pass ── */
@@ -170,8 +177,8 @@ export default function CameraARView({
   };
 
   useEffect(() => {
-    if (!permission?.granted) requestPermission();
-  }, [permission]);
+    if (!hasPermission) requestPermission();
+  }, [hasPermission]);
 
   const isFullscreen = fullscreenProp;
   const displayWidth = isFullscreen ? SCREEN_WIDTH : SCREEN_WIDTH - 32;
@@ -181,31 +188,17 @@ export default function CameraARView({
     ? SCREEN_HEIGHT
     : displayWidth * (aspectRatio || 0.75);
 
-  const compMap = useMemo(() => {
-    const m = {};
-    components.forEach((c) => {
-      m[c.id] = c;
-    });
-    return m;
-  }, [components]);
-
-  /* Early return AFTER all hooks */
-  if (!permission?.granted) {
+  /* Early return AFTER all hooks - Ensure we have a valid camera device too! */
+  if (!hasPermission || device == null) {
     return (
       <View style={styles.noCameraContainer}>
         <Text style={styles.noCameraText}>Camera not available</Text>
         <Text style={styles.noCameraSubtext}>
-          Grant camera permission or use a device with a camera
+          Grant camera permission or use a device with a back camera
         </Text>
       </View>
     );
   }
-
-  const relatedConnections = selected
-    ? (connections || []).filter(
-        (c) => c.from === selected.id || c.to === selected.id,
-      )
-    : [];
 
   const scanTranslateY = scanY.interpolate({
     inputRange: [0, 1],
@@ -222,7 +215,7 @@ export default function CameraARView({
   });
 
   /* ═══════════════════════════════════════════════════════
-   *  Holographic tooltip — floats beside the locked target
+   * Holographic tooltip — floats beside the locked target
    * ═══════════════════════════════════════════════════════ */
   const floatingInfoPanel = selected
     ? (() => {
@@ -335,18 +328,10 @@ export default function CameraARView({
                     {selected.description}
                   </Text>
                 ) : null}
-                {relatedConnections.length > 0 && (
-                  <Text style={styles.floatingConn}>
-                    {'>> '}
-                    {relatedConnections
-                      .map((c) =>
-                        c.from === selected.id
-                          ? c.to_label || c.to
-                          : c.from_label || c.from,
-                      )
-                      .join(', ')}
-                  </Text>
-                )}
+                <Text style={styles.floatingConn}>
+                  {'>> '}
+                  {selected.model_label || 'visual target'} | TRACKED AREA {(selected.area ? (selected.area * 100).toFixed(1) : '0.0')}%
+                </Text>
               </ScrollView>
             </Animated.View>
           </React.Fragment>
@@ -355,7 +340,7 @@ export default function CameraARView({
     : null;
 
   /* ═══════════════════════════════════════════════════════
-   *  Static info panel — used below camera in non-FS mode
+   * Static info panel — used below camera in non-FS mode
    * ═══════════════════════════════════════════════════════ */
   const staticInfoPanel = selected ? (
     <View style={styles.infoPanelOuter}>
@@ -382,24 +367,15 @@ export default function CameraARView({
         {selected.description ? (
           <Text style={styles.infoDesc}>{selected.description}</Text>
         ) : null}
-        {relatedConnections.length > 0 && (
-          <Text style={styles.infoConnections}>
-            Connected to:{' '}
-            {relatedConnections
-              .map((c) =>
-                c.from === selected.id
-                  ? c.to_label || c.to
-                  : c.from_label || c.from,
-              )
-              .join(', ')}
-          </Text>
-        )}
+        <Text style={styles.infoConnections}>
+          Overlay ID: {selected.id} | Surface coverage: {selected.area ? (selected.area * 100).toFixed(1) : '0.0'}%
+        </Text>
       </ScrollView>
     </View>
   ) : null;
 
   /* ═══════════════════════════════════════════════════════
-   *  Composited camera content
+   * Composited camera content
    * ═══════════════════════════════════════════════════════ */
   const cameraContent = (
     <View style={[styles.wrapper, isFullscreen && styles.wrapperFullscreen]}>
@@ -410,7 +386,12 @@ export default function CameraARView({
           isFullscreen && styles.containerFullscreen,
         ]}
       >
-        <CameraView style={StyleSheet.absoluteFill} facing="back" />
+        {/* Bare React Native Vision Camera Replacement */}
+        <Camera 
+          style={StyleSheet.absoluteFill} 
+          device={device} 
+          isActive={true} 
+        />
 
         {/* Vignette overlays */}
         <View pointerEvents="none" style={styles.vignetteTop} />
@@ -492,88 +473,6 @@ export default function CameraARView({
             },
           ]}
         >
-          {/* Data-stream connection curves */}
-          {showConnections && connections.length > 0 && (
-            <Svg
-              width={displayWidth}
-              height={displayHeight}
-              style={StyleSheet.absoluteFill}
-              pointerEvents="none"
-            >
-              {connections.map((conn, i) => {
-                const from = compMap[conn.from];
-                const to = compMap[conn.to];
-                if (!from || !to) return null;
-                const isRelated =
-                  selected &&
-                  (conn.from === selected.id || conn.to === selected.id);
-                const fx = from.center_x * displayWidth;
-                const fy = from.center_y * displayHeight;
-                const tx = to.center_x * displayWidth;
-                const ty = to.center_y * displayHeight;
-                const mx = (fx + tx) / 2;
-                const my = (fy + ty) / 2 - Math.abs(tx - fx) * 0.15;
-                const pathD = `M${fx},${fy} Q${mx},${my} ${tx},${ty}`;
-
-                return (
-                  <G key={`c-${i}`}>
-                    <Path
-                      d={pathD}
-                      stroke={isRelated ? '#FFB74D' : '#4a90d9'}
-                      strokeWidth={isRelated ? 6 : 3}
-                      fill="none"
-                      opacity={isRelated ? 0.12 : 0.06}
-                    />
-                    <Path
-                      d={pathD}
-                      stroke={isRelated ? '#FFB74D' : '#4a90d9'}
-                      strokeWidth={isRelated ? 1.8 : 0.8}
-                      fill="none"
-                      strokeDasharray={isRelated ? '10,5' : '6,4'}
-                      opacity={isRelated ? 0.85 : 0.4}
-                    />
-                    <Circle
-                      cx={fx}
-                      cy={fy}
-                      r={isRelated ? 4 : 2.5}
-                      fill={isRelated ? '#FFB74D' : '#4a90d9'}
-                      opacity={isRelated ? 1 : 0.6}
-                    />
-                    <Circle
-                      cx={tx}
-                      cy={ty}
-                      r={isRelated ? 4 : 2.5}
-                      fill={isRelated ? '#FFB74D' : '#4a90d9'}
-                      opacity={isRelated ? 1 : 0.6}
-                    />
-                    {isRelated && (
-                      <>
-                        <Circle
-                          cx={fx}
-                          cy={fy}
-                          r={8}
-                          stroke="#FFB74D"
-                          strokeWidth={0.8}
-                          fill="none"
-                          opacity={0.4}
-                        />
-                        <Circle
-                          cx={tx}
-                          cy={ty}
-                          r={8}
-                          stroke="#FFB74D"
-                          strokeWidth={0.8}
-                          fill="none"
-                          opacity={0.4}
-                        />
-                      </>
-                    )}
-                  </G>
-                );
-              })}
-            </Svg>
-          )}
-
           {/* Component holographic frames */}
           {components.map((comp) => {
             const x = comp.x * displayWidth;
@@ -610,6 +509,18 @@ export default function CameraARView({
                     },
                   ]}
                 />
+                <View
+                  style={[
+                    styles.compGlow,
+                    { backgroundColor: borderColor, opacity: isSelected ? 0.12 : 0.06 },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.compTopGlass,
+                    { backgroundColor: isSelected ? 'rgba(255,183,77,0.12)' : 'rgba(215,244,255,0.08)' },
+                  ]}
+                />
                 {/* Wireframe */}
                 <View
                   style={[
@@ -620,6 +531,15 @@ export default function CameraARView({
                       borderStyle: isSelected ? 'solid' : 'dashed',
                       borderRadius: 2,
                       opacity: isSelected ? 1 : 0.5,
+                    },
+                  ]}
+                />
+                <View
+                  style={[
+                    styles.baseShadow,
+                    {
+                      backgroundColor: isSelected ? 'rgba(255,183,77,0.18)' : 'rgba(74,144,217,0.10)',
+                      width: Math.max(18, w * 0.6),
                     },
                   ]}
                 />
@@ -736,7 +656,7 @@ export default function CameraARView({
           </Text>
           <Text style={styles.hudSmallText}>DEPTH SCAN ACTIVE</Text>
           <Text style={styles.hudSmallText}>
-            CONN {connections.length} | NODES {components.length}
+            TAGS {components.length} | HUD LOCK READY
           </Text>
           {selected && (
             <Text style={[styles.hudSmallText, { color: '#FFB74D' }]}>
@@ -762,17 +682,6 @@ export default function CameraARView({
           >
             <Ionicons name={showLabels ? 'text' : 'text-outline'} size={18} color={showLabels ? '#00e6ff' : '#ccc'} />
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.ctrlBtn,
-              showConnections && styles.ctrlBtnActive,
-            ]}
-            onPress={() => setShowConnections((v) => !v)}
-          >
-            <Ionicons name={showConnections ? 'git-network' : 'git-network-outline'} size={18} color={showConnections ? '#00e6ff' : '#ccc'} />
-          </TouchableOpacity>
-
           {onToggleFullscreen && (
             <TouchableOpacity
               style={styles.ctrlBtn}
@@ -817,9 +726,7 @@ export default function CameraARView({
   return cameraContent;
 }
 
-/* ═══════════════════════════════════════════════════════════
- *  Styles
- * ═══════════════════════════════════════════════════════════ */
+// ... styles remain completely unchanged
 const styles = StyleSheet.create({
   wrapper: {},
   wrapperFullscreen: { flex: 1 },
@@ -897,6 +804,25 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     zIndex: 2,
+  },
+  compGlow: {
+    ...StyleSheet.absoluteFillObject,
+    borderRadius: 4,
+  },
+  compTopGlass: {
+    position: 'absolute',
+    top: 3,
+    left: 3,
+    right: 3,
+    height: '22%',
+    borderRadius: 3,
+  },
+  baseShadow: {
+    position: 'absolute',
+    bottom: -8,
+    height: 10,
+    borderRadius: 999,
+    opacity: 1,
   },
   cornerTL: {
     position: 'absolute',
