@@ -42,6 +42,22 @@ const api = axios.create({
   },
 });
 
+// Normalise error messages so callers always get a human-readable string,
+// not the raw Axios "Request failed with status 503" message.
+api.interceptors.response.use(
+  (res) => res,
+  (err) => {
+    const serverMsg =
+      err?.response?.data?.error ||
+      err?.response?.data?.message ||
+      err?.response?.data?.detail;
+    if (serverMsg) {
+      err.message = serverMsg;
+    }
+    return Promise.reject(err);
+  }
+);
+
 export const backend = {
   uploadFile: async (file) => {
     const formData = new FormData();
