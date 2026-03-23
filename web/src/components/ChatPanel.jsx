@@ -3,9 +3,10 @@ import { useDocumentContext } from '@ar-viewer/shared';
 import { renderMarkdown } from './markdownUtils';
 
 export default function ChatPanel() {
-  const { chatHistory, askQuestion, loading, pendingQuestion, consumePendingQuestion } = useDocumentContext();
+  const { chatHistory, askQuestion, pendingQuestion, consumePendingQuestion } = useDocumentContext();
   const [input, setInput] = useState('');
   const [isAsking, setIsAsking] = useState(false);
+  const [chatError, setChatError] = useState(null);
   const messagesEndRef = useRef(null);
 
   useEffect(() => {
@@ -24,11 +25,12 @@ export default function ChatPanel() {
   }, [pendingQuestion]);
 
   const submitQuestion = async (query) => {
+    setChatError(null);
     setIsAsking(true);
     try {
       await askQuestion(query);
     } catch (err) {
-      console.error('Chat error:', err);
+      setChatError(err.message || 'Failed to get answer. Please try again.');
     } finally {
       setIsAsking(false);
     }
@@ -123,6 +125,13 @@ export default function ChatPanel() {
           )}
         </div>
 
+        {chatError && (
+          <div className="chat-error-banner" role="alert">
+            <span>{chatError}</span>
+            <button className="chat-error-dismiss" onClick={() => setChatError(null)} aria-label="Dismiss error">✕</button>
+          </div>
+        )}
+
         <form className="chat-input-container" onSubmit={handleSubmit}>
           <input
             type="text"
@@ -135,6 +144,7 @@ export default function ChatPanel() {
           <button
             type="submit"
             className="send-button"
+            aria-label="Send"
             disabled={!input.trim() || isAsking}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">

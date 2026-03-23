@@ -251,8 +251,8 @@ export default function DiagramPanel() {
                               y={y}
                               width={width}
                               height={height}
-                              fill={isSelected ? 'rgba(99,178,238,0.12)' : isHovered ? 'rgba(74,144,217,0.06)' : 'none'}
-                              stroke={isSelected ? '#63b2ee' : isHovered ? '#5ba0e8' : '#4a90d9'}
+                              fill={isSelected ? 'rgba(41,151,255,0.14)' : isHovered ? 'rgba(41,151,255,0.07)' : 'none'}
+                              stroke={isSelected ? '#2997ff' : isHovered ? '#409cff' : 'rgba(41,151,255,0.75)'}
                               strokeWidth={isSelected ? 3 : isHovered ? 2.5 : 1.5}
                               rx="3"
                               className="component-box"
@@ -265,7 +265,7 @@ export default function DiagramPanel() {
                                   width={labelWidth}
                                   height={labelHeight}
                                   rx="3"
-                                  fill={isSelected ? '#63b2ee' : '#4a90d9'}
+                                  fill={isSelected ? '#2997ff' : 'rgba(41,151,255,0.85)'}
                                   opacity="0.92"
                                   className="component-label-bg"
                                 />

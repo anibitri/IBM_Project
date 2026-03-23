@@ -156,7 +156,7 @@ function DocumentInfoPanel() {
               <div key={comp.id} className="doc-info-comp-row">
                 <span className="doc-info-comp-idx">{idx + 1}</span>
                 <span className="doc-info-comp-name">{comp.label || comp.id}</span>
-                <span className="doc-info-comp-conf">{(comp.confidence * 100).toFixed(0)}%</span>
+                <span className="doc-info-comp-conf">{((comp.confidence ?? 0) * 100).toFixed(0)}%</span>
               </div>
             ))}
           </div>
