@@ -61,14 +61,17 @@ CONNECTION_PROMPT_TEMPLATE = (
 # ── Vision model prompt for whole-diagram analysis / AR extraction ──
 
 AR_EXTRACTION_PROMPT = (
-    "Analyse this technical architecture diagram. "
-    "List every distinct component, service, or module shown.\n\n"
+    "Analyse this technical diagram. "
+    "First, on a single line, state the diagram type using EXACTLY one of these labels:\n"
+    "DIAGRAM_TYPE: sequence | uml | flowchart | architecture | other\n\n"
+    "Then list every distinct component, service, or module shown.\n\n"
     "For each component provide:\n"
     "1. Its name (read the label text)\n"
     "2. Its role (one short phrase, e.g. 'handles authentication')\n\n"
     "Format — one component per line:\n"
     "NAME — ROLE\n\n"
-    "Example:\n"
+    "Example output:\n"
+    "DIAGRAM_TYPE: architecture\n"
     "API Gateway — routes incoming requests\n"
     "Redis Cache — caches session data\n"
     "PostgreSQL — primary data store\n\n"

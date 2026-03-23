@@ -390,19 +390,21 @@ class PreprocessService:
                 # Extract vision data
                 vision_summary = ""
                 vision_components = []
+                diagram_type = 'other'
                 if isinstance(vision_result, dict):
                     vision_summary = vision_result.get('analysis', {}).get('summary', '')
                     vision_components = vision_result.get('components', [])
-                
+                    diagram_type = vision_result.get('diagram_type', 'other')
+
                 # AR extraction
                 ar_components = []
                 relationships = {}
-                
+
                 if extract_ar:
                     try:
                         ar_result = ar_service.extract_document_features(
                             img_path,
-                            hints=vision_components
+                            hints=[diagram_type] + vision_components
                         )
                         ar_components = ar_result.get('components', [])
                         relationships = ar_result.get('relationships', {})
@@ -562,18 +564,19 @@ class PreprocessService:
             
             vision_summary = vision_result.get('analysis', {}).get('summary', '')
             vision_components = vision_result.get('components', [])
-            
+            diagram_type = vision_result.get('diagram_type', 'other')
+
             # Step 2: AR Extraction
             ar_result = {}
             ar_components = []
             relationships = {}
-            
+
             if extract_ar:
                 logger.info("🎯 Extracting AR components...")
                 try:
                     ar_result = ar_service.extract_document_features(
                         file_path,
-                        hints=vision_components
+                        hints=[diagram_type] + vision_components
                     )
                     ar_components = ar_result.get('components', [])
                     relationships = ar_result.get('relationships', {})

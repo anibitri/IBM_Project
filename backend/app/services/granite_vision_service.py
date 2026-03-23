@@ -78,6 +78,33 @@ def _extract_components_from_text(text: str) -> list:
     return unique_components[:20]  # Limit to top 20
 
 
+_DIAGRAM_TYPE_ALIASES = {
+    "sequence":     "sequence",
+    "uml":          "uml",
+    "class":        "uml",
+    "flowchart":    "flowchart",
+    "flow":         "flowchart",
+    "architecture": "architecture",
+    "other":        "other",
+}
+
+
+def _extract_diagram_type(text: str) -> str:
+    """
+    Parse the DIAGRAM_TYPE line produced by AR_EXTRACTION_PROMPT.
+    Returns one of: 'sequence', 'uml', 'flowchart', 'architecture', 'other'.
+    Falls back to 'other' if the line is absent or unrecognised.
+    """
+    for line in text.splitlines():
+        line = line.strip()
+        if line.upper().startswith("DIAGRAM_TYPE:"):
+            value = line.split(":", 1)[1].strip().lower()
+            for key, canonical in _DIAGRAM_TYPE_ALIASES.items():
+                if key in value:
+                    return canonical
+    return "other"
+
+
 def analyze_images(input_data, task="general_analysis", **kwargs):
     """
     Analyze images using Granite Vision model.
@@ -221,16 +248,20 @@ def analyze_images(input_data, task="general_analysis", **kwargs):
         if not summary or summary.strip() == "":
             summary = "No visible components detected."
 
+        # Extract diagram type classification if present
+        diagram_type = _extract_diagram_type(summary)
+
         # Extract components
         components = _extract_components_from_text(summary)
 
-        print(f"✅ Vision analysis complete: {len(components)} components identified")
+        print(f"✅ Vision analysis complete: diagram_type={diagram_type}, {len(components)} components identified")
         print(f"   Summary: {summary[:100]}...")
 
         return {
             "status": "success",
             "analysis": {"summary": summary},
             "components": components,
+            "diagram_type": diagram_type,
             "answer": summary
         }
 

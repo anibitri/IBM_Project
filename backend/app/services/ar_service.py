@@ -128,13 +128,36 @@ class ARService:
                 self._hint_diagram_type = 'uml'
             elif any(k in ' '.join(_lower) for k in ('flowchart', 'flow chart', 'flow diagram')):
                 self._hint_diagram_type = 'flowchart'
+            elif any(k in ' '.join(_lower) for k in ('architecture', 'system diagram', 'infrastructure')):
+                self._hint_diagram_type = 'architecture'
         self._calculate_adaptive_thresholds(img)
         
+        # Sequence diagrams use a dedicated structural pipeline
+        is_sequence = (self.diagram_type == 'sequence')
+        if is_sequence:
+            print("🎞️ Sequence diagram detected — using structural pipeline")
+            seq_components = self._detect_sequence_components(img_array, img)
+            if seq_components:
+                print(f"✅ AR extraction complete (sequence): {len(seq_components)} components")
+                return {
+                    'components': seq_components,
+                    'componentCount': len(seq_components),
+                    'connections': [],
+                    'relationships': {},
+                    'metadata': {
+                        'image_size': {'width': img.width, 'height': img.height},
+                        'diagram_type': 'sequence',
+                        'total_connections': 0,
+                        'connected_components': 0
+                    }
+                }
+            print("⚠️  Sequence pipeline found nothing, falling back to SAM pipeline")
+
         # Step 2: Run SAM detection
         print("🔍 Running SAM segmentation...")
         masks = self._run_sam(img_array)
         print(f"   SAM detected {len(masks)} initial masks")
-        
+
         # Step 2b: Classical contour detection — always run, not just for hinted types.
         # Contour detection reliably finds closed rectangular/circular shapes (components),
         # which SAM often over-segments into sub-regions or misses entirely.
@@ -143,11 +166,11 @@ class ARService:
         print(f"   Contour detection found {len(contour_masks)} candidates")
         masks = self._merge_detection_results(masks, contour_masks)
         print(f"   Merged to {len(masks)} total masks")
-        
+
         # Step 3: Filter and score masks
         filtered_masks = self._filter_masks_adaptive(masks, img)
         print(f"   Filtered to {len(filtered_masks)} valid components")
-        
+
         # Step 4: Convert to bounding boxes with features
         components = self._masks_to_components(filtered_masks, img)
         print(f"   Extracted {len(components)} components")
@@ -331,6 +354,13 @@ class ARService:
             self.max_component_area = int(img_area * 0.18)
             self.max_aspect_ratio = 5.0
             self.min_aspect_ratio = 0.15
+        elif _hint == 'architecture':
+            # Architecture: service boxes + large group containers
+            self.diagram_type = 'architecture'
+            self.min_component_area = max(300, int(img_area * 0.002))
+            self.max_component_area = int(img_area * 0.70)   # containers can be very large
+            self.max_aspect_ratio = 10.0
+            self.min_aspect_ratio = 0.10
         elif (lifeline_count >= 3 and h_lines > v_lines * 2.5 and
               lifeline_count > compartmented and rect_count >= 3):
             # Sequence diagram: parallel vertical lifelines, many horizontal messages
@@ -578,8 +608,13 @@ class ARService:
         norm_area = (w * h) / img_area
         _hint = getattr(self, '_hint_diagram_type', None)
         _diag = _hint or getattr(self, 'diagram_type', 'medium')
-        _min_norm = 0.001 if _diag in ('uml', 'flowchart', 'sequence') else 0.004
-        _max_norm = 0.25  if _diag in ('uml', 'flowchart', 'sequence') else 0.20
+        _min_norm = 0.001 if _diag in ('uml', 'flowchart', 'sequence', 'architecture') else 0.004
+        if _diag == 'architecture':
+            _max_norm = 0.70   # allow large group containers
+        elif _diag in ('uml', 'flowchart', 'sequence'):
+            _max_norm = 0.25
+        else:
+            _max_norm = 0.20
         if norm_area < _min_norm:
             return 0.0
         if norm_area > _max_norm:
@@ -758,6 +793,13 @@ class ARService:
                 elif rect_fill > 0.70:
                     rectangularity_bonus = 0.05
 
+        # Type-specific hard reject + score adjustment
+        type_adj, type_reject = self._type_specific_filter(
+            x, y, w, h, segmentation, img_array, norm_area, img_w, img_h
+        )
+        if type_reject:
+            return 0.0
+
         # Weighted composite score (capped at 1.0)
         total_score = (
             0.22 * size_score +
@@ -766,8 +808,8 @@ class ARService:
             0.15 * texture_score +
             0.10 * compactness_score +
             0.10 * min(1.0, mask.get('predicted_iou', 0.8))
-        ) - border_penalty + rectangularity_bonus
-        
+        ) - border_penalty + rectangularity_bonus + type_adj
+
         total_score = max(0.0, min(1.0, total_score))
         
         if self.debug and total_score > 0.3:
@@ -775,6 +817,113 @@ class ARService:
         
         return total_score
     
+    def _type_specific_filter(
+        self,
+        x: int, y: int, w: int, h: int,
+        segmentation: np.ndarray,
+        img_array: np.ndarray,
+        norm_area: float,
+        img_w: int, img_h: int,
+    ) -> Tuple[float, bool]:
+        """
+        Per-diagram-type score adjustment and hard rejects.
+
+        Each diagram type has characteristic shapes and characteristic false-positive
+        patterns.  This method encodes that knowledge:
+
+          sequence    — handled by a separate pipeline; returns neutral here
+          uml         — class boxes (compartmented rectangles); reject tiny text labels
+          flowchart   — rectangles, diamonds, ovals; reject arrow lines & tiny dots
+          architecture— service boxes + large group containers; reject thin lines
+
+        Returns:
+            (score_adjustment, hard_reject)
+            score_adjustment : float added to the weighted score (can be negative)
+            hard_reject      : if True, discard the mask immediately
+        """
+        diag   = getattr(self, '_hint_diagram_type', None) or getattr(self, 'diagram_type', 'other')
+        aspect = w / (h + 1e-6)
+
+        # ── UML class diagrams ─────────────────────────────────────────────
+        if diag == 'uml':
+            # Attribute rows, multiplicity labels, and note icons are tiny.
+            if norm_area < 0.003:
+                return 0.0, True
+            # Full-width page banners are not class boxes.
+            if aspect > 6.0:
+                return 0.0, True
+            # Boost compartmented rectangles (name / attributes / methods sections).
+            roi = img_array[max(0, y):min(img_h, y + h), max(0, x):min(img_w, x + w)]
+            if roi.size > 0 and self._has_compartments(roi):
+                return 0.15, False
+            return 0.0, False
+
+        # ── Flowchart diagrams ─────────────────────────────────────────────
+        elif diag == 'flowchart':
+            # Small connector dots and isolated arrowhead labels are too tiny.
+            if norm_area < 0.002:
+                return 0.0, True
+            # Arrow lines masquerading as thin boxes.
+            if aspect > 7.0 or aspect < 0.14:
+                return 0.0, True
+            # Identify diamonds and ovals for a score boost.
+            cnts, _ = cv2.findContours(
+                segmentation.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+            )
+            if cnts:
+                cnt      = max(cnts, key=cv2.contourArea)
+                cnt_area = cv2.contourArea(cnt)
+                peri     = cv2.arcLength(cnt, True)
+                approx   = cv2.approxPolyDP(cnt, 0.03 * peri, True)
+                fill     = cnt_area / (w * h + 1e-6)
+                # Diamond: 4 vertices, fill ≈ 0.5 (rotated square)
+                if len(approx) == 4 and 0.38 < fill < 0.68:
+                    return 0.15, False
+                # Oval / terminator: circularity > 0.65
+                if peri > 0 and (4 * np.pi * cnt_area) / (peri ** 2) > 0.65:
+                    return 0.10, False
+            return 0.0, False
+
+        # ── Architecture diagrams ──────────────────────────────────────────
+        elif diag == 'architecture':
+            # Thin connector lines that form a narrow rectangle.
+            if (aspect > 10.0 or aspect < 0.10) and norm_area < 0.04:
+                return 0.0, True
+            # Visible border frame = strong signal for a real component box.
+            roi = img_array[max(0, y):min(img_h, y + h), max(0, x):min(img_w, x + w)]
+            if roi.size > 0:
+                has_frame = self._has_rect_frame(roi.astype(np.float32))
+                return (0.10 if has_frame else -0.10), False
+            return 0.0, False
+
+        # ── All other types — no adjustment ───────────────────────────────
+        return 0.0, False
+
+    def _has_compartments(self, roi: np.ndarray) -> bool:
+        """
+        Detect horizontal divider lines inside a region — the hallmark of a
+        UML class box (class name / attributes / methods sections).
+
+        Returns True if at least one near-horizontal line spans ≥ 35 % of
+        the region width.
+        """
+        if roi.shape[0] < 20 or roi.shape[1] < 20:
+            return False
+        edges = cv2.Canny(roi, 30, 100)
+        lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180,
+            threshold=12,
+            minLineLength=int(roi.shape[1] * 0.35),
+            maxLineGap=5,
+        )
+        if lines is None:
+            return False
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            if abs(y2 - y1) < 5:   # near-horizontal
+                return True
+        return False
+
     def _non_maximum_suppression(self, masks: List[Dict], iou_threshold: float = 0.25) -> List[Dict]:
         """Remove overlapping and contained masks using mask IoU and containment."""
         if len(masks) == 0:
@@ -1695,6 +1844,326 @@ class ARService:
         else:
             return {'pattern': 'distributed', 'density': 'medium'}
     
+    # ─────────────────────────────────────────────────────────────────────────
+    # SEQUENCE DIAGRAM STRUCTURAL PIPELINE
+    # ─────────────────────────────────────────────────────────────────────────
+
+    def _detect_sequence_components(
+        self, img_array: np.ndarray, img: Image.Image
+    ) -> List[Dict]:
+        """
+        Dedicated pipeline for sequence diagrams.
+
+        Detection order:
+          1. Find lifeline x-positions (vertical dashed/solid lines).
+          2. Find actor boxes at the top (and optionally bottom) of each lifeline.
+          3. Find activation bars on lifelines (short vertical/horizontal boxes).
+          4. Find fragment / combined-fragment boxes (wide spanning rectangles).
+
+        Returns a list of component dicts in the same format as _masks_to_components.
+        """
+        img_w = img.width
+        img_h = img.height
+        gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
+
+        lifeline_xs = self._find_lifeline_positions(gray, img_w, img_h)
+        print(f"   Sequence: {len(lifeline_xs)} lifeline(s) at x={[round(x/img_w,2) for x in lifeline_xs]}")
+
+        boxes: List[Tuple[int,int,int,int,str]] = []  # (x, y, w, h, source)
+
+        # Actor / participant boxes
+        actor_boxes = self._find_seq_actor_boxes(gray, lifeline_xs, img_w, img_h)
+        boxes.extend([(x, y, w, h, 'actor') for x, y, w, h in actor_boxes])
+        print(f"   Sequence: {len(actor_boxes)} actor box(es)")
+
+        # Activation bars
+        activation_boxes = self._find_seq_activation_bars(gray, lifeline_xs, img_w, img_h)
+        boxes.extend([(x, y, w, h, 'activation') for x, y, w, h in activation_boxes])
+        print(f"   Sequence: {len(activation_boxes)} activation bar(s)")
+
+        # Fragment / phase boxes
+        fragment_boxes = self._find_seq_fragment_boxes(gray, img_w, img_h)
+        boxes.extend([(x, y, w, h, 'fragment') for x, y, w, h in fragment_boxes])
+        print(f"   Sequence: {len(fragment_boxes)} fragment box(es)")
+
+        # Deduplicate and convert to components
+        boxes = self._dedup_boxes_list(boxes, iou_threshold=0.40)
+
+        components = []
+        for idx, (bx, by, bw, bh, source) in enumerate(boxes):
+            x_norm = bx / img_w
+            y_norm = by / img_h
+            w_norm = bw / img_w
+            h_norm = bh / img_h
+            cx = x_norm + w_norm / 2
+            cy = y_norm + h_norm / 2
+            label = {'actor': 'Actor', 'activation': 'Activation', 'fragment': 'Fragment'}.get(source, 'Component')
+            components.append({
+                'id': f'seq_{source}_{idx}',
+                'label': label,
+                'confidence': 0.85,
+                'x': x_norm,
+                'y': y_norm,
+                'width': w_norm,
+                'height': h_norm,
+                'center_x': cx,
+                'center_y': cy,
+                'area': w_norm * h_norm,
+                'shape_features': {'source': source},
+                'terminals': [],
+                'description': f'{label} at ({cx:.2f}, {cy:.2f})',
+            })
+        return components
+
+    def _find_lifeline_positions(
+        self, gray: np.ndarray, img_w: int, img_h: int
+    ) -> List[int]:
+        """
+        Detect vertical lifeline positions (pixel x-coordinates).
+
+        A lifeline is a column of near-vertical segments that together span
+        at least 30 % of the image height.
+        """
+        edges = cv2.Canny(gray, 30, 100)
+        lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180,
+            threshold=25,
+            minLineLength=max(20, int(img_h * 0.07)),
+            maxLineGap=15,
+        )
+        if lines is None:
+            return []
+
+        # Collect vertical segments
+        v_segs: List[Tuple[int,int,int]] = []  # (x_mid, y_top, y_bot)
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            ang = abs(np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi)
+            if 75 < ang < 105:
+                xm = (x1 + x2) // 2
+                v_segs.append((xm, min(y1, y2), max(y1, y2)))
+
+        if not v_segs:
+            return []
+
+        # Cluster by x
+        v_segs.sort(key=lambda s: s[0])
+        clusters: List[List[Tuple[int,int,int]]] = [[v_segs[0]]]
+        for seg in v_segs[1:]:
+            if seg[0] - clusters[-1][-1][0] < 18:
+                clusters[-1].append(seg)
+            else:
+                clusters.append([seg])
+
+        lifeline_xs = []
+        for cluster in clusters:
+            span_lo = min(s[1] for s in cluster)
+            span_hi = max(s[2] for s in cluster)
+            if (span_hi - span_lo) >= img_h * 0.30:
+                xs = [s[0] for s in cluster]
+                lifeline_xs.append(int(np.median(xs)))
+
+        return sorted(lifeline_xs)
+
+    def _find_seq_actor_boxes(
+        self,
+        gray: np.ndarray,
+        lifeline_xs: List[int],
+        img_w: int,
+        img_h: int,
+    ) -> List[Tuple[int,int,int,int]]:
+        """
+        Find actor / participant boxes aligned to detected lifelines.
+
+        Strategy: for each lifeline x, look at the top 20 % of the image for
+        a rectangle whose horizontal centre is within ±60 px of the lifeline.
+        Also scans bottom 15 % for return/destruction boxes.
+        """
+        boxes = []
+        scan_y_top = int(img_h * 0.20)
+        scan_y_bot_start = int(img_h * 0.85)
+
+        for thresh_img in self._threshold_variants(gray):
+            contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                x, y, w, h = cv2.boundingRect(cnt)
+                area = w * h
+                if area < 400:
+                    continue
+                norm_area = area / (img_w * img_h)
+                if norm_area < 0.001 or norm_area > 0.10:
+                    continue
+                aspect = max(w, h) / (min(w, h) + 1e-6)
+                if aspect > 8.0:
+                    continue
+                # Must be in top zone OR bottom zone
+                in_top = y + h <= scan_y_top + 10
+                in_bot = y >= scan_y_bot_start - 10
+                if not (in_top or in_bot):
+                    continue
+                # Must be aligned with a lifeline
+                cx = x + w // 2
+                if lifeline_xs:
+                    nearest_dist = min(abs(cx - lx) for lx in lifeline_xs)
+                    if nearest_dist > max(60, w * 0.8):
+                        continue
+                # Rectangle fill check
+                cnt_area = cv2.contourArea(cnt)
+                fill = cnt_area / area if area > 0 else 0
+                if fill < 0.35:
+                    continue
+                boxes.append((x, y, w, h))
+
+        return self._dedup_boxes_list([(x, y, w, h, 'a') for x, y, w, h in boxes])
+
+    def _find_seq_activation_bars(
+        self,
+        gray: np.ndarray,
+        lifeline_xs: List[int],
+        img_w: int,
+        img_h: int,
+    ) -> List[Tuple[int,int,int,int]]:
+        """
+        Find activation bars — rectangles that sit on a lifeline.
+
+        Activation bars can be:
+          - Tall/narrow vertical rectangles (classic style)
+          - Short/wide horizontal boxes indicating message handling
+          - Any rectangle whose horizontal centre is near a lifeline
+        No aspect ratio constraint is applied so both orientations are captured.
+        """
+        boxes = []
+        img_area = img_w * img_h
+
+        for thresh_img in self._threshold_variants(gray):
+            contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                x, y, w, h = cv2.boundingRect(cnt)
+                area = w * h
+                norm_area = area / img_area
+                # Activation bars are smaller than actor boxes
+                if norm_area < 0.0005 or norm_area > 0.04:
+                    continue
+                if w < 4 or h < 4:
+                    continue
+                # Must be near a lifeline
+                cx = x + w // 2
+                if lifeline_xs:
+                    nearest_dist = min(abs(cx - lx) for lx in lifeline_xs)
+                    if nearest_dist > max(40, w):
+                        continue
+                else:
+                    continue
+                # Solid fill — activation bars are filled rectangles
+                cnt_area = cv2.contourArea(cnt)
+                fill = cnt_area / area if area > 0 else 0
+                if fill < 0.30:
+                    continue
+                boxes.append((x, y, w, h))
+
+        return self._dedup_boxes_list([(x, y, w, h, 'a') for x, y, w, h in boxes])
+
+    def _find_seq_fragment_boxes(
+        self,
+        gray: np.ndarray,
+        img_w: int,
+        img_h: int,
+    ) -> List[Tuple[int,int,int,int]]:
+        """
+        Find combined-fragment / phase boxes — large rectangles that span
+        multiple lifelines (alt, loop, opt, ref, etc.).
+
+        These are typically wider than a single actor box (> 6 % of width)
+        and have a dashed or solid border with relatively low fill inside.
+        """
+        boxes = []
+        img_area = img_w * img_h
+
+        for thresh_img in self._threshold_variants(gray):
+            contours, _ = cv2.findContours(thresh_img, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for cnt in contours:
+                x, y, w, h = cv2.boundingRect(cnt)
+                area = w * h
+                norm_area = area / img_area
+                # Fragment boxes span a decent chunk of the diagram
+                if norm_area < 0.015 or norm_area > 0.70:
+                    continue
+                if w < img_w * 0.06:
+                    continue
+                # Avoid full-image captures (background)
+                if w > img_w * 0.95 and h > img_h * 0.95:
+                    continue
+                # Low interior fill — fragment boxes are mostly empty inside
+                cnt_area = cv2.contourArea(cnt)
+                fill = cnt_area / area if area > 0 else 0
+                if fill > 0.80:
+                    continue
+                if fill < 0.05:
+                    continue
+                # Must have a visible border (not just an interior blob)
+                peri = cv2.arcLength(cnt, True)
+                approx = cv2.approxPolyDP(cnt, 0.02 * peri, True)
+                if len(approx) < 4:
+                    continue
+                boxes.append((x, y, w, h))
+
+        return self._dedup_boxes_list([(x, y, w, h, 'f') for x, y, w, h in boxes])
+
+    def _threshold_variants(self, gray: np.ndarray) -> List[np.ndarray]:
+        """
+        Return several binarized versions of the grayscale image.
+
+        Running detection on multiple thresholds helps catch components
+        regardless of their exact contrast level.
+        """
+        variants = []
+        # Otsu — adapts to image histogram
+        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
+        variants.append(otsu)
+        # Fixed thresholds for light / dark diagrams
+        _, t180 = cv2.threshold(gray, 180, 255, cv2.THRESH_BINARY_INV)
+        _, t100 = cv2.threshold(gray, 100, 255, cv2.THRESH_BINARY)
+        variants.append(t180)
+        variants.append(t100)
+        # Adaptive — good for locally varying contrast
+        adap = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV, 15, 3
+        )
+        variants.append(adap)
+        return variants
+
+    def _dedup_boxes_list(
+        self,
+        boxes: List[Tuple],
+        iou_threshold: float = 0.40,
+    ) -> List[Tuple]:
+        """
+        Remove near-duplicate bounding boxes using IoU suppression.
+
+        Input tuples can be (x, y, w, h) or (x, y, w, h, source, ...).
+        Returns tuples in the same format.
+        """
+        if not boxes:
+            return []
+
+        def _iou(a, b):
+            ax, ay, aw, ah = a[:4]
+            bx, by, bw, bh = b[:4]
+            ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+            iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+            inter = ix * iy
+            union = aw * ah + bw * bh - inter
+            return inter / union if union > 0 else 0.0
+
+        # Sort largest first so bigger boxes win ties
+        boxes = sorted(boxes, key=lambda b: b[2] * b[3], reverse=True)
+        kept = []
+        for box in boxes:
+            if all(_iou(box, k) < iou_threshold for k in kept):
+                kept.append(box)
+        return kept
+
     def analyze_component_relationships(self, components: List[Dict]) -> Dict:
         """Legacy method for backward compatibility"""
         # Simple spatial relationship analysis
