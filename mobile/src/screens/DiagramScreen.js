@@ -9,49 +9,29 @@ import {
   Dimensions,
   PanResponder,
   Platform,
+  ActivityIndicator,
+  SafeAreaView,
 } from 'react-native';
-// Replaced @expo/vector-icons
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import Svg, { Rect, Line, G, Text as SvgText } from 'react-native-svg';
 import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
 import AROverlay from '../components/AROverlay';
 import CameraARView from '../components/CameraARView';
-import { colors, spacing, typography } from '../styles/theme';
+import { spacing, getPalette } from '../styles/theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
-// Component colours matching the conftest.py test diagram
 const COMP_COLORS = {
   CPU: '#4682B4', RAM: '#3CA050', Cache: '#B4643C', CLK: '#A03CB4',
   Storage: '#C8A028', GPU: '#B43232', 'I/O': '#50A0A0', Network: '#6450B4',
 };
 
 export default function DiagramScreen({ navigation, route }) {
-  const { document, clearDocument, accessibilitySettings } = useDocumentContext();
+  const { document, clearDocument, accessibilitySettings, uploadAndProcess, loading } = useDocumentContext();
   const [selectedComponent, setSelectedComponent] = useState(null);
   const darkMode = !!accessibilitySettings?.darkMode;
-  const palette = darkMode
-    ? {
-        bg: '#121417',
-        card: '#1b1f24',
-        border: '#303741',
-        text: '#f4f7fb',
-        subtext: '#9aa3ad',
-        primary: '#4ea3ff',
-      }
-    : {
-        bg: colors.background,
-        card: colors.white,
-        border: colors.border,
-        text: colors.text,
-        subtext: colors.textLight,
-        primary: colors.primary,
-      };
+  const p = getPalette(darkMode);
 
-  // Toggle component selection
-  const handleComponentToggle = (comp) => {
-    setSelectedComponent((prev) => (prev?.id === comp?.id ? null : comp));
-  };
   const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
   const [cameraMode, setCameraMode] = useState(route?.params?.cameraMode || false);
   const [cameraFullscreen, setCameraFullscreen] = useState(false);
@@ -60,9 +40,9 @@ export default function DiagramScreen({ navigation, route }) {
   // Pan & zoom state
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
-  const panRef = useRef({ x: 0, y: 0 });       // snapshot at gesture start
-  const panValueRef = useRef({ x: 0, y: 0 });  // always tracks current pan
-  const zoomRef = useRef(1);                     // always tracks current zoom
+  const panRef = useRef({ x: 0, y: 0 });
+  const panValueRef = useRef({ x: 0, y: 0 });
+  const zoomRef = useRef(1);
 
   const updatePan = (newPan) => {
     panValueRef.current = newPan;
@@ -72,17 +52,13 @@ export default function DiagramScreen({ navigation, route }) {
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => false,
-      onMoveShouldSetPanResponder: (_, gs) => {
-        return zoomRef.current > 1 && (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5);
-      },
+      onMoveShouldSetPanResponder: (_, gs) =>
+        zoomRef.current > 1 && (Math.abs(gs.dx) > 5 || Math.abs(gs.dy) > 5),
       onPanResponderGrant: () => {
         panRef.current = { ...panValueRef.current };
       },
       onPanResponderMove: (_, gs) => {
-        updatePan({
-          x: panRef.current.x + gs.dx,
-          y: panRef.current.y + gs.dy,
-        });
+        updatePan({ x: panRef.current.x + gs.dx, y: panRef.current.y + gs.dy });
       },
       onPanResponderRelease: () => {},
     })
@@ -90,27 +66,27 @@ export default function DiagramScreen({ navigation, route }) {
 
   useEffect(() => {
     zoomRef.current = zoom;
-    if (zoom <= 1) {
-      updatePan({ x: 0, y: 0 });
-    }
+    if (zoom <= 1) updatePan({ x: 0, y: 0 });
   }, [zoom]);
 
   useEffect(() => {
-    if (!document) {
-      navigation.popToTop();
-    }
+    if (!document) navigation.popToTop();
   }, [document, navigation]);
 
   useEffect(() => {
     if (!document) return;
-
     const diagramWidth = document.meta?.width || 900;
     const diagramHeight = document.meta?.height || 600;
-
     if (!document.file?.url && diagramWidth && diagramHeight) {
       setImageDimensions({ width: diagramWidth, height: diagramHeight });
     }
   }, [document]);
+
+  useEffect(() => {
+    if (route?.params?.selectedComponent) {
+      setSelectedComponent(route.params.selectedComponent);
+    }
+  }, []);
 
   if (!document) return null;
 
@@ -125,26 +101,30 @@ export default function DiagramScreen({ navigation, route }) {
     setImageDimensions({ width, height });
   };
 
-  // Set initial selected component if navigated from ComponentScreen
-  useEffect(() => {
-    if (route?.params?.selectedComponent) {
-      setSelectedComponent(route.params.selectedComponent);
-    }
-  }, []);
+  const handleComponentToggle = (comp) => {
+    setSelectedComponent((prev) => (prev?.id === comp?.id ? null : comp));
+  };
 
   const handleNewUpload = () => {
     clearDocument();
     navigation.popToTop();
   };
 
+  const handleCameraCapture = async (photo) => {
+    await uploadAndProcess(photo);
+  };
+
   const renderPlaceholder = () => {
-    const w = SCREEN_WIDTH - spacing.md * 2;
+    const w = SCREEN_WIDTH - spacing.lg * 2;
     const h = w * (diagramHeight / diagramWidth);
+    const bgFill = darkMode ? '#0d1117' : '#F0F0F5';
+    const gridStroke = darkMode ? 'rgba(255,255,255,0.06)' : '#DCE1EB';
+    const headerFill = darkMode ? '#1a1f2e' : '#323246';
 
     const boxes = components.map((c) => ({
       x: c.x, y: c.y, w: c.width, h: c.height,
       label: c.label,
-      color: c.color || COMP_COLORS[c.label] || '#4a90d9',
+      color: c.color || COMP_COLORS[c.label] || '#2997ff',
     }));
 
     const gridLinesV = [];
@@ -154,20 +134,20 @@ export default function DiagramScreen({ navigation, route }) {
 
     return (
       <Svg width={w} height={h}>
-        <Rect width={w} height={h} fill="#F0F0F5" rx={4} />
+        <Rect width={w} height={h} fill={bgFill} rx={4} />
         {gridLinesV.map((gx, i) => (
-          <Line key={`gv-${i}`} x1={gx * w} y1={0} x2={gx * w} y2={h} stroke="#DCE1EB" strokeWidth={0.5} />
+          <Line key={`gv-${i}`} x1={gx * w} y1={0} x2={gx * w} y2={h} stroke={gridStroke} strokeWidth={0.5} />
         ))}
         {gridLinesH.map((gy, i) => (
-          <Line key={`gh-${i}`} x1={0} y1={gy * h} x2={w} y2={gy * h} stroke="#DCE1EB" strokeWidth={0.5} />
+          <Line key={`gh-${i}`} x1={0} y1={gy * h} x2={w} y2={gy * h} stroke={gridStroke} strokeWidth={0.5} />
         ))}
-        <Rect x={0} y={0} width={w} height={h * 0.058} fill="#323246" />
-        <SvgText x={w / 2} y={h * 0.038} textAnchor="middle" fill="white" fontSize="11" fontWeight="bold">
+        <Rect x={0} y={0} width={w} height={h * 0.058} fill={headerFill} />
+        <SvgText x={w / 2} y={h * 0.038} textAnchor="middle" fill="rgba(255,255,255,0.85)" fontSize="11" fontWeight="bold">
           System Architecture Diagram
         </SvgText>
         {boxes.map((b, i) => (
           <G key={`b-${i}`}>
-            <Rect x={b.x * w} y={b.y * h} width={b.w * w} height={b.h * h} fill={b.color} stroke="#1E1E1E" strokeWidth={2} rx={2} />
+            <Rect x={b.x * w} y={b.y * h} width={b.w * w} height={b.h * h} fill={b.color} stroke="rgba(0,0,0,0.3)" strokeWidth={1.5} rx={3} />
             <SvgText x={(b.x + b.w / 2) * w} y={(b.y + b.h / 2) * h + 4} textAnchor="middle" fill="white" fontSize="11" fontWeight="bold">
               {b.label}
             </SvgText>
@@ -177,10 +157,23 @@ export default function DiagramScreen({ navigation, route }) {
     );
   };
 
+  const confColor = selectedComponent
+    ? selectedComponent.confidence >= 0.8
+      ? p.success
+      : selectedComponent.confidence >= 0.5
+      ? '#ffd60a'
+      : p.error
+    : p.primary;
+
   return (
-    <View style={[styles.container, { backgroundColor: palette.bg }]}> 
-      <ScrollView style={styles.scrollView}>
-        <View style={[styles.imageContainer, { backgroundColor: darkMode ? '#0f1114' : colors.white }, cameraMode && styles.imageContainerCamera]}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: p.bg }]}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ paddingBottom: 100 }}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Diagram canvas */}
+        <View style={[styles.canvasWrap, { backgroundColor: darkMode ? '#08090e' : '#f0f0f5' }, cameraMode && { backgroundColor: '#000', padding: 0 }]}>
           {cameraMode ? (
             <CameraARView
               components={components}
@@ -191,6 +184,7 @@ export default function DiagramScreen({ navigation, route }) {
               showLabels={showLabels}
               fullscreen={cameraFullscreen}
               onToggleFullscreen={() => setCameraFullscreen((v) => !v)}
+              onScan={handleCameraCapture}
             />
           ) : (
             <View
@@ -198,7 +192,12 @@ export default function DiagramScreen({ navigation, route }) {
               style={{ transform: [{ translateX: pan.x }, { translateY: pan.y }, { scale: zoom }] }}
             >
               {imageUrl ? (
-                <Image source={{ uri: imageUrl }} style={styles.image} resizeMode="contain" onLoad={handleImageLoad} />
+                <Image
+                  source={{ uri: imageUrl }}
+                  style={styles.image}
+                  resizeMode="contain"
+                  onLoad={handleImageLoad}
+                />
               ) : (
                 renderPlaceholder()
               )}
@@ -212,122 +211,399 @@ export default function DiagramScreen({ navigation, route }) {
               />
             </View>
           )}
+
+          {/* Processing overlay */}
+          {loading && cameraMode && (
+            <View style={styles.processingOverlay}>
+              <View style={[styles.processingCard, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+                <ActivityIndicator size="large" color={p.primary} />
+                <Text style={[styles.processingTitle, { color: p.text }]}>Analysing diagram…</Text>
+                <Text style={[styles.processingHint, { color: p.subtext }]}>Running vision analysis</Text>
+              </View>
+            </View>
+          )}
         </View>
 
-        {!cameraMode && (
-          <View style={styles.zoomControls}>
-            <TouchableOpacity style={[styles.zoomBtn, { backgroundColor: palette.card, borderColor: palette.border }]} onPress={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}>
-              <Text style={[styles.zoomBtnText, { color: palette.text }]}>+</Text>
-            </TouchableOpacity>
-            <Text style={[styles.zoomLabel, { color: palette.subtext }]}>{Math.round(zoom * 100)}%</Text>
-            <TouchableOpacity style={[styles.zoomBtn, { backgroundColor: palette.card, borderColor: palette.border }]} onPress={() => setZoom((z) => Math.max(1, +(z - 0.25).toFixed(2)))}>
-              <Text style={[styles.zoomBtnText, { color: palette.text }]}>−</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.zoomBtn, { backgroundColor: palette.card, borderColor: palette.border }]} onPress={() => { setZoom(1); updatePan({ x: 0, y: 0 }); }}>
-              <Text style={[styles.zoomBtnText, { fontSize: 12, color: palette.text }]}>1:1</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.zoomBtn, { backgroundColor: palette.card, borderColor: palette.border }, showLabels && { backgroundColor: palette.primary, borderColor: palette.primary }]} onPress={() => setShowLabels((v) => !v)}>
-              <Text style={[styles.zoomBtnText, { fontSize: 12 }, showLabels && { color: colors.white }]}>Aa</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+        {/* Toolbar row */}
+        <View style={styles.toolbarRow}>
+          {/* Zoom controls (diagram mode only) */}
+          {!cameraMode && (
+            <View style={[styles.zoomGroup, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+              <TouchableOpacity
+                style={styles.zoomBtn}
+                onPress={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="add" size={18} color={p.text} />
+              </TouchableOpacity>
+              <Text style={[styles.zoomLabel, { color: p.subtext }]}>{Math.round(zoom * 100)}%</Text>
+              <TouchableOpacity
+                style={styles.zoomBtn}
+                onPress={() => setZoom((z) => Math.max(1, +(z - 0.25).toFixed(2)))}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="remove" size={18} color={p.text} />
+              </TouchableOpacity>
+              <View style={[styles.zoomDivider, { backgroundColor: p.border }]} />
+              <TouchableOpacity
+                style={styles.zoomBtn}
+                onPress={() => { setZoom(1); updatePan({ x: 0, y: 0 }); }}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="contract-outline" size={16} color={p.text} />
+              </TouchableOpacity>
+              <View style={[styles.zoomDivider, { backgroundColor: p.border }]} />
+              <TouchableOpacity
+                style={[styles.zoomBtn, showLabels && { backgroundColor: p.primaryGlass }]}
+                onPress={() => setShowLabels((v) => !v)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Text style={[styles.aaLabel, { color: showLabels ? p.primary : p.muted }]}>Aa</Text>
+              </TouchableOpacity>
+            </View>
+          )}
 
-        <View style={styles.cameraRow}>
-          <TouchableOpacity style={[styles.cameraToggle, { backgroundColor: palette.card, borderColor: palette.border }, cameraMode && { backgroundColor: palette.primary, borderColor: palette.primary }]} onPress={() => { setCameraMode((v) => !v); setCameraFullscreen(false); }}>
-            <Ionicons name={cameraMode ? 'image-outline' : 'camera-outline'} size={16} color={cameraMode ? colors.white : palette.primary} style={{ marginRight: 6 }} />
-            <Text style={[styles.cameraToggleText, { color: cameraMode ? colors.white : palette.text }]}>
-              {cameraMode ? 'Diagram View' : 'Camera AR'}
+          {/* Camera / Diagram toggle */}
+          <TouchableOpacity
+            style={[
+              styles.modeToggle,
+              { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop },
+              cameraMode && { backgroundColor: p.primary, borderColor: p.primary, borderTopColor: p.primary },
+            ]}
+            onPress={() => { setCameraMode((v) => !v); setCameraFullscreen(false); }}
+            activeOpacity={0.8}
+          >
+            <Ionicons
+              name={cameraMode ? 'image-outline' : 'camera-outline'}
+              size={18}
+              color={cameraMode ? '#fff' : p.primary}
+            />
+            <Text style={[styles.modeToggleText, { color: cameraMode ? '#fff' : p.text }]}>
+              {cameraMode ? 'Diagram' : 'AR Camera'}
             </Text>
           </TouchableOpacity>
+
+          {/* Fullscreen (camera mode only) */}
           {cameraMode && (
-            <TouchableOpacity style={styles.fullscreenBtn} onPress={() => setCameraFullscreen(true)}>
-              <Text style={styles.fullscreenBtnText}>⊞ Fullscreen</Text>
+            <TouchableOpacity
+              style={[styles.fullscreenBtn, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}
+              onPress={() => setCameraFullscreen(true)}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="expand-outline" size={18} color={p.primary} />
             </TouchableOpacity>
           )}
         </View>
 
-        <View style={[styles.summaryContainer, { backgroundColor: palette.card, borderColor: palette.border }]}> 
-          <Text style={[styles.summaryTitle, { color: palette.text }]}>AI Summary</Text>
-          <Text style={[styles.summaryText, { color: palette.subtext }]}>{document.ai_summary || 'No summary available'}</Text>
-        </View>
-
-        <View style={[styles.statsContainer, { backgroundColor: palette.card, borderColor: palette.border }]}> 
-          <View style={styles.statBox}>
-            <Text style={[styles.statValue, { color: palette.primary }]}>{components.length}</Text>
-            <Text style={[styles.statLabel, { color: palette.subtext }]}>Components</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={[styles.statValue, { color: palette.primary }]}>{document.ar?.relationships?.connections?.length || 0}</Text>
-            <Text style={[styles.statLabel, { color: palette.subtext }]}>Connections</Text>
-          </View>
-          <View style={styles.statBox}>
-            <Text style={[styles.statValue, { color: palette.primary }]}>{document.meta?.width || 0} × {document.meta?.height || 0}</Text>
-            <Text style={[styles.statLabel, { color: palette.subtext }]}>Resolution</Text>
-          </View>
-        </View>
-
+        {/* Selected component detail card */}
         {selectedComponent && (
-          <View style={styles.selectedComponentContainer}>
-            <View style={styles.selectedCompHeader}>
-              <Text style={styles.selectedComponentTitle}>{selectedComponent.label}</Text>
-              <TouchableOpacity onPress={() => setSelectedComponent(null)} style={styles.selectedCloseBtn}>
-                <Text style={styles.selectedCloseBtnText}>✕</Text>
+          <View style={[styles.selectedCard, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+            <View style={styles.selectedHeader}>
+              <View style={[styles.selectedBadge, { backgroundColor: p.primaryGlass }]}>
+                <Ionicons name="hardware-chip-outline" size={16} color={p.primary} />
+              </View>
+              <Text style={[styles.selectedLabel, { color: p.text }]} numberOfLines={1}>
+                {selectedComponent.label}
+              </Text>
+              <View style={[styles.selectedConfBadge, { backgroundColor: confColor + '1A' }]}>
+                <Text style={[styles.selectedConfText, { color: confColor }]}>
+                  {(selectedComponent.confidence * 100).toFixed(1)}%
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[styles.selectedClose, { backgroundColor: p.cardSoftAbs }]}
+                onPress={() => setSelectedComponent(null)}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons name="close" size={14} color={p.muted} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.selectedCompScroll} nestedScrollEnabled>
-              {selectedComponent.description && <Text style={styles.selectedComponentDesc}>{selectedComponent.description}</Text>}
-              <Text style={styles.selectedComponentMeta}>Confidence: {(selectedComponent.confidence * 100).toFixed(1)}%</Text>
-            </ScrollView>
+            {selectedComponent.description ? (
+              <Text style={[styles.selectedDesc, { color: p.subtext }]} numberOfLines={3}>
+                {selectedComponent.description}
+              </Text>
+            ) : null}
           </View>
         )}
+
+        {/* AI Summary card */}
+        <View style={[styles.infoCard, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+          <View style={styles.infoCardHeader}>
+            <View style={[styles.infoIcon, { backgroundColor: p.primaryGlass }]}>
+              <Ionicons name="sparkles-outline" size={16} color={p.primary} />
+            </View>
+            <Text style={[styles.infoCardTitle, { color: p.text }]}>AI Summary</Text>
+          </View>
+          <Text style={[styles.infoCardBody, { color: p.subtext }]}>
+            {document.ai_summary || 'No summary available for this diagram.'}
+          </Text>
+        </View>
+
+        {/* Stats row */}
+        <View style={[styles.statsCard, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+          <View style={styles.statItem}>
+            <Text style={[styles.statValue, { color: p.primary }]}>{components.length}</Text>
+            <Text style={[styles.statLabel, { color: p.muted }]}>Components</Text>
+          </View>
+          <View style={[styles.statDivider, { backgroundColor: p.border }]} />
+          <View style={styles.statItem}>
+            <Text style={[styles.statValue, { color: p.primary }]}>
+              {document.ar?.relationships?.connections?.length || 0}
+            </Text>
+            <Text style={[styles.statLabel, { color: p.muted }]}>Connections</Text>
+          </View>
+          <View style={[styles.statDivider, { backgroundColor: p.border }]} />
+          <View style={styles.statItem}>
+            <Text style={[styles.statValue, { color: p.primary }]} numberOfLines={1} adjustsFontSizeToFit>
+              {document.meta?.width || 0}×{document.meta?.height || 0}
+            </Text>
+            <Text style={[styles.statLabel, { color: p.muted }]}>Resolution</Text>
+          </View>
+        </View>
       </ScrollView>
 
-      <View style={[styles.bottomNav, { backgroundColor: palette.card, borderTopColor: palette.border }]}> 
-        <TouchableOpacity style={styles.navButton} onPress={() => navigation.navigate('Components')}>
-          <Ionicons name="list-outline" size={22} color={palette.primary} />
-          <Text style={[styles.navButtonText, { color: palette.text }]}>Components</Text>
+      {/* Bottom action bar */}
+      <View style={[styles.bottomBar, { backgroundColor: p.cardAbs, borderTopColor: p.border }]}>
+        <TouchableOpacity
+          style={[styles.bottomBtn, { borderColor: p.border, borderTopColor: p.borderTop }]}
+          onPress={() => navigation.navigate('Components')}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="list-outline" size={20} color={p.primary} />
+          <Text style={[styles.bottomBtnText, { color: p.text }]}>Components</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={styles.navButton} onPress={handleNewUpload}>
-          <Ionicons name="add-circle-outline" size={22} color={palette.primary} />
-          <Text style={[styles.navButtonText, { color: palette.text }]}>New</Text>
+        <TouchableOpacity
+          style={[styles.bottomBtn, styles.bottomBtnPrimary, { backgroundColor: p.primary }]}
+          onPress={handleNewUpload}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="add-outline" size={20} color="#fff" />
+          <Text style={[styles.bottomBtnText, { color: '#fff' }]}>New Upload</Text>
         </TouchableOpacity>
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
-// ... styles remain unchanged (refer to previous version)
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.background },
-  scrollView: { flex: 1 },
-  imageContainer: { backgroundColor: colors.white, padding: spacing.md, position: 'relative', overflow: 'hidden' },
-  imageContainerCamera: { backgroundColor: '#000', padding: spacing.md },
-  image: { width: SCREEN_WIDTH - spacing.md * 2, height: (SCREEN_WIDTH - spacing.md * 2) * 0.75 },
-  summaryContainer: { backgroundColor: colors.white, margin: spacing.md, padding: spacing.md, borderRadius: 12, borderWidth: 1, borderColor: colors.border },
-  summaryTitle: { ...typography.h2, color: colors.text, marginBottom: spacing.sm },
-  summaryText: { ...typography.body, color: colors.textLight, lineHeight: 22 },
-  statsContainer: { flexDirection: 'row', justifyContent: 'space-around', backgroundColor: colors.white, margin: spacing.md, padding: spacing.md, borderRadius: 12, borderWidth: 1, borderColor: colors.border },
-  statBox: { alignItems: 'center' },
-  statValue: { ...typography.h2, color: colors.primary, marginBottom: spacing.xs },
-  statLabel: { ...typography.caption, color: colors.textLight },
-  selectedComponentContainer: { backgroundColor: colors.primary, margin: spacing.md, padding: spacing.md, borderRadius: 12, maxHeight: 200 },
-  selectedCompHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
-  selectedComponentTitle: { fontSize: 18, color: colors.white, fontWeight: '700', flex: 1 },
-  selectedCloseBtn: { width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.25)', justifyContent: 'center', alignItems: 'center' },
-  selectedCloseBtnText: { color: '#fff', fontSize: 14, fontWeight: '700' },
-  selectedCompScroll: { maxHeight: 130 },
-  selectedComponentDesc: { ...typography.body, color: colors.white, opacity: 0.9, marginBottom: spacing.sm },
-  selectedComponentMeta: { ...typography.caption, color: colors.white, opacity: 0.8 },
-  bottomNav: { flexDirection: 'row', backgroundColor: colors.white, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.sm, paddingBottom: Platform.OS === 'ios' ? 28 : spacing.sm, paddingHorizontal: spacing.md },
-  navButton: { flex: 1, alignItems: 'center', paddingVertical: spacing.sm },
-  navButtonText: { ...typography.caption, color: colors.text, fontWeight: '600' },
-  cameraRow: { flexDirection: 'row', alignItems: 'center', marginHorizontal: spacing.md, marginTop: spacing.sm, gap: 8 },
-  cameraToggle: { flex: 1, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', padding: spacing.md, borderRadius: 12, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border },
-  cameraToggleText: { fontSize: 15, fontWeight: '600', color: colors.text },
-  fullscreenBtn: { padding: spacing.md, borderRadius: 12, backgroundColor: '#0a1628', borderWidth: 1, borderColor: '#4a90d9' },
-  fullscreenBtnText: { color: '#4a90d9', fontSize: 14, fontWeight: '700' },
-  zoomControls: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', marginHorizontal: spacing.md, marginTop: spacing.sm, gap: 8 },
-  zoomBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: colors.white, borderWidth: 1, borderColor: colors.border, alignItems: 'center', justifyContent: 'center' },
-  zoomBtnText: { fontSize: 18, fontWeight: '700', color: colors.text },
-  zoomLabel: { fontSize: 13, fontWeight: '600', color: colors.textLight, minWidth: 40, textAlign: 'center' },
+  safe: { flex: 1 },
+
+  /* Canvas */
+  canvasWrap: {
+    margin: spacing.lg,
+    marginBottom: 0,
+    borderRadius: 20,
+    overflow: 'hidden',
+    minHeight: 220,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  image: {
+    width: SCREEN_WIDTH - spacing.lg * 2,
+    height: (SCREEN_WIDTH - spacing.lg * 2) * 0.75,
+  },
+
+  /* Processing overlay */
+  processingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 100,
+  },
+  processingCard: {
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 28,
+    alignItems: 'center',
+    gap: 10,
+    minWidth: 200,
+  },
+  processingTitle: { fontSize: 16, fontWeight: '700', marginTop: 4 },
+  processingHint: { fontSize: 13 },
+
+  /* Toolbar */
+  toolbarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    gap: 8,
+  },
+  zoomGroup: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    gap: 2,
+  },
+  zoomBtn: {
+    width: 34,
+    height: 34,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  zoomLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    minWidth: 38,
+    textAlign: 'center',
+  },
+  zoomDivider: { width: 1, height: 20, marginHorizontal: 2 },
+  aaLabel: { fontSize: 13, fontWeight: '700' },
+
+  modeToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderRadius: 14,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  modeToggleText: { fontSize: 14, fontWeight: '600' },
+
+  fullscreenBtn: {
+    width: 42,
+    height: 42,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+
+  /* Selected component card */
+  selectedCard: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    borderRadius: 16,
+    borderWidth: 1,
+    padding: spacing.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  selectedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 8,
+  },
+  selectedBadge: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  selectedLabel: { flex: 1, fontSize: 15, fontWeight: '600' },
+  selectedConfBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 100,
+    flexShrink: 0,
+  },
+  selectedConfText: { fontSize: 12, fontWeight: '700' },
+  selectedClose: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexShrink: 0,
+  },
+  selectedDesc: { fontSize: 13, lineHeight: 19 },
+
+  /* AI Summary card */
+  infoCard: {
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    padding: spacing.md,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  infoCardHeader: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 10 },
+  infoIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  infoCardTitle: { fontSize: 16, fontWeight: '700', letterSpacing: -0.2 },
+  infoCardBody: { fontSize: 14, lineHeight: 21 },
+
+  /* Stats card */
+  statsCard: {
+    flexDirection: 'row',
+    marginHorizontal: spacing.lg,
+    marginTop: spacing.sm,
+    borderRadius: 18,
+    borderWidth: 1,
+    overflow: 'hidden',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  statItem: { flex: 1, alignItems: 'center', paddingVertical: spacing.md },
+  statDivider: { width: 1, marginVertical: spacing.sm },
+  statValue: { fontSize: 18, fontWeight: '800', letterSpacing: -0.4, marginBottom: 3 },
+  statLabel: { fontSize: 11, fontWeight: '600', letterSpacing: 0.3 },
+
+  /* Bottom bar */
+  bottomBar: {
+    flexDirection: 'row',
+    gap: 10,
+    paddingHorizontal: spacing.lg,
+    paddingTop: 12,
+    paddingBottom: Platform.OS === 'ios' ? 28 : 14,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  bottomBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 13,
+    borderRadius: 16,
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    elevation: 2,
+  },
+  bottomBtnPrimary: {
+    borderWidth: 0,
+    shadowColor: '#2997ff',
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 5,
+  },
+  bottomBtnText: { fontSize: 15, fontWeight: '600' },
 });

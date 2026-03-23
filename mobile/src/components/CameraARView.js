@@ -47,13 +47,17 @@ export default function CameraARView({
   showLabels: showLabelsProp = true,
   fullscreen: fullscreenProp = false,
   onToggleFullscreen,
+  onScan,
 }) {
   // Vision Camera hooks
   const { hasPermission, requestPermission } = useCameraPermission();
   const device = useCameraDevice('back');
-  
+  const cameraRef = useRef(null);
+
   const [showLabels, setShowLabels] = useState(showLabelsProp);
   const [internalSelected, setInternalSelected] = useState(null);
+  const [scanStatus, setScanStatus] = useState('idle'); // 'idle' | 'capturing' | 'processing' | 'done' | 'error'
+  const [scanError, setScanError] = useState(null);
 
   /* ── Device-motion parallax ── */
   const offsetX = useRef(new Animated.Value(0)).current;
@@ -174,6 +178,30 @@ export default function CameraARView({
   const handleDismiss = () => {
     if (onComponentPress) onComponentPress(null);
     setInternalSelected(null);
+  };
+
+  /* ── Capture & send to backend ── */
+  const captureAndScan = async () => {
+    if (!cameraRef.current || scanStatus !== 'idle') return;
+    setScanError(null);
+    setScanStatus('capturing');
+    try {
+      const photo = await cameraRef.current.takePhoto({ qualityPrioritization: 'speed' });
+      setScanStatus('processing');
+      if (onScan) {
+        await onScan({
+          uri: `file://${photo.path}`,
+          type: 'image/jpeg',
+          name: 'scan.jpg',
+        });
+      }
+      setScanStatus('done');
+      setTimeout(() => setScanStatus('idle'), 2000);
+    } catch (err) {
+      setScanError(err.message || 'Capture failed');
+      setScanStatus('error');
+      setTimeout(() => setScanStatus('idle'), 3000);
+    }
   };
 
   useEffect(() => {
@@ -387,10 +415,12 @@ export default function CameraARView({
         ]}
       >
         {/* Bare React Native Vision Camera Replacement */}
-        <Camera 
-          style={StyleSheet.absoluteFill} 
-          device={device} 
-          isActive={true} 
+        <Camera
+          ref={cameraRef}
+          style={StyleSheet.absoluteFill}
+          device={device}
+          isActive={true}
+          photo={true}
         />
 
         {/* Vignette overlays */}
@@ -690,7 +720,6 @@ export default function CameraARView({
               <Ionicons name={isFullscreen ? 'contract-outline' : 'expand-outline'} size={18} color="#ccc" />
             </TouchableOpacity>
           )}
-
           {selected && (
             <TouchableOpacity
               style={[styles.ctrlBtn, { borderColor: '#FFB74D' }]}
@@ -699,7 +728,50 @@ export default function CameraARView({
               <Ionicons name="close" size={18} color="#FFB74D" />
             </TouchableOpacity>
           )}
+          {onScan && (
+            <TouchableOpacity
+              style={[
+                styles.ctrlBtn,
+                styles.scanBtn,
+                scanStatus !== 'idle' && styles.scanBtnActive,
+              ]}
+              onPress={captureAndScan}
+              disabled={scanStatus !== 'idle'}
+            >
+              <Ionicons
+                name={
+                  scanStatus === 'capturing' ? 'aperture-outline' :
+                  scanStatus === 'processing' ? 'sync-outline' :
+                  scanStatus === 'done' ? 'checkmark-circle-outline' :
+                  scanStatus === 'error' ? 'alert-circle-outline' :
+                  'scan-outline'
+                }
+                size={20}
+                color={
+                  scanStatus === 'done' ? '#4caf50' :
+                  scanStatus === 'error' ? '#f44336' :
+                  '#00e6ff'
+                }
+              />
+            </TouchableOpacity>
+          )}
         </View>
+
+        {/* Scan status overlay */}
+        {scanStatus !== 'idle' && (
+          <View style={styles.scanStatusBanner}>
+            <Text style={[
+              styles.scanStatusText,
+              scanStatus === 'done' && { color: '#4caf50' },
+              scanStatus === 'error' && { color: '#f44336' },
+            ]}>
+              {scanStatus === 'capturing' ? 'CAPTURING...' :
+               scanStatus === 'processing' ? 'ANALYSING DIAGRAM...' :
+               scanStatus === 'done' ? 'SCAN COMPLETE' :
+               `ERROR: ${scanError}`}
+            </Text>
+          </View>
+        )}
       </View>
 
       {/* Static info panel — NON-fullscreen only */}
@@ -1038,6 +1110,34 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
+  scanBtn: {
+    borderColor: 'rgba(0, 230, 255, 0.5)',
+    marginTop: 6,
+  },
+  scanBtnActive: {
+    backgroundColor: 'rgba(0, 230, 255, 0.15)',
+    borderColor: '#00e6ff',
+  },
+  scanStatusBanner: {
+    position: 'absolute',
+    bottom: 52,
+    left: 10,
+    right: 60,
+    backgroundColor: 'rgba(0,0,0,0.72)',
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 4,
+    borderWidth: 1,
+    borderColor: 'rgba(0, 230, 255, 0.35)',
+    zIndex: 20,
+  },
+  scanStatusText: {
+    color: '#00e6ff',
+    fontSize: 10,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    letterSpacing: 1,
   },
 
   /* Floating panel */

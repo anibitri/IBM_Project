@@ -8,341 +8,266 @@ import {
   ActivityIndicator,
   Alert,
   SafeAreaView,
+  ScrollView,
 } from 'react-native';
-// Replaced @expo/vector-icons
 import Ionicons from 'react-native-vector-icons/Ionicons';
-// Replaced expo-document-picker
 import DocumentPicker from 'react-native-document-picker';
-// Replaced expo-image-picker
 import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
-
 import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
-import { colors, spacing, typography } from '../styles/theme';
+import { spacing, getPalette } from '../styles/theme';
 
 export default function UploadScreen({ navigation }) {
   const { uploadAndProcess, loading, error, clearDocument, accessibilitySettings } = useDocumentContext();
   const [preview, setPreview] = useState(null);
   const darkMode = !!accessibilitySettings?.darkMode;
-  const palette = darkMode
-    ? {
-        bg: '#121417',
-        card: '#1b1f24',
-        border: '#303741',
-        text: '#f4f7fb',
-        subtext: '#9aa3ad',
-        primary: '#4ea3ff',
-      }
-    : {
-        bg: colors.background,
-        card: colors.white,
-        border: colors.border,
-        text: colors.text,
-        subtext: colors.textLight,
-        primary: colors.primary,
-      };
+  const p = getPalette(darkMode);
 
   const handleImagePicker = async () => {
     try {
-      const result = await launchImageLibrary({
-        mediaType: 'photo',
-        quality: 1,
-      });
-
+      const result = await launchImageLibrary({ mediaType: 'photo', quality: 1 });
       if (result.didCancel) return;
-      
-      if (result.errorCode) {
-        Alert.alert('Error', result.errorMessage || 'Failed to open gallery');
-        return;
-      }
-
+      if (result.errorCode) { Alert.alert('Error', result.errorMessage || 'Failed to open gallery'); return; }
+      if (!result.assets?.length) return;
       const asset = result.assets[0];
-      const file = {
-        uri: asset.uri,
-        type: asset.type || 'image/png',
-        name: asset.fileName || 'diagram.png',
-      };
+      const file = { uri: asset.uri, type: asset.type || 'image/png', name: asset.fileName || 'diagram.png' };
       setPreview(asset.uri);
       await uploadAndProcess(file);
       navigation.navigate('Diagram');
     } catch (err) {
       Alert.alert('Error', 'Failed to pick image');
-      console.error(err);
     }
   };
 
   const handleDocumentPicker = async () => {
     try {
       const result = await DocumentPicker.pickSingle({
-        // Allow images and PDFs
         type: [DocumentPicker.types.images, DocumentPicker.types.pdf],
-        copyTo: 'cachesDirectory', // Copies file to a safe temp folder for uploading
+        copyTo: 'cachesDirectory',
       });
-
-      const file = {
-        uri: result.fileCopyUri || result.uri,
-        type: result.type || 'application/pdf',
-        name: result.name || 'document.pdf',
-      };
+      const file = { uri: result.fileCopyUri || result.uri, type: result.type || 'application/pdf', name: result.name || 'document.pdf' };
       await uploadAndProcess(file);
       navigation.navigate('Diagram');
     } catch (err) {
-      if (DocumentPicker.isCancel(err)) {
-        // User cancelled the picker, do nothing
-        return;
-      }
+      if (DocumentPicker.isCancel(err)) return;
       Alert.alert('Error', 'Failed to pick document');
-      console.error(err);
     }
   };
 
   const handleCamera = async () => {
     try {
-      const result = await launchCamera({
-        mediaType: 'photo',
-        quality: 1,
-        saveToPhotos: false,
-      });
-
+      const result = await launchCamera({ mediaType: 'photo', quality: 1, saveToPhotos: false });
       if (result.didCancel) return;
-
-      if (result.errorCode) {
-        // react-native-image-picker automatically handles requesting permissions.
-        // If they denied it, it throws a 'camera_unavailable' or 'permission' error code.
-        Alert.alert('Camera Error', result.errorMessage || 'Camera permission is required');
-        return;
-      }
-
+      if (result.errorCode) { Alert.alert('Camera Error', result.errorMessage || 'Camera permission is required'); return; }
+      if (!result.assets?.length) return;
       const asset = result.assets[0];
-      const file = {
-        uri: asset.uri,
-        type: asset.type || 'image/png',
-        name: asset.fileName || 'diagram.png',
-      };
+      const file = { uri: asset.uri, type: asset.type || 'image/png', name: asset.fileName || 'diagram.png' };
       setPreview(asset.uri);
       await uploadAndProcess(file);
       navigation.navigate('Diagram');
     } catch (err) {
       Alert.alert('Error', 'Failed to take photo');
-      console.error(err);
     }
   };
 
-  return (
-    <SafeAreaView style={[styles.container, { backgroundColor: palette.bg }]}>
-      <View style={[styles.header, { backgroundColor: palette.card, borderBottomColor: palette.border }]}>
-        <Text style={[styles.title, { color: palette.text }]}>AR Diagram Viewer</Text>
-        <Text style={[styles.subtitle, { color: palette.subtext }] }>
-          Upload technical diagrams for AI-powered analysis
-        </Text>
-      </View>
-
-      {preview && !loading && (
-        <View style={styles.previewContainer}>
-          <Image source={{ uri: preview }} style={styles.preview} />
-        </View>
-      )}
-
-      {loading ? (
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={palette.primary} />
-          <Text style={[styles.loadingText, { color: palette.text }]}>Processing document...</Text>
-          <Text style={[styles.loadingSubtext, { color: palette.subtext }]}>
-            Running Vision → AR → AI pipeline
-          </Text>
-          <TouchableOpacity
-            style={[styles.cancelButton, { borderColor: palette.border }]}
-            onPress={() => { clearDocument(); setPreview(null); }}
-          >
-            <Text style={[styles.cancelButtonText, { color: palette.subtext }]}>Cancel</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <View style={styles.buttonsContainer}>
-          <TouchableOpacity
-            style={[styles.button, styles.buttonPrimary, { backgroundColor: palette.primary }]}
-            onPress={handleImagePicker}
-          >
-            <Ionicons name="images-outline" size={22} color="#fff" style={styles.buttonIcon} />
-            <Text style={styles.buttonText}>Choose from Gallery</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.button,
-              styles.buttonSecondary,
-              {
-                backgroundColor: darkMode ? '#242a31' : colors.secondary,
-                borderColor: palette.primary,
-              },
-            ]}
-            onPress={handleCamera}
-          >
-            <Ionicons name="camera-outline" size={22} color="#fff" style={styles.buttonIcon} />
-            <Text style={styles.buttonText}>Take Photo</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[
-              styles.button,
-              styles.buttonSecondary,
-              {
-                backgroundColor: darkMode ? '#242a31' : colors.secondary,
-                borderColor: palette.primary,
-              },
-            ]}
-            onPress={handleDocumentPicker}
-          >
-            <Ionicons name="document-outline" size={22} color="#fff" style={styles.buttonIcon} />
-            <Text style={styles.buttonText}>Browse Files (PDF)</Text>
-          </TouchableOpacity>
-        </View>
-      )}
-
-      {error && (
-        <View style={styles.errorContainer}>
-          <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: spacing.sm }}>
-            <Ionicons name="alert-circle-outline" size={16} color="#ff3b30" />
-            <Text style={[styles.errorText, { marginBottom: 0, marginLeft: 6 }]}>{error}</Text>
+  if (loading) {
+    return (
+      <SafeAreaView style={[styles.safe, { backgroundColor: p.bg }]}>
+        <View style={styles.loadingWrap}>
+          <View style={[styles.loadingCard, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+            {preview && (
+              <Image source={{ uri: preview }} style={styles.loadingPreview} />
+            )}
+            <ActivityIndicator size="large" color={p.primary} style={{ marginTop: preview ? 20 : 0 }} />
+            <Text style={[styles.loadingTitle, { color: p.text }]}>Analysing Document</Text>
+            <Text style={[styles.loadingSubtitle, { color: p.subtext }]}>
+              Running vision analysis → component detection → AI summary
+            </Text>
+            <View style={styles.steps}>
+              {['Vision analysis', 'Component detection', 'AI summary'].map((step) => (
+                <View key={step} style={styles.stepRow}>
+                  <View style={[styles.stepDot, { backgroundColor: p.primary }]} />
+                  <Text style={[styles.stepLabel, { color: p.subtext }]}>{step}</Text>
+                </View>
+              ))}
+            </View>
+            <TouchableOpacity
+              style={[styles.cancelBtn, { borderColor: p.border }]}
+              onPress={() => { clearDocument(); setPreview(null); }}
+            >
+              <Text style={[styles.cancelBtnText, { color: p.subtext }]}>Cancel</Text>
+            </TouchableOpacity>
           </View>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={[styles.safe, { backgroundColor: p.bg }]}>
+      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+
+        {/* Hero */}
+        <View style={styles.hero}>
+          <View style={[styles.heroIcon, { backgroundColor: p.primaryGlass, borderColor: p.borderTop }]}>
+            <Ionicons name="cloud-upload-outline" size={34} color={p.primary} />
+          </View>
+          <Text style={[styles.heroTitle, { color: p.text }]}>Upload a Diagram</Text>
+          <Text style={[styles.heroSubtitle, { color: p.subtext }]}>
+            Supports PNG, JPG and PDF up to 50 MB
+          </Text>
+        </View>
+
+        {/* Preview thumbnail */}
+        {preview && (
+          <View style={styles.previewWrap}>
+            <Image source={{ uri: preview }} style={[styles.preview, { borderColor: p.primary }]} />
+            <TouchableOpacity style={styles.clearPreview} onPress={() => setPreview(null)}>
+              <Ionicons name="close-circle" size={22} color={p.subtext} />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* Upload options */}
+        <View style={styles.optionsWrap}>
           <TouchableOpacity
-            style={styles.retryButton}
-            onPress={() => setPreview(null)}
+            style={[styles.optionBtn, { backgroundColor: p.primary }]}
+            onPress={handleImagePicker}
+            activeOpacity={0.82}
           >
-            <Text style={styles.retryButtonText}>Try Again</Text>
+            <Ionicons name="images-outline" size={22} color="#fff" />
+            <View style={styles.optionTextWrap}>
+              <Text style={styles.optionTitle}>Choose from Gallery</Text>
+              <Text style={styles.optionSub}>PNG, JPG images</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.6)" />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.optionBtn, styles.optionBtnSecondary, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}
+            onPress={handleCamera}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="camera-outline" size={22} color={p.primary} />
+            <View style={styles.optionTextWrap}>
+              <Text style={[styles.optionTitle, { color: p.text }]}>Take a Photo</Text>
+              <Text style={[styles.optionSub, { color: p.subtext }]}>Use your camera</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={p.muted} />
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.optionBtn, styles.optionBtnSecondary, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}
+            onPress={handleDocumentPicker}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="document-outline" size={22} color={p.primary} />
+            <View style={styles.optionTextWrap}>
+              <Text style={[styles.optionTitle, { color: p.text }]}>Browse Files</Text>
+              <Text style={[styles.optionSub, { color: p.subtext }]}>PDF documents</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color={p.muted} />
           </TouchableOpacity>
         </View>
-      )}
 
-      <View style={[styles.footer, { backgroundColor: palette.card, borderTopColor: palette.border }]}>
-        <Text style={[styles.footerText, { color: palette.subtext }] }>
-          Supports: PNG, JPG, PDF (max 50MB)
-        </Text>
-      </View>
+        {/* Error */}
+        {error && (
+          <View style={[styles.errorWrap, { borderColor: 'rgba(255,69,58,0.3)', backgroundColor: 'rgba(255,69,58,0.10)' }]}>
+            <Ionicons name="alert-circle-outline" size={18} color={p.error} />
+            <Text style={[styles.errorText, { color: p.error }]}>{error}</Text>
+            <TouchableOpacity onPress={() => setPreview(null)}>
+              <Text style={[styles.retryText, { color: p.primary }]}>Retry</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </ScrollView>
     </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  header: {
+  safe: { flex: 1 },
+  content: { paddingBottom: 48 },
+
+  /* Loading */
+  loadingWrap: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: spacing.lg },
+  loadingCard: {
+    width: '100%',
+    borderRadius: 24,
+    borderWidth: 1,
     padding: spacing.xl,
-    backgroundColor: colors.white,
     alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.3,
+    shadowRadius: 20,
+    elevation: 8,
   },
-  title: {
-    ...typography.h1,
-    color: colors.text,
-    marginBottom: spacing.sm,
-  },
-  subtitle: {
-    ...typography.body,
-    color: colors.textLight,
-    textAlign: 'center',
-  },
-  previewContainer: {
-    padding: spacing.md,
-    alignItems: 'center',
-  },
-  preview: {
-    width: 200,
-    height: 200,
-    borderRadius: 10,
-    borderWidth: 2,
-    borderColor: colors.primary,
-  },
-  loadingContainer: {
-    flex: 1,
+  loadingPreview: { width: 100, height: 100, borderRadius: 12, marginBottom: 4 },
+  loadingTitle: { fontSize: 20, fontWeight: '700', marginTop: 16, marginBottom: 6, letterSpacing: -0.3 },
+  loadingSubtitle: { fontSize: 13, textAlign: 'center', lineHeight: 19, marginBottom: 20 },
+  steps: { gap: 8, alignSelf: 'stretch', marginBottom: 20 },
+  stepRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  stepDot: { width: 6, height: 6, borderRadius: 3 },
+  stepLabel: { fontSize: 13 },
+  cancelBtn: { borderWidth: 1, borderRadius: 100, paddingHorizontal: 24, paddingVertical: 10 },
+  cancelBtnText: { fontSize: 15, fontWeight: '500' },
+
+  /* Hero */
+  hero: { alignItems: 'center', paddingTop: spacing.xl, paddingBottom: 24, paddingHorizontal: spacing.lg },
+  heroIcon: {
+    width: 68,
+    height: 68,
+    borderRadius: 20,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: spacing.xl,
-  },
-  loadingText: {
-    ...typography.h2,
-    color: colors.text,
-    marginTop: spacing.lg,
-  },
-  loadingSubtext: {
-    ...typography.body,
-    color: colors.textLight,
-    marginTop: spacing.sm,
-  },
-  buttonsContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    padding: spacing.xl,
-    gap: spacing.md,
-  },
-  button: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: spacing.lg,
-    borderRadius: 12,
-    gap: spacing.md,
-  },
-  buttonPrimary: {
-    backgroundColor: colors.primary,
-  },
-  buttonSecondary: {
-    backgroundColor: colors.secondary,
-    borderWidth: 2,
-    borderColor: colors.primary,
-  },
-  buttonIcon: {
-    fontSize: 24,
-  },
-  buttonText: {
-    ...typography.body,
-    fontWeight: '600',
-    color: colors.white,
-  },
-  errorContainer: {
-    margin: spacing.md,
-    padding: spacing.md,
-    backgroundColor: colors.error,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  errorText: {
-    color: colors.white,
-    ...typography.body,
-    marginBottom: spacing.sm,
-  },
-  retryButton: {
-    backgroundColor: colors.white,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
-    borderRadius: 8,
-  },
-  retryButtonText: {
-    color: colors.error,
-    fontWeight: '600',
-  },
-  cancelButton: {
-    marginTop: spacing.lg,
-    paddingHorizontal: spacing.xl,
-    paddingVertical: spacing.sm,
-    borderRadius: 8,
+    marginBottom: 18,
     borderWidth: 1,
   },
-  cancelButtonText: {
-    fontSize: 15,
-    fontWeight: '500',
-  },
-  footer: {
-    padding: spacing.md,
+  heroTitle: { fontSize: 26, fontWeight: '700', letterSpacing: -0.4, marginBottom: 8 },
+  heroSubtitle: { fontSize: 14, textAlign: 'center' },
+
+  /* Preview */
+  previewWrap: { alignItems: 'center', marginBottom: 20, position: 'relative' },
+  preview: { width: 160, height: 160, borderRadius: 14, borderWidth: 2 },
+  clearPreview: { position: 'absolute', top: -8, right: '28%' },
+
+  /* Upload options */
+  optionsWrap: { paddingHorizontal: spacing.lg, gap: 12 },
+  optionBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.white,
-    borderTopWidth: 1,
-    borderTopColor: colors.border,
+    gap: 14,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
+    borderRadius: 18,
+    shadowColor: '#2997ff',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 5,
   },
-  footerText: {
-    ...typography.caption,
-    color: colors.textLight,
+  optionBtnSecondary: {
+    borderWidth: 1,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 3,
   },
+  optionTextWrap: { flex: 1 },
+  optionTitle: { fontSize: 16, fontWeight: '600', color: '#fff', marginBottom: 2 },
+  optionSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)' },
+
+  /* Error */
+  errorWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginHorizontal: spacing.lg,
+    marginTop: 16,
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+  },
+  errorText: { flex: 1, fontSize: 13, fontWeight: '500' },
+  retryText: { fontSize: 13, fontWeight: '700' },
 });

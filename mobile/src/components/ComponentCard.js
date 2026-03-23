@@ -1,49 +1,69 @@
+import React from 'react';
 import { View, Text, StyleSheet, TouchableOpacity } from 'react-native';
-// Replaced @expo/vector-icons with react-native-vector-icons
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import { colors, spacing, typography } from '../styles/theme';
+import { spacing } from '../styles/theme';
 
-export default function ComponentCard({ component, index, onPress, palette }) {
-  const confidencePercent = (component.confidence * 100).toFixed(1);
-  const position = `(${(component.x * 100).toFixed(1)}%, ${(component.y * 100).toFixed(1)}%)`;
+export default function ComponentCard({ component, index, onPress, palette: p }) {
+  const pct = (component.confidence * 100).toFixed(1);
+  const pos = `${(component.x * 100).toFixed(0)}%, ${(component.y * 100).toFixed(0)}%`;
+  const size = `${(component.width * 100).toFixed(0)}×${(component.height * 100).toFixed(0)}%`;
 
-  const cardBg = palette?.card || colors.white;
-  const cardBorder = palette?.border || colors.border;
-  const labelColor = palette?.text || colors.text;
-  const metaColor = palette?.subtext || colors.textLight;
-  const primaryColor = palette?.primary || colors.primary;
+  // Confidence colour
+  const confColor =
+    component.confidence >= 0.8
+      ? (p?.success || '#30d158')
+      : component.confidence >= 0.5
+      ? (p?.warning || '#ffd60a')
+      : (p?.error || '#ff453a');
 
   return (
     <TouchableOpacity
-      style={[styles.card, { backgroundColor: cardBg, borderColor: cardBorder }]}
+      style={[
+        styles.card,
+        {
+          backgroundColor: p?.cardAbs || '#10141f',
+          borderColor: p?.border || 'rgba(255,255,255,0.10)',
+          borderTopColor: p?.borderTop || 'rgba(255,255,255,0.22)',
+        },
+      ]}
       onPress={onPress}
-      activeOpacity={0.7}
+      activeOpacity={0.75}
     >
+      {/* Header row */}
       <View style={styles.header}>
-        <View style={[styles.badge, { backgroundColor: primaryColor }]}>
-          <Text style={styles.badgeText}>#{index + 1}</Text>
+        <View style={[styles.badge, { backgroundColor: p?.primaryGlass || 'rgba(41,151,255,0.16)' }]}>
+          <Text style={[styles.badgeText, { color: p?.primary || '#2997ff' }]}>
+            {index + 1}
+          </Text>
         </View>
-        <View style={styles.headerContent}>
-          <Text style={[styles.label, { color: labelColor }]}>{component.label}</Text>
-          <Text style={[styles.confidence, { color: primaryColor }]}>{confidencePercent}%</Text>
+
+        <Text style={[styles.label, { color: p?.text || '#fff' }]} numberOfLines={1}>
+          {component.label}
+        </Text>
+
+        <View style={[styles.confBadge, { backgroundColor: confColor + '1A' }]}>
+          <Text style={[styles.confText, { color: confColor }]}>{pct}%</Text>
         </View>
       </View>
 
-      {component.description && (
-        <Text style={[styles.description, { color: metaColor }]} numberOfLines={2}>
+      {/* Description */}
+      {component.description ? (
+        <Text style={[styles.desc, { color: p?.subtext || 'rgba(255,255,255,0.55)' }]} numberOfLines={2}>
           {component.description}
         </Text>
-      )}
+      ) : null}
 
+      {/* Meta */}
       <View style={styles.meta}>
         <View style={styles.metaItem}>
-          <Ionicons name="location-outline" size={13} color={metaColor} />
-          <Text style={[styles.metaText, { color: metaColor }]}>{position}</Text>
+          <Ionicons name="location-outline" size={12} color={p?.muted || 'rgba(255,255,255,0.3)'} />
+          <Text style={[styles.metaText, { color: p?.muted || 'rgba(255,255,255,0.3)' }]}>{pos}</Text>
         </View>
         <View style={styles.metaItem}>
-          <Ionicons name="resize-outline" size={13} color={metaColor} />
-          <Text style={[styles.metaText, { color: metaColor }]}>{(component.width * 100).toFixed(1)}% × {(component.height * 100).toFixed(1)}%</Text>
+          <Ionicons name="resize-outline" size={12} color={p?.muted || 'rgba(255,255,255,0.3)'} />
+          <Text style={[styles.metaText, { color: p?.muted || 'rgba(255,255,255,0.3)' }]}>{size}</Text>
         </View>
+        <Ionicons name="chevron-forward" size={14} color={p?.muted || 'rgba(255,255,255,0.3)'} style={{ marginLeft: 'auto' }} />
       </View>
     </TouchableOpacity>
   );
@@ -51,74 +71,45 @@ export default function ComponentCard({ component, index, onPress, palette }) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: colors.white,
-    borderRadius: 12,
-    padding: spacing.md,
-    marginBottom: spacing.md,
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: 10,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 4,
   },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.sm,
+    gap: 10,
+    marginBottom: 8,
   },
   badge: {
-    backgroundColor: colors.primary,
+    width: 28,
+    height: 28,
     borderRadius: 8,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    marginRight: spacing.sm,
-  },
-  badgeText: {
-    color: colors.white,
-    fontWeight: '600',
-    fontSize: 12,
-  },
-  headerContent: {
-    flex: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
+    justifyContent: 'center',
     alignItems: 'center',
+    flexShrink: 0,
   },
-  label: {
-    ...typography.body,
-    fontWeight: '600',
-    color: colors.text,
-    flex: 1,
+  badgeText: { fontSize: 13, fontWeight: '700' },
+  label: { flex: 1, fontSize: 15, fontWeight: '600', letterSpacing: -0.2 },
+  confBadge: {
+    paddingHorizontal: 9,
+    paddingVertical: 3,
+    borderRadius: 100,
+    flexShrink: 0,
   },
-  confidence: {
-    ...typography.caption,
-    color: colors.primary,
-    backgroundColor: 'rgba(102, 126, 234, 0.1)',
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    borderRadius: 6,
-    fontWeight: '600',
-  },
-  description: {
-    ...typography.body,
-    color: colors.textLight,
-    marginBottom: spacing.sm,
-    lineHeight: 20,
-  },
+  confText: { fontSize: 12, fontWeight: '700' },
+  desc: { fontSize: 13, lineHeight: 18, marginBottom: 10 },
   meta: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: spacing.xs,
-  },
-  metaItem: {
-    flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 12,
   },
-  metaText: {
-    ...typography.caption,
-    color: colors.textLight,
-  },
+  metaItem: { flexDirection: 'row', alignItems: 'center', gap: 4 },
+  metaText: { fontSize: 12 },
 });

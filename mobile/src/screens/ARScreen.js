@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState } from 'react';
 import {
   ViroARSceneNavigator,
   ViroARScene,
@@ -9,11 +9,11 @@ import {
   ViroAnimations,
 } from '@reactvision/react-viro';
 import { View, Text, StyleSheet } from 'react-native';
-import Svg, { Line, Circle } from 'react-native-svg';
+import Svg from 'react-native-svg';
 import { FlowParticle, AnimatedArrow } from '../components/FlowAnimation';
+import { useMobileDocumentContext } from '../context/MobileDocumentContext';
 
 // ─── Register AR tracking target ────────────────────────────────────────────
-// Guard against null native module (e.g. simulator, missing native link)
 if (ViroARTrackingTargets) {
   ViroARTrackingTargets.createTargets({
     diagram: {
@@ -35,47 +35,57 @@ if (ViroAnimations) {
   });
 }
 
+// Convert a normalized 2D component position to a 3D Viro position.
+// The marker is 0.2 m wide; x/y normalized coords map to the marker plane.
+// Viro axes: x = right, y = up, z = towards viewer.
+// We map diagram x → Viro x, diagram y → Viro -z (depth), and float y = 0.04 m above.
+const toViroPosition = (cx, cy) => {
+  const MARKER_SIZE = 0.2;
+  const x = (cx - 0.5) * MARKER_SIZE;
+  const z = (cy - 0.5) * MARKER_SIZE;
+  return [x, 0.04, z];
+};
+
 // ─── AR Scene (receives data via viroAppProps) ───────────────────────────────
 //
-// IMPORTANT: This must be defined OUTSIDE of ARScreen — never inline in
-// initialScene — so React doesn't recreate it on every parent render.
+// IMPORTANT: defined OUTSIDE ARScreen so React never recreates it on re-render.
 const ARScene = (props) => {
-  // viroAppProps is how ViroARSceneNavigator passes data into the scene
-  const { onDiagramDetected } = props.sceneNavigator.viroAppProps;
+  const { onDiagramDetected, components } = props.sceneNavigator.viroAppProps;
 
   return (
     <ViroARScene>
       <ViroARImageMarker target="diagram" onAnchorFound={onDiagramDetected}>
-        {/*
-          All content here uses Viro 3D primitives anchored to the marker.
-          Positions are in metres relative to the marker centre.
-        */}
         <ViroNode position={[0, 0.05, 0]}>
-          {/* Label floating above the diagram */}
-          <ViroText
-            text="OpenTelemetry Flow"
-            scale={[0.1, 0.1, 0.1]}
-            position={[0, 0.1, 0]}
-            style={{ fontFamily: 'Arial', fontSize: 20, color: '#00D4FF' }}
-          />
-
-          {/* Example: highlight the OTel Collector node */}
-          <ViroText
-            text="OTel Collector"
-            scale={[0.06, 0.06, 0.06]}
-            position={[-0.05, 0.04, 0]}
-            style={{ fontFamily: 'Arial', fontSize: 14, color: '#FFFFFF' }}
-            animation={{ name: 'pulse', run: true, loop: true }}
-          />
-
-          {/* Example: highlight the Instana Agent node */}
-          <ViroText
-            text="Instana Agent"
-            scale={[0.06, 0.06, 0.06]}
-            position={[0.1, 0.04, 0]}
-            style={{ fontFamily: 'Arial', fontSize: 14, color: '#7EC8E3' }}
-            animation={{ name: 'pulse', run: true, loop: true }}
-          />
+          {components.length > 0 ? (
+            components.map((comp, idx) => {
+              const cx = comp.center_x ?? comp.x ?? 0.5;
+              const cy = comp.center_y ?? comp.y ?? 0.5;
+              const label = comp.label || comp.type || `Component ${idx + 1}`;
+              const isFirst = idx === 0;
+              return (
+                <ViroText
+                  key={comp.id || idx}
+                  text={label}
+                  scale={isFirst ? [0.1, 0.1, 0.1] : [0.06, 0.06, 0.06]}
+                  position={isFirst ? [0, 0.1, 0] : toViroPosition(cx, cy)}
+                  style={{
+                    fontFamily: 'Arial',
+                    fontSize: isFirst ? 20 : 14,
+                    color: isFirst ? '#00D4FF' : '#FFFFFF',
+                  }}
+                  animation={isFirst ? undefined : { name: 'pulse', run: true, loop: true }}
+                />
+              );
+            })
+          ) : (
+            // Fallback when no document components are available yet
+            <ViroText
+              text="Scan a diagram to detect components"
+              scale={[0.08, 0.08, 0.08]}
+              position={[0, 0.1, 0]}
+              style={{ fontFamily: 'Arial', fontSize: 16, color: '#00D4FF' }}
+            />
+          )}
         </ViroNode>
       </ViroARImageMarker>
     </ViroARScene>
@@ -84,28 +94,37 @@ const ARScene = (props) => {
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 const ARScreen = () => {
-  const [detectedComponents, setDetectedComponents] = useState([]);
+  const { document } = useMobileDocumentContext();
   const [detectedConnections, setDetectedConnections] = useState([]);
   const [diagramFound, setDiagramFound] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Pull components from processed document; fall back to empty array
+  const components = document?.ar?.components || [];
 
   const onDiagramDetected = async (anchor) => {
     setDiagramFound(true);
     setLoading(true);
     setError(null);
     try {
-      // TODO: Replace with real backend call once captureARSnapshot is available
-      // const imageData = await captureARSnapshot();
-      // const result = await detectComponentsFromBackend(imageData);
-      // setDetectedComponents(result.components);
-      // setDetectedConnections(result.connections);
-
-      // Temporary mock data so the SVG overlay renders
-      setDetectedConnections([
-        { start: { x: 10, y: 50 }, end: { x: 90, y: 50 }, path: 'M10,50 L90,50', direction: 'right' },
-        { start: { x: 90, y: 50 }, end: { x: 170, y: 50 }, path: 'M90,50 L170,50', direction: 'right' },
-      ]);
+      // Wire up connection overlays from the document
+      const rawConns = document?.ar?.connections || document?.ar?.relationships?.connections || [];
+      if (rawConns.length > 0) {
+        setDetectedConnections(
+          rawConns.map((c) => ({
+            start: c.start || { x: 0, y: 0 },
+            end: c.end || { x: 100, y: 100 },
+            path: c.path || `M${c.start?.x || 0},${c.start?.y || 0} L${c.end?.x || 100},${c.end?.y || 100}`,
+            direction: c.direction || 'right',
+          }))
+        );
+      } else {
+        // Fallback animated arrows so the SVG overlay is not empty
+        setDetectedConnections([
+          { start: { x: 10, y: 50 }, end: { x: 90, y: 50 }, path: 'M10,50 L90,50', direction: 'right' },
+        ]);
+      }
     } catch (e) {
       setError(e.message);
     } finally {
@@ -118,21 +137,14 @@ const ARScreen = () => {
       {/* ── AR Camera Layer ── */}
       <ViroARSceneNavigator
         autofocus
-        initialScene={{ scene: ARScene }}         // stable reference, no inline arrow
-        viroAppProps={{ onDiagramDetected }}       // pass callbacks via viroAppProps
+        initialScene={{ scene: ARScene }}
+        viroAppProps={{ onDiagramDetected, components }}
         style={styles.flex}
       />
 
-      {/*
-        ── 2D SVG Overlay Layer ──
-        Sits on top of the AR view. react-native-svg works here because
-        this is a normal React Native view, not inside Viro's WebGL context.
-      */}
+      {/* ── 2D SVG Connection Overlay ── */}
       {diagramFound && (
-        <Svg
-          style={StyleSheet.absoluteFill}
-          pointerEvents="none"          // let touches pass through to AR view
-        >
+        <Svg style={StyleSheet.absoluteFill} pointerEvents="none">
           {detectedConnections.map((conn, idx) => (
             <FlowParticle
               key={`particle-${idx}`}

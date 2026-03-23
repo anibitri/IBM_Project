@@ -2,9 +2,9 @@ import React from 'react';
 import { NavigationContainer, DarkTheme, DefaultTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-// Replaced @expo/vector-icons
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useMobileDocumentContext } from '../context/MobileDocumentContext';
+import { getPalette } from '../styles/theme';
 
 import HomeScreen from '../screens/HomeScreen';
 import UploadScreen from '../screens/UploadScreen';
@@ -24,14 +24,12 @@ try {
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-/* ── Icon helpers for tab bar ── */
 const TAB_ICONS = {
   Home: { outline: 'home-outline', filled: 'home' },
   Chat: { outline: 'chatbubble-outline', filled: 'chatbubble' },
   Settings: { outline: 'settings-outline', filled: 'settings' },
 };
 
-/* ── Home stack ── */
 function HomeStack({ stackOptions }) {
   return (
     <Stack.Navigator screenOptions={stackOptions}>
@@ -44,7 +42,7 @@ function HomeStack({ stackOptions }) {
       <Stack.Screen
         name="Diagram"
         component={DiagramScreen}
-        options={{ headerShown: true, title: 'AR View', headerBackTitle: 'Back' }}
+        options={{ headerShown: true, title: 'Diagram', headerBackTitle: 'Back' }}
       />
       <Stack.Screen
         name="Components"
@@ -54,7 +52,7 @@ function HomeStack({ stackOptions }) {
       <Stack.Screen
         name="ARMock"
         component={ARMockScreen}
-        options={{ headerShown: true, title: 'AR Mock Preview', headerBackTitle: 'Back' }}
+        options={{ headerShown: true, title: 'AR Preview', headerBackTitle: 'Back' }}
       />
       <Stack.Screen
         name="AR"
@@ -65,7 +63,6 @@ function HomeStack({ stackOptions }) {
   );
 }
 
-/* ── Chat stack ── */
 function ChatStack({ stackOptions }) {
   return (
     <Stack.Navigator screenOptions={stackOptions}>
@@ -74,7 +71,6 @@ function ChatStack({ stackOptions }) {
   );
 }
 
-/* ── Settings stack ── */
 function SettingsStack({ stackOptions }) {
   return (
     <Stack.Navigator screenOptions={stackOptions}>
@@ -86,54 +82,38 @@ function SettingsStack({ stackOptions }) {
 export default function AppNavigator() {
   const { accessibilitySettings } = useMobileDocumentContext();
   const darkMode = !!accessibilitySettings?.darkMode;
-  const palette = darkMode
-    ? {
-        bg: '#121417',
-        card: '#1b1f24',
-        border: '#303741',
-        text: '#f4f7fb',
-        subtext: '#9aa3ad',
-        primary: '#4ea3ff',
-      }
-    : {
-        bg: '#ffffff',
-        card: '#ffffff',
-        border: '#e8e8e8',
-        text: '#111111',
-        subtext: '#8e8e93',
-        primary: '#007AFF',
-      };
+  const p = getPalette(darkMode);
 
   const navTheme = darkMode
     ? {
         ...DarkTheme,
         colors: {
           ...DarkTheme.colors,
-          background: palette.bg,
-          card: palette.card,
-          border: palette.border,
-          text: palette.text,
-          primary: palette.primary,
+          background: p.bg,
+          card: p.cardAbs,
+          border: p.border,
+          text: p.text,
+          primary: p.primary,
         },
       }
     : {
         ...DefaultTheme,
         colors: {
           ...DefaultTheme.colors,
-          background: palette.bg,
-          card: palette.card,
-          border: palette.border,
-          text: palette.text,
-          primary: palette.primary,
+          background: p.bg,
+          card: p.card,
+          border: p.border,
+          text: p.text,
+          primary: p.primary,
         },
       };
 
   const stackOptions = {
     headerShown: false,
-    headerStyle: { backgroundColor: palette.card },
-    headerTintColor: palette.text,
-    headerTitleStyle: { color: palette.text },
-    contentStyle: { backgroundColor: palette.bg },
+    headerStyle: { backgroundColor: p.cardAbs },
+    headerTintColor: p.primary,
+    headerTitleStyle: { color: p.text, fontWeight: '600' },
+    contentStyle: { backgroundColor: p.bg },
   };
 
   return (
@@ -141,25 +121,27 @@ export default function AppNavigator() {
       <Tab.Navigator
         screenOptions={({ route }) => ({
           headerShown: false,
-          tabBarIcon: ({ focused }) => (
+          tabBarIcon: ({ focused, color }) => (
             <Ionicons
-              name={focused ? (TAB_ICONS[route.name]?.filled || 'ellipse') : (TAB_ICONS[route.name]?.outline || 'ellipse-outline')}
+              name={focused ? TAB_ICONS[route.name]?.filled : TAB_ICONS[route.name]?.outline}
               size={24}
-              color={focused ? palette.primary : palette.subtext}
+              color={color}
             />
           ),
-          tabBarActiveTintColor: palette.primary,
-          tabBarInactiveTintColor: palette.subtext,
+          tabBarActiveTintColor: p.primary,
+          tabBarInactiveTintColor: p.muted,
           tabBarStyle: {
-            backgroundColor: palette.card,
-            borderTopColor: palette.border,
-            paddingBottom: 6,
-            paddingTop: 6,
-            height: 60,
+            backgroundColor: darkMode ? p.cardAbs : p.card,
+            borderTopWidth: 1,
+            borderTopColor: darkMode ? p.border : p.border,
+            paddingBottom: 8,
+            paddingTop: 8,
+            height: 64,
           },
           tabBarLabelStyle: {
             fontSize: 11,
             fontWeight: '600',
+            marginBottom: 2,
           },
         })}
       >
