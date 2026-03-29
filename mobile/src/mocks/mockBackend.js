@@ -329,8 +329,19 @@ export const mockBackend = {
     const isPdf = (storedName || '').endsWith('.pdf');
 
     if (isPdf) {
+      // Per-page breakdown: page 1 = gateway + auth/user/data services, page 2 = databases + queue + storage
+      const PAGE_1_COMPONENTS = MOCK_PDF_COMPONENTS.slice(0, 4); // API Gateway, Auth, User, Data
+      const PAGE_1_CONNECTIONS = MOCK_PDF_CONNECTIONS.filter(
+        c => ['pdf-1', 'pdf-2', 'pdf-3', 'pdf-4'].includes(c.from) && ['pdf-1', 'pdf-2', 'pdf-3', 'pdf-4'].includes(c.to),
+      );
+      const PAGE_2_COMPONENTS = MOCK_PDF_COMPONENTS.slice(4); // PostgreSQL, Redis, Queue, Storage
+      const PAGE_2_CONNECTIONS = MOCK_PDF_CONNECTIONS.filter(
+        c => !(['pdf-1', 'pdf-2', 'pdf-3', 'pdf-4'].includes(c.from) && ['pdf-1', 'pdf-2', 'pdf-3', 'pdf-4'].includes(c.to)),
+      );
+
       return {
         status: 'success',
+        type: 'pdf',
         ar: {
           components: MOCK_PDF_COMPONENTS,
           componentCount: MOCK_PDF_COMPONENTS.length,
@@ -339,7 +350,27 @@ export const mockBackend = {
         vision: MOCK_PDF_VISION,
         ai_summary: MOCK_PDF_AI_SUMMARY,
         text_excerpt: 'Micro-services Architecture — API Gateway, Auth Service, User Service, Data Service, PostgreSQL, Redis Cache, Message Queue, Object Storage.',
-        meta: { width: 1000, height: 800, pages: 3, format: 'pdf' },
+        meta: { width: 1000, height: 800, pages: 2, format: 'pdf' },
+        images: [
+          {
+            page: 1,
+            image_filename: null,
+            url: null,
+            image_size: [1000, 800],
+            ar_components: PAGE_1_COMPONENTS,
+            ar_relationships: { connections: PAGE_1_CONNECTIONS },
+            vision_summary: 'Page 1 shows the API layer: an API Gateway routing requests to Auth Service, User Service, and Data Service — the core request-handling tier of the architecture.',
+          },
+          {
+            page: 2,
+            image_filename: null,
+            url: null,
+            image_size: [1000, 800],
+            ar_components: PAGE_2_COMPONENTS,
+            ar_relationships: { connections: PAGE_2_CONNECTIONS },
+            vision_summary: 'Page 2 shows the data tier: PostgreSQL for relational storage, Redis Cache for session/rate-limit data, a Message Queue for async events, and Object Storage for large artefacts.',
+          },
+        ],
       };
     }
 

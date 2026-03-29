@@ -6,8 +6,10 @@
  */
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { mockBackend } from '../mocks/mockBackend';
+import { buildChatContext, buildComponentQuestion } from '@ar-viewer/shared';
+import { makeSessionId } from '@ar-viewer/shared';
 
-const USE_MOCK_BACKEND = true; // flip to false when the real backend is reachable
+const USE_MOCK_BACKEND = false; // flip to false when the real backend is reachable
 
 const api = USE_MOCK_BACKEND ? mockBackend : null; // real backend imported lazily below
 let realBackend = null;
@@ -22,9 +24,6 @@ const backend = api || realBackend;
 
 const DocumentContext = createContext(null);
 
-function makeSessionId() {
-  return `${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
-}
 
 export const MobileDocumentProvider = ({ children }) => {
   const [document, setDocument] = useState(null);
@@ -33,7 +32,7 @@ export const MobileDocumentProvider = ({ children }) => {
   const [chatHistory, setChatHistory] = useState([]);
   const [pendingQuestion, setPendingQuestion] = useState(null);
   const [selectedComponent, setSelectedComponent] = useState(null);
-  const [currentImageIndex, setCurrentImageIndex] = useState(0);
+  const [currentImageIndex, setCurrentImageIndex] = useState(-1);
   const [recentSessions, setRecentSessions] = useState([]);
   const [accessibilitySettings, setAccessibilitySettings] = useState({
     darkMode: false,
@@ -41,6 +40,9 @@ export const MobileDocumentProvider = ({ children }) => {
 
   const chatHistoryRef = useRef(chatHistory);
   useEffect(() => { chatHistoryRef.current = chatHistory; }, [chatHistory]);
+
+  const currentImageIndexRef = useRef(-1);
+  useEffect(() => { currentImageIndexRef.current = currentImageIndex; }, [currentImageIndex]);
 
   const getNextNewChatName = useCallback((extraNames = []) => {
     const usedNumbers = new Set();
@@ -116,12 +118,24 @@ export const MobileDocumentProvider = ({ children }) => {
       const storedName = uploadResult.file.stored_name;
       const processResult = await backend.processDocument(storedName, true, true);
 
+      // Build accessible URLs for per-page images
+      const serverFileUrl = uploadResult.file.url || '';
+      const hostMatch = serverFileUrl.match(/^https?:\/\/[^/]+/);
+      const staticBase = hostMatch ? `${hostMatch[0]}/static/uploads/` : '/static/uploads/';
+      const imagesWithUrls = (processResult.images || []).map(img => ({
+        ...img,
+        url: img.image_filename ? `${staticBase}${img.image_filename}` : null,
+      }));
+
       const nextDocument = {
         sessionId: makeSessionId(),
         storedName,
         file: { ...uploadResult.file, url: file.uri || uploadResult.file.url },
         ...processResult,
+        images: imagesWithUrls,
       };
+      // Default to first page if multi-page, otherwise all-pages view
+      setCurrentImageIndex(imagesWithUrls.length > 1 ? 0 : -1);
       setDocument(nextDocument);
       upsertSession(nextDocument, []);
       return true;
@@ -133,6 +147,50 @@ export const MobileDocumentProvider = ({ children }) => {
     }
   }, []);
 
+  // ── Attach document to existing session (keeps session ID / name / history) ──
+  const attachDocumentToSession = useCallback(async (file) => {
+    setLoading(true);
+    setError(null);
+
+    const savedSessionId = document?.sessionId || makeSessionId();
+    const savedSessionName = document?.sessionName || 'New Chat';
+    const savedChatHistory = [...(chatHistoryRef.current || [])];
+
+    try {
+      const uploadResult = await backend.uploadFile(file);
+      const storedName = uploadResult.file.stored_name;
+      const processResult = await backend.processDocument(storedName, true, true);
+
+      const serverFileUrl = uploadResult.file.url || '';
+      const hostMatch = serverFileUrl.match(/^https?:\/\/[^/]+/);
+      const staticBase = hostMatch ? `${hostMatch[0]}/static/uploads/` : '/static/uploads/';
+      const imagesWithUrls = (processResult.images || []).map(img => ({
+        ...img,
+        url: img.image_filename ? `${staticBase}${img.image_filename}` : null,
+      }));
+
+      const updatedDocument = {
+        sessionId: savedSessionId,
+        sessionName: savedSessionName,
+        storedName,
+        file: { ...uploadResult.file, url: file.uri || uploadResult.file.url },
+        ...processResult,
+        images: imagesWithUrls,
+      };
+
+      setCurrentImageIndex(imagesWithUrls.length > 1 ? 0 : -1);
+      setDocument(updatedDocument);
+      setChatHistory(savedChatHistory);
+      upsertSession(updatedDocument, savedChatHistory);
+      return true;
+    } catch (err) {
+      setError(err.message || 'Failed to attach document');
+      return false;
+    } finally {
+      setLoading(false);
+    }
+  }, [document, upsertSession]);
+
   // ── Load demo data instantly (no file needed) ───────────
   const loadDemo = useCallback(async () => {
     setLoading(true);
@@ -142,7 +200,7 @@ export const MobileDocumentProvider = ({ children }) => {
     setSelectedComponent(null);
 
     try {
-      const processResult = await backend.processDocument('demo', true, true);
+      const processResult = await mockBackend.processDocument('demo', true, true);
       const nextDocument = {
         sessionId: makeSessionId(),
         storedName: 'demo',
@@ -172,42 +230,44 @@ export const MobileDocumentProvider = ({ children }) => {
   }, []);
 
   const askQuestion = useCallback(async (query) => {
-    if (!document) throw new Error('No document loaded');
     setError(null);
+
+    let activeDoc = document;
+    if (!activeDoc) {
+      const nextName = getNextNewChatName([]);
+      activeDoc = {
+        sessionId: makeSessionId(),
+        sessionName: nextName,
+        storedName: null,
+        file: null,
+        ar: null,
+        images: [],
+      };
+      setDocument(activeDoc);
+      upsertSession(activeDoc, []);
+    }
 
     try {
       addMessage('user', query);
 
-      const context = {
-        text_excerpt: document.full_text || document.text_excerpt || '',
-        ai_summary: document.ai_summary || '',
-        vision: document.vision || {},
-        components: document.ar?.components || [],
-        connections: document.ar?.connections || document.ar?.relationships?.connections || [],
-        stored_name: document.storedName || '',
-      };
-
+      const context = activeDoc?.file ? buildChatContext(activeDoc, currentImageIndexRef.current) : {};
       const recentHistory = chatHistoryRef.current.slice(-10);
       const result = await backend.askQuestion(query, context, recentHistory);
       addMessage('assistant', result.answer);
-      upsertSession(document, [...recentHistory, { role: 'user', content: query }, { role: 'assistant', content: result.answer }]);
+      upsertSession(activeDoc, [...recentHistory, { role: 'user', content: query }, { role: 'assistant', content: result.answer }]);
       return result.answer;
     } catch (err) {
       setError(err.message || 'Failed to get answer');
       throw err;
     }
-  }, [document, addMessage]);
+  }, [document, addMessage, getNextNewChatName, upsertSession]);
 
   const askAboutComponent = useCallback((component) => {
-    const connections = document?.ar?.connections || document?.ar?.relationships?.connections || [];
-    const related = connections
-      .filter(c => c.from === component.id || c.to === component.id)
-      .map(c => c.from === component.id ? (c.to_label || c.to) : (c.from_label || c.from));
-
-    const question = related.length > 0
-      ? `Tell me about the "${component.label}" component. It is connected to: ${related.join(', ')}. What is its function?`
-      : `Tell me about the "${component.label}" component. What is its function?`;
-    setPendingQuestion(question);
+    const connections =
+      document?.ar?.connections ||
+      document?.ar?.relationships?.connections ||
+      [];
+    setPendingQuestion(buildComponentQuestion(component, connections));
   }, [document]);
 
   const consumePendingQuestion = useCallback(() => {
@@ -219,31 +279,27 @@ export const MobileDocumentProvider = ({ children }) => {
   const clearChat = useCallback(() => setChatHistory([]), []);
 
   const startNewChat = useCallback(() => {
-    if (!document) {
-      setChatHistory([]);
-      setPendingQuestion(null);
-      setSelectedComponent(null);
-      setCurrentImageIndex(0);
-      return;
+    const currentHistory = chatHistoryRef.current || [];
+    if (document) {
+      upsertSession(document, currentHistory);
     }
 
-    const currentHistory = chatHistoryRef.current || [];
-    upsertSession(document, currentHistory);
-
-    const nextName = getNextNewChatName([document.sessionName]);
-
-    const nextDocument = {
-      ...document,
+    const nextName = getNextNewChatName([document?.sessionName]);
+    const stubDoc = {
       sessionId: makeSessionId(),
       sessionName: nextName,
+      storedName: null,
+      file: null,
+      ar: null,
+      images: [],
     };
 
-    setDocument(nextDocument);
+    setDocument(stubDoc);
     setChatHistory([]);
     setPendingQuestion(null);
     setSelectedComponent(null);
-    setCurrentImageIndex(0);
-    upsertSession(nextDocument, []);
+    setCurrentImageIndex(-1);
+    upsertSession(stubDoc, []);
   }, [document, getNextNewChatName, upsertSession]);
 
   const clearDocument = useCallback(() => {
@@ -322,14 +378,17 @@ export const MobileDocumentProvider = ({ children }) => {
     setSelectedComponent,
     currentImageIndex,
     setCurrentImageIndex,
+    isMultiPage: (document?.images?.length ?? 0) > 1,
     accessibilitySettings,
     setDarkMode,
     recentSessions,
     uploadAndProcess,
+    attachDocumentToSession,
     loadDemo,
     askQuestion,
     askAboutComponent,
     consumePendingQuestion,
+    setPendingQuestion,
     addMessage,
     clearChat,
     startNewChat,

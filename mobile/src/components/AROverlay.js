@@ -68,24 +68,17 @@ export default function AROverlay({
   onComponentPress,
   showLabels = true,
   cameraMode = false,
+  containerWidth: containerWidthProp,
 }) {
-  if (
-    !imageDimensions?.width ||
-    !imageDimensions?.height ||
-    components.length === 0
-  ) {
-    return null;
-  }
-
-  const displayWidth  = cameraMode
-    ? (imageDimensions.displayWidth  || (SCREEN_WIDTH - 32))
-    : (SCREEN_WIDTH - 32);
-  const displayHeight = cameraMode
-    ? (imageDimensions.displayHeight || displayWidth * (imageDimensions.height / imageDimensions.width))
-    : displayWidth * (imageDimensions.height / imageDimensions.width);
-
   const scanAnim = useRef(new Animated.Value(0)).current;
   const pulseAnim = useRef(new Animated.Value(0)).current;
+
+  const displayWidth  = cameraMode
+    ? (imageDimensions?.displayWidth  || (SCREEN_WIDTH - 32))
+    : (containerWidthProp || SCREEN_WIDTH - 32);
+  const displayHeight = cameraMode
+    ? (imageDimensions?.displayHeight || displayWidth * ((imageDimensions?.height || 1) / (imageDimensions?.width || 1)))
+    : displayWidth * ((imageDimensions?.height || 1) / (imageDimensions?.width || 1));
 
   useEffect(() => {
     const scanLoop = Animated.loop(
@@ -144,6 +137,14 @@ export default function AROverlay({
     vertical: Array.from({ length: Math.floor(displayWidth / 44) + 1 }, (_, index) => index * 44),
     horizontal: Array.from({ length: Math.floor(displayHeight / 44) + 1 }, (_, index) => index * 44),
   }), [displayHeight, displayWidth]);
+
+  if (
+    !imageDimensions?.width ||
+    !imageDimensions?.height ||
+    components.length === 0
+  ) {
+    return null;
+  }
 
   return (
     <View style={[styles.overlay, { width: displayWidth, height: displayHeight }]}>

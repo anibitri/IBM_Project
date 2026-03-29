@@ -7,6 +7,7 @@ import {
   TextInput,
   TouchableOpacity,
   SafeAreaView,
+  ScrollView,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
@@ -20,19 +21,29 @@ const SORT_OPTIONS = [
 ];
 
 export default function ComponentsScreen({ navigation }) {
-  const { document, accessibilitySettings } = useDocumentContext();
+  const {
+    document,
+    accessibilitySettings,
+    currentImageIndex,
+    setCurrentImageIndex,
+    isMultiPage,
+  } = useDocumentContext();
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState('confidence');
   const darkMode = !!accessibilitySettings?.darkMode;
   const p = getPalette(darkMode);
 
   useEffect(() => {
-    if (!document) navigation.popToTop();
+    if (!document) navigation.navigate('HomeMain');
   }, [document, navigation]);
 
   if (!document) return null;
 
-  const components = document.ar?.components || [];
+  const pages = document?.images || [];
+  const currentPage = currentImageIndex >= 0 && pages[currentImageIndex]
+    ? pages[currentImageIndex]
+    : null;
+  const components = currentPage?.ar_components || document.ar?.components || [];
 
   const filtered = components.filter((c) =>
     c.label.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -60,6 +71,48 @@ export default function ComponentsScreen({ navigation }) {
           />
         </View>
       </View>
+
+      {/* Page filter — multi-page documents only */}
+      {isMultiPage && (
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          style={[styles.pageFilterRow, { backgroundColor: p.bg, borderBottomColor: p.border }]}
+          contentContainerStyle={styles.pageFilterContent}
+        >
+          <TouchableOpacity
+            style={[
+              styles.pageFilterChip,
+              { backgroundColor: currentImageIndex === -1 ? p.primaryGlass : p.cardAbs, borderColor: currentImageIndex === -1 ? p.primary : p.border },
+            ]}
+            onPress={() => setCurrentImageIndex(-1)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="documents-outline" size={12} color={currentImageIndex === -1 ? p.primary : p.subtext} />
+            <Text style={[styles.pageFilterText, { color: currentImageIndex === -1 ? p.primary : p.subtext }]}>
+              All ({document.ar?.components?.length || 0})
+            </Text>
+          </TouchableOpacity>
+          {pages.map((pg, idx) => {
+            const active = currentImageIndex === idx;
+            return (
+              <TouchableOpacity
+                key={idx}
+                style={[
+                  styles.pageFilterChip,
+                  { backgroundColor: active ? p.primaryGlass : p.cardAbs, borderColor: active ? p.primary : p.border },
+                ]}
+                onPress={() => setCurrentImageIndex(idx)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.pageFilterText, { color: active ? p.primary : p.subtext }]}>
+                  Pg {pg.page || idx + 1} ({(pg.ar_components || []).length})
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </ScrollView>
+      )}
 
       {/* Sort + count row */}
       <View style={[styles.controlRow, { backgroundColor: p.bg, borderBottomColor: p.border }]}>
@@ -129,6 +182,29 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   searchInput: { flex: 1, fontSize: 15, padding: 0 },
+
+  /* Page filter */
+  pageFilterRow: {
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    maxHeight: 44,
+  },
+  pageFilterContent: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 6,
+    gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  pageFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  pageFilterText: { fontSize: 12, fontWeight: '600' },
 
   controlRow: {
     flexDirection: 'row',

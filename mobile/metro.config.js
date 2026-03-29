@@ -20,6 +20,12 @@ const config = {
       path.resolve(projectRoot, 'node_modules'),
       path.resolve(workspaceRoot, 'node_modules'),
     ],
+    // 5. Pin React and React Native to the single root-level copies so all
+    //    workspace packages resolve the same instance (prevents hook errors).
+    extraNodeModules: {
+      react: path.resolve(workspaceRoot, 'node_modules/react'),
+      'react-native': path.resolve(workspaceRoot, 'node_modules/react-native'),
+    },
     // 3. Keep your custom Viro AR extensions
     assetExts: [
       ...defaultConfig.resolver.assetExts,
@@ -34,8 +40,11 @@ const config = {
       /.*\/backend\/.*/,
       /.*\/test_visuals\/.*/,
       /.*\/reports\/.*/,
+      // Block web workspaces to prevent React 19 from being picked up
+      new RegExp(`${workspaceRoot.replace(/\//g, '\\/')}\\/web\\/.*`),
+      new RegExp(`${workspaceRoot.replace(/\//g, '\\/')}\\/frontend\\/.*`),
       // Prevents Metro from getting confused by deeply nested duplicate modules
-      /.*\/node_modules\/.*\/node_modules\/.*/, 
+      /.*\/node_modules\/.*\/node_modules\/.*/,
     ]),
   },
 };

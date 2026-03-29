@@ -11,22 +11,14 @@ import {
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useMobileDocumentContext } from '../context/MobileDocumentContext';
+import { timeAgo } from '@ar-viewer/shared';
 import { spacing, getPalette } from '../styles/theme';
-
-function timeAgo(ts) {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
 
 export default function HomeScreen({ navigation }) {
   const {
     loading,
     loadDemo,
+    clearDocument,
     recentSessions,
     restoreSession,
     removeSession,
@@ -43,9 +35,11 @@ export default function HomeScreen({ navigation }) {
     if (ok) navigation.navigate('Diagram');
   };
 
-  const handleARCamera = async () => {
-    const ok = await loadDemo();
-    if (ok) navigation.navigate('Diagram', { cameraMode: true });
+  const handleARCamera = () => {
+    // Always start a fresh session for live AR — previous document/chat cleared.
+    // Scanned results will be auto-saved to history via upsertSession after the scan completes.
+    clearDocument();
+    navigation.navigate('Diagram', { cameraMode: true });
   };
 
   const handleRestore = (session) => {

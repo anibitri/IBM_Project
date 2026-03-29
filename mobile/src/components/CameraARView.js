@@ -14,10 +14,10 @@ import {
   TouchableOpacity,
   Animated,
   StatusBar,
-  SafeAreaView,
-  Modal,
+
   Platform,
   ScrollView,
+  AppState,
 } from 'react-native';
 
 // Bare React Native Replacements
@@ -48,6 +48,7 @@ export default function CameraARView({
   fullscreen: fullscreenProp = false,
   onToggleFullscreen,
   onScan,
+  onAskAI,
 }) {
   // Vision Camera hooks
   const { hasPermission, requestPermission } = useCameraPermission();
@@ -58,6 +59,11 @@ export default function CameraARView({
   const [internalSelected, setInternalSelected] = useState(null);
   const [scanStatus, setScanStatus] = useState('idle'); // 'idle' | 'capturing' | 'processing' | 'done' | 'error'
   const [scanError, setScanError] = useState(null);
+  const [appIsActive, setAppIsActive] = useState(AppState.currentState === 'active');
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => setAppIsActive(state === 'active'));
+    return () => sub.remove();
+  }, []);
 
   /* ── Device-motion parallax ── */
   const offsetX = useRef(new Animated.Value(0)).current;
@@ -209,7 +215,9 @@ export default function CameraARView({
   }, [hasPermission]);
 
   const isFullscreen = fullscreenProp;
-  const displayWidth = isFullscreen ? SCREEN_WIDTH : SCREEN_WIDTH - 32;
+  // Non-fullscreen camera uses full SCREEN_WIDTH — the canvasWrap in DiagramScreen
+  // removes its margin when in camera mode so the camera fills edge-to-edge.
+  const displayWidth = SCREEN_WIDTH;
   const aspectRatio =
     (imageDimensions?.height || 600) / (imageDimensions?.width || 800);
   const displayHeight = isFullscreen
@@ -419,7 +427,7 @@ export default function CameraARView({
           ref={cameraRef}
           style={StyleSheet.absoluteFill}
           device={device}
-          isActive={true}
+          isActive={appIsActive}
           photo={true}
         />
 
@@ -728,6 +736,14 @@ export default function CameraARView({
               <Ionicons name="close" size={18} color="#FFB74D" />
             </TouchableOpacity>
           )}
+          {onAskAI && components.length > 0 && (
+            <TouchableOpacity
+              style={[styles.ctrlBtn, { borderColor: '#2997ff' }]}
+              onPress={onAskAI}
+            >
+              <Ionicons name="sparkles-outline" size={18} color="#2997ff" />
+            </TouchableOpacity>
+          )}
           {onScan && (
             <TouchableOpacity
               style={[
@@ -781,17 +797,10 @@ export default function CameraARView({
 
   if (isFullscreen) {
     return (
-      <Modal
-        visible
-        animationType="slide"
-        statusBarTranslucent
-        supportedOrientations={['portrait']}
-      >
+      <>
         <StatusBar hidden />
-        <SafeAreaView style={styles.fullscreenSafe}>
-          {cameraContent}
-        </SafeAreaView>
-      </Modal>
+        {cameraContent}
+      </>
     );
   }
 
@@ -814,7 +823,6 @@ const styles = StyleSheet.create({
     borderRadius: 0,
     flex: 1,
   },
-  fullscreenSafe: { flex: 1, backgroundColor: '#000' },
 
   /* Vignette */
   vignetteTop: {
@@ -841,7 +849,7 @@ const styles = StyleSheet.create({
     right: 0,
     height: 120,
     zIndex: 0,
-    backgroundColor: 'rgba(0,0,0,0.35)',
+    backgroundColor: 'transparent',
   },
 
   /* Scan beam */

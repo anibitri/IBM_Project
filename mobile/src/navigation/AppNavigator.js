@@ -134,9 +134,9 @@ export default function AppNavigator() {
             backgroundColor: darkMode ? p.cardAbs : p.card,
             borderTopWidth: 1,
             borderTopColor: darkMode ? p.border : p.border,
-            paddingBottom: 8,
+            paddingBottom: 14,
             paddingTop: 8,
-            height: 64,
+            height: 70,
           },
           tabBarLabelStyle: {
             fontSize: 11,

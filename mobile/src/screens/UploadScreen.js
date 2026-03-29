@@ -16,8 +16,18 @@ import { launchImageLibrary, launchCamera } from 'react-native-image-picker';
 import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
 import { spacing, getPalette } from '../styles/theme';
 
-export default function UploadScreen({ navigation }) {
-  const { uploadAndProcess, loading, error, clearDocument, accessibilitySettings } = useDocumentContext();
+export default function UploadScreen({ navigation, route }) {
+  const { uploadAndProcess, attachDocumentToSession, loading, error, clearError, clearDocument, accessibilitySettings } = useDocumentContext();
+  const showAnalysisError = (msg) => {
+    clearError();
+    setPreview(null);
+    Alert.alert('Analysis Failed', msg || 'Failed to process document');
+  };
+  const attachMode = route?.params?.attachMode === true;
+  const processFile = attachMode ? attachDocumentToSession : uploadAndProcess;
+  const postUploadNav = () => attachMode
+    ? navigation.getParent()?.navigate('Chat', { screen: 'ChatMain' })
+    : navigation.navigate('Diagram');
   const [preview, setPreview] = useState(null);
   const darkMode = !!accessibilitySettings?.darkMode;
   const p = getPalette(darkMode);
@@ -31,8 +41,8 @@ export default function UploadScreen({ navigation }) {
       const asset = result.assets[0];
       const file = { uri: asset.uri, type: asset.type || 'image/png', name: asset.fileName || 'diagram.png' };
       setPreview(asset.uri);
-      await uploadAndProcess(file);
-      navigation.navigate('Diagram');
+      const ok = await processFile(file);
+      if (ok) { postUploadNav(); } else { showAnalysisError(error); }
     } catch (err) {
       Alert.alert('Error', 'Failed to pick image');
     }
@@ -45,8 +55,8 @@ export default function UploadScreen({ navigation }) {
         copyTo: 'cachesDirectory',
       });
       const file = { uri: result.fileCopyUri || result.uri, type: result.type || 'application/pdf', name: result.name || 'document.pdf' };
-      await uploadAndProcess(file);
-      navigation.navigate('Diagram');
+      const ok = await processFile(file);
+      if (ok) { postUploadNav(); } else { showAnalysisError(error); }
     } catch (err) {
       if (DocumentPicker.isCancel(err)) return;
       Alert.alert('Error', 'Failed to pick document');
@@ -62,8 +72,8 @@ export default function UploadScreen({ navigation }) {
       const asset = result.assets[0];
       const file = { uri: asset.uri, type: asset.type || 'image/png', name: asset.fileName || 'diagram.png' };
       setPreview(asset.uri);
-      await uploadAndProcess(file);
-      navigation.navigate('Diagram');
+      const ok = await processFile(file);
+      if (ok) { postUploadNav(); } else { showAnalysisError(error); }
     } catch (err) {
       Alert.alert('Error', 'Failed to take photo');
     }
@@ -169,16 +179,6 @@ export default function UploadScreen({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* Error */}
-        {error && (
-          <View style={[styles.errorWrap, { borderColor: 'rgba(255,69,58,0.3)', backgroundColor: 'rgba(255,69,58,0.10)' }]}>
-            <Ionicons name="alert-circle-outline" size={18} color={p.error} />
-            <Text style={[styles.errorText, { color: p.error }]}>{error}</Text>
-            <TouchableOpacity onPress={() => setPreview(null)}>
-              <Text style={[styles.retryText, { color: p.primary }]}>Retry</Text>
-            </TouchableOpacity>
-          </View>
-        )}
       </ScrollView>
     </SafeAreaView>
   );
@@ -257,17 +257,4 @@ const styles = StyleSheet.create({
   optionTitle: { fontSize: 16, fontWeight: '600', color: '#fff', marginBottom: 2 },
   optionSub: { fontSize: 13, color: 'rgba(255,255,255,0.7)' },
 
-  /* Error */
-  errorWrap: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-    marginHorizontal: spacing.lg,
-    marginTop: 16,
-    padding: 14,
-    borderRadius: 14,
-    borderWidth: 1,
-  },
-  errorText: { flex: 1, fontSize: 13, fontWeight: '500' },
-  retryText: { fontSize: 13, fontWeight: '700' },
 });

@@ -6,34 +6,23 @@ import {
   FlatList,
   TextInput,
   TouchableOpacity,
+  TouchableWithoutFeedback,
   KeyboardAvoidingView,
   Platform,
   ActivityIndicator,
-  SafeAreaView,
   Alert,
   Modal,
   Animated,
-  Dimensions,
   Keyboard,
+  ScrollView,
 } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import Ionicons from 'react-native-vector-icons/Ionicons';
-import Tts from 'react-native-tts';
 import { useMobileDocumentContext as useDocumentContext } from '../context/MobileDocumentContext';
+import { timeAgo } from '@ar-viewer/shared';
 import { spacing, getPalette } from '../styles/theme';
-
-const { width: SW } = Dimensions.get('window');
-const DRAWER_WIDTH = SW * 0.78;
-
-function timeAgo(ts) {
-  const diff = Date.now() - ts;
-  const mins = Math.floor(diff / 60000);
-  if (mins < 1) return 'Just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
-}
+import { useSessionDrawer, DRAWER_WIDTH } from '../hooks/useSessionDrawer';
+import { useTTS } from '../hooks/useTTS';
 
 export default function ChatScreen({ navigation }) {
   const {
@@ -49,23 +38,30 @@ export default function ChatScreen({ navigation }) {
     renameSession,
     clearAllHistory,
     accessibilitySettings,
+    pendingQuestion,
+    consumePendingQuestion,
+    currentImageIndex,
+    setCurrentImageIndex,
+    isMultiPage,
+    attachDocumentToSession,
+    addMessage,
+    clearError,
   } = useDocumentContext();
 
   const [input, setInput] = useState('');
-  const [drawerVisible, setDrawerVisible] = useState(false);
   const [renameVisible, setRenameVisible] = useState(false);
   const [renameTargetId, setRenameTargetId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
-  const [speakingIndex, setSpeakingIndex] = useState(null);
 
-  const drawerAnim = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
+  const { visible: drawerVisible, translateX: drawerAnim, open: openDrawer, close: closeDrawer } = useSessionDrawer();
+  const { speakingIndex, speak: speakMessage } = useTTS();
+
   const flatListRef = useRef(null);
   const inputRef = useRef(null);
-  const insets = useSafeAreaInsets();
-  const HEADER_HEIGHT = 60;
 
   const darkMode = !!accessibilitySettings?.darkMode;
   const p = getPalette(darkMode);
+  const insets = useSafeAreaInsets();
 
   /* ── Scroll to bottom ── */
   useEffect(() => {
@@ -73,22 +69,6 @@ export default function ChatScreen({ navigation }) {
       setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
     }
   }, [chatHistory]);
-
-  /* ── TTS setup ── */
-  useEffect(() => {
-    Tts.getInitStatus()
-      .then(() => {
-        try { Tts.setDefaultLanguage('en-US'); Tts.setDefaultRate(0.5); } catch (e) {}
-      })
-      .catch(() => {});
-    const onFinish = Tts.addEventListener('tts-finish', () => setSpeakingIndex(null));
-    const onCancel = Tts.addEventListener('tts-cancel', () => setSpeakingIndex(null));
-    return () => {
-      try { Tts.stop(); } catch (e) {}
-      try { onFinish?.remove(); } catch (e) {}
-      try { onCancel?.remove(); } catch (e) {}
-    };
-  }, []);
 
   /* ── Keyboard scroll ── */
   useEffect(() => {
@@ -99,49 +79,41 @@ export default function ChatScreen({ navigation }) {
     return () => sub.remove();
   }, [chatHistory.length]);
 
-  /* ── Drawer ── */
-  const openDrawer = () => {
-    setDrawerVisible(true);
-    Animated.spring(drawerAnim, { toValue: 0, useNativeDriver: true, damping: 20, stiffness: 200 }).start();
-  };
-  const closeDrawer = () => {
-    Animated.timing(drawerAnim, { toValue: -DRAWER_WIDTH, duration: 200, useNativeDriver: true }).start(
-      () => setDrawerVisible(false),
-    );
-  };
+  /* ── Pre-fill input from pending question (set by DiagramAskSheet) ── */
+  useEffect(() => {
+    if (pendingQuestion) {
+      const q = consumePendingQuestion();
+      if (q) {
+        setInput(q);
+        setTimeout(() => inputRef.current?.focus(), 150);
+      }
+    }
+  }, [pendingQuestion]);
 
   /* ── Send ── */
-  const ensureDoc = async () => { if (!document) await loadDemo(); };
   const handleSend = async () => {
     if (!input.trim() || loading) return;
-    await ensureDoc();
     const q = input.trim();
     setInput('');
-    try { await askQuestion(q); } catch (e) {}
+    try {
+      await askQuestion(q);
+    } catch (e) {
+      clearError();
+      addMessage('assistant', '⚠️ Failed to get a response. Please try again.');
+    }
   };
 
   /* ── Attach ── */
-  const handlePlus = () =>
+  const handlePlus = () => {
+    if (!document?.file) {
+      navigation.getParent()?.navigate('Home', { screen: 'Upload', params: { attachMode: true } });
+      return;
+    }
     Alert.alert('Attach', 'Add a file or image', [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Gallery', onPress: () => navigation.navigate('Upload') },
       { text: 'Document', onPress: () => navigation.navigate('Upload') },
     ]);
-
-  /* ── Voice ── */
-  const handleVoice = () => {
-    inputRef.current?.focus();
-    Alert.alert('Voice Input', 'Tap the microphone on your keyboard to dictate.', [{ text: 'OK' }]);
-  };
-
-  /* ── TTS ── */
-  const speakMessage = (content, idx) => {
-    try {
-      if (speakingIndex === idx) { Tts.stop(); setSpeakingIndex(null); return; }
-      Tts.stop();
-      setSpeakingIndex(idx);
-      Tts.speak(content);
-    } catch (e) { setSpeakingIndex(null); }
   };
 
   /* ── Session actions ── */
@@ -152,6 +124,10 @@ export default function ChatScreen({ navigation }) {
       { text: 'Remove', style: 'destructive', onPress: () => removeSession(s.id) },
     ]);
   const openRename = (s) => { setRenameTargetId(s.id); setRenameValue(s.fileName || ''); setRenameVisible(true); };
+  const openRenameForCurrent = () => {
+    const currentSession = recentSessions.find(s => s.id === document?.sessionId);
+    if (currentSession) openRename(currentSession);
+  };
   const confirmRename = () => {
     if (renameTargetId) renameSession(renameTargetId, renameValue);
     setRenameVisible(false); setRenameTargetId(null); setRenameValue('');
@@ -212,9 +188,9 @@ export default function ChatScreen({ navigation }) {
             { backgroundColor: p.cardAbs, transform: [{ translateX: drawerAnim }] },
           ]}
         >
-          <SafeAreaView style={{ flex: 1 }}>
+          <SafeAreaView edges={['bottom']} style={{ flex: 1 }}>
             {/* Drawer header */}
-            <View style={[styles.drawerHeader, { borderBottomColor: p.border }]}>
+            <View style={[styles.drawerHeader, { borderBottomColor: p.border, paddingTop: insets.top + 14 }]}>
               <Text style={[styles.drawerTitle, { color: p.text }]}>History</Text>
               <TouchableOpacity
                 style={[styles.drawerCloseBtn, { backgroundColor: p.cardSoftAbs }]}
@@ -237,11 +213,18 @@ export default function ChatScreen({ navigation }) {
               {document && (
                 <TouchableOpacity
                   style={[styles.drawerDiagramBtn, { backgroundColor: p.cardSoftAbs, borderColor: p.border }]}
-                  onPress={() => { closeDrawer(); navigation.getParent()?.navigate('Home', { screen: 'Diagram' }); }}
+                  onPress={() => {
+                    closeDrawer();
+                    if (document?.file) {
+                      navigation.getParent()?.navigate('Home', { screen: 'Diagram' });
+                    } else {
+                      navigation.getParent()?.navigate('Home', { screen: 'Upload', params: { attachMode: true } });
+                    }
+                  }}
                   activeOpacity={0.8}
                 >
-                  <Ionicons name="layers-outline" size={16} color={p.primary} />
-                  <Text style={[styles.drawerDiagramText, { color: p.text }]}>Diagram</Text>
+                  <Ionicons name={document?.file ? 'layers-outline' : 'attach-outline'} size={16} color={p.primary} />
+                  <Text style={[styles.drawerDiagramText, { color: p.text }]}>{document?.file ? 'Diagram' : 'Attach'}</Text>
                 </TouchableOpacity>
               )}
             </View>
@@ -286,7 +269,9 @@ export default function ChatScreen({ navigation }) {
                     </View>
                     <View style={styles.drawerItemMeta}>
                       <Text style={[styles.drawerMetaText, { color: p.muted }]}>
-                        {session.componentCount || 0} components
+                        {session.storedName
+                          ? `${session.componentCount || 0} components`
+                          : 'No diagram'}
                         {session.messageCount ? ` · ${session.messageCount} msgs` : ''}
                       </Text>
                       <Text style={[styles.drawerMetaText, { color: p.muted }]}>
@@ -343,7 +328,7 @@ export default function ChatScreen({ navigation }) {
   ) : null;
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: p.bg }]}>
+    <SafeAreaView edges={['top']} style={[styles.safe, { backgroundColor: p.bg }]}>
       {historyDrawer}
       {renameModal}
 
@@ -356,35 +341,80 @@ export default function ChatScreen({ navigation }) {
         >
           <Ionicons name="menu-outline" size={22} color={p.text} />
         </TouchableOpacity>
-        <View style={styles.headerCenter}>
-          <Text style={[styles.headerTitle, { color: p.text }]} numberOfLines={1}>{docName}</Text>
+        <TouchableOpacity
+          style={styles.headerCenter}
+          onPress={openRenameForCurrent}
+          activeOpacity={0.7}
+          disabled={!document}
+        >
+          <View style={styles.headerTitleRow}>
+            <Text style={[styles.headerTitle, { color: p.text }]} numberOfLines={1}>{docName}</Text>
+            {document && <Ionicons name="pencil-outline" size={12} color={p.muted} />}
+          </View>
           <Text style={[styles.headerSub, { color: p.muted }]}>AI ASSISTANT</Text>
-        </View>
+          {!document?.file && document && (
+            <TouchableOpacity
+              onPress={() => navigation.getParent()?.navigate('Home', { screen: 'Upload', params: { attachMode: true } })}
+              activeOpacity={0.75}
+              style={[styles.noFilePill, { backgroundColor: p.primaryGlass, borderColor: p.primary + '44' }]}
+            >
+              <Ionicons name="attach-outline" size={10} color={p.primary} />
+              <Text style={[styles.noFilePillText, { color: p.primary }]}>Attach diagram</Text>
+            </TouchableOpacity>
+          )}
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.menuBtn, { backgroundColor: p.cardSoftAbs }]}
-          onPress={() => navigation.getParent()?.navigate('Home', { screen: 'Diagram' })}
+          onPress={() => {
+            if (document?.file) {
+              navigation.getParent()?.navigate('Home', { screen: 'Diagram' });
+            } else {
+              navigation.getParent()?.navigate('Home', { screen: 'Upload', params: { attachMode: true } });
+            }
+          }}
           activeOpacity={0.7}
         >
-          <Ionicons name="layers-outline" size={20} color={p.primary} />
+          <Ionicons name={document?.file ? 'layers-outline' : 'attach-outline'} size={20} color={p.primary} />
         </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
-        keyboardVerticalOffset={Platform.OS === 'ios' ? insets.top + HEADER_HEIGHT : 0}
+        keyboardVerticalOffset={0}
       >
         {/* Empty state */}
         {chatHistory.length === 0 ? (
-          <View style={styles.emptyWrap}>
-            <View style={[styles.emptyIcon, { backgroundColor: p.primaryGlass, borderColor: p.border }]}>
-              <Ionicons name="chatbubble-ellipses-outline" size={32} color={p.primary} />
+          <TouchableWithoutFeedback onPress={Keyboard.dismiss}>
+            <View style={styles.emptyWrap}>
+              <View style={[styles.emptyIcon, { backgroundColor: p.primaryGlass, borderColor: p.border }]}>
+                <Ionicons name="chatbubble-ellipses-outline" size={32} color={p.primary} />
+              </View>
+              {document?.file ? (
+                <>
+                  <Text style={[styles.emptyTitle, { color: p.text }]}>Ask about your diagram</Text>
+                  <Text style={[styles.emptyHint, { color: p.subtext }]}>
+                    Ask questions about components, connections and architecture.
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <Text style={[styles.emptyTitle, { color: p.text }]}>Ask me anything</Text>
+                  <Text style={[styles.emptyHint, { color: p.subtext }]}>
+                    Chat freely, or attach a diagram for component analysis and AI Q&A.
+                  </Text>
+                  <TouchableOpacity
+                    style={[styles.attachDiagramBtn, { backgroundColor: p.primary }]}
+                    onPress={() => navigation.getParent()?.navigate('Home', { screen: 'Upload', params: { attachMode: true } })}
+                    activeOpacity={0.82}
+                  >
+                    <Ionicons name="attach-outline" size={18} color="#fff" />
+                    <Text style={styles.attachDiagramBtnText}>Attach Diagram</Text>
+                  </TouchableOpacity>
+                </>
+              )}
             </View>
-            <Text style={[styles.emptyTitle, { color: p.text }]}>Ask about your diagram</Text>
-            <Text style={[styles.emptyHint, { color: p.subtext }]}>
-              Upload a diagram then ask questions about its components, connections and architecture.
-            </Text>
-          </View>
+          </TouchableWithoutFeedback>
         ) : (
           <FlatList
             ref={flatListRef}
@@ -394,6 +424,7 @@ export default function ChatScreen({ navigation }) {
             contentContainerStyle={styles.messagesList}
             onContentSizeChange={() => flatListRef.current?.scrollToEnd({ animated: true })}
             showsVerticalScrollIndicator={false}
+            keyboardDismissMode="on-drag"
           />
         )}
 
@@ -405,22 +436,48 @@ export default function ChatScreen({ navigation }) {
           </View>
         )}
 
+        {/* Page scope chips — multi-page documents only */}
+        {isMultiPage && (
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={[styles.scopeRow, { backgroundColor: p.bg, borderTopColor: p.border }]}
+            contentContainerStyle={styles.scopeRowContent}
+          >
+            <TouchableOpacity
+              style={[styles.scopeChip, { borderColor: currentImageIndex === -1 ? p.primary : p.border, backgroundColor: currentImageIndex === -1 ? p.primaryGlass : p.cardAbs }]}
+              onPress={() => setCurrentImageIndex(-1)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="documents-outline" size={11} color={currentImageIndex === -1 ? p.primary : p.subtext} />
+              <Text style={[styles.scopeChipText, { color: currentImageIndex === -1 ? p.primary : p.subtext }]}>Document</Text>
+            </TouchableOpacity>
+            {(document?.images || []).map((pg, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={[styles.scopeChip, { borderColor: currentImageIndex === idx ? p.primary : p.border, backgroundColor: currentImageIndex === idx ? p.primaryGlass : p.cardAbs }]}
+                onPress={() => setCurrentImageIndex(idx)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.scopeChipText, { color: currentImageIndex === idx ? p.primary : p.subtext }]}>
+                  Page {pg.page || idx + 1}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        )}
+
         {/* Input bar */}
-        <View style={[styles.inputBar, { backgroundColor: p.bg, borderTopColor: p.border }]}>
+        <View style={[styles.inputBar, {
+          backgroundColor: p.bg,
+          borderTopColor: p.border,
+        }]}>
           <TouchableOpacity
             style={[styles.iconBtn, { backgroundColor: p.cardSoftAbs }]}
             onPress={handlePlus}
             activeOpacity={0.7}
           >
             <Ionicons name="add" size={20} color={p.text} />
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.iconBtn, { backgroundColor: p.cardSoftAbs }]}
-            onPress={handleVoice}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="mic-outline" size={18} color={p.primary} />
           </TouchableOpacity>
 
           <TextInput
@@ -474,6 +531,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerCenter: { flex: 1 },
+  headerTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
   headerTitle: { fontSize: 17, fontWeight: '700', letterSpacing: -0.3 },
   headerSub: { fontSize: 11, fontWeight: '600', letterSpacing: 0.5, marginTop: 1 },
 
@@ -538,6 +596,29 @@ const styles = StyleSheet.create({
   },
   typingText: { fontSize: 13 },
 
+  /* Scope chips */
+  scopeRow: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    maxHeight: 44,
+  },
+  scopeRowContent: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  scopeChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  scopeChipText: { fontSize: 12, fontWeight: '600' },
+
   /* Input bar */
   inputBar: {
     flexDirection: 'row',
@@ -593,7 +674,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'space-between',
     paddingHorizontal: 18,
-    paddingTop: 16,
     paddingBottom: 12,
     borderBottomWidth: StyleSheet.hairlineWidth,
   },
@@ -663,6 +743,37 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   drawerClearText: { fontSize: 14, fontWeight: '600' },
+
+  /* Attach diagram button (empty state) */
+  attachDiagramBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    paddingHorizontal: 20,
+    paddingVertical: 12,
+    borderRadius: 14,
+    marginTop: 4,
+    shadowColor: '#2997ff',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  attachDiagramBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+
+  /* No-file pill in header */
+  noFilePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 100,
+    borderWidth: 1,
+    marginTop: 3,
+    alignSelf: 'flex-start',
+  },
+  noFilePillText: { fontSize: 10, fontWeight: '600' },
 
   /* Rename modal */
   renameOverlay: { flex: 1, justifyContent: 'center', paddingHorizontal: 24 },

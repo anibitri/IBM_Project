@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import { useState } from 'react';
 import {
   View,
   Text,
@@ -8,14 +8,17 @@ import {
   Alert,
   ScrollView,
   SafeAreaView,
+  ActivityIndicator,
 } from 'react-native';
 import Ionicons from 'react-native-vector-icons/Ionicons';
 import { useMobileDocumentContext } from '../context/MobileDocumentContext';
+import { useHealthCheck } from '../hooks/useHealthCheck';
 import { spacing, getPalette } from '../styles/theme';
 
 export default function SettingsScreen() {
   const { clearChat, clearDocument, clearAllHistory, accessibilitySettings, setDarkMode } = useMobileDocumentContext();
   const [notifications, setNotifications] = useState(true);
+  const { data: healthData, loading: healthLoading, error: healthError, check: handleCheckHealth } = useHealthCheck();
   const darkMode = !!accessibilitySettings?.darkMode;
   const p = getPalette(darkMode);
 
@@ -114,6 +117,99 @@ export default function SettingsScreen() {
           </TouchableOpacity>
         </SectionCard>
 
+        {/* Backend */}
+        <Text style={[styles.sectionHeader, { color: p.subtext }]}>BACKEND</Text>
+        <SectionCard>
+          <TouchableOpacity
+            style={styles.settingRow}
+            onPress={handleCheckHealth}
+            activeOpacity={0.7}
+            disabled={healthLoading}
+          >
+            <View style={[styles.settingIconWrap, { backgroundColor: 'rgba(41,151,255,0.15)' }]}>
+              {healthLoading
+                ? <ActivityIndicator size="small" color={p.primary} />
+                : <Ionicons name="pulse-outline" size={18} color={p.primary} />}
+            </View>
+            <Text style={[styles.settingLabel, { color: p.text }]}>Check Backend Health</Text>
+            {!healthLoading && <Ionicons name="chevron-forward" size={16} color={p.muted} />}
+          </TouchableOpacity>
+
+          {/* Error state */}
+          {healthError && (
+            <>
+              <RowDivider />
+              <View style={[styles.healthResult, { backgroundColor: 'rgba(255,69,58,0.08)' }]}>
+                <Ionicons name="alert-circle-outline" size={16} color={p.error} />
+                <Text style={[styles.healthErrorText, { color: p.error }]}>{healthError}</Text>
+              </View>
+            </>
+          )}
+
+          {/* Success state */}
+          {healthData && (
+            <>
+              <RowDivider />
+              <View style={styles.healthResult}>
+                {/* Status + mode row */}
+                <View style={styles.healthTopRow}>
+                  <View style={[
+                    styles.healthStatusBadge,
+                    { backgroundColor: healthData.status === 'healthy' ? 'rgba(48,209,88,0.15)' : 'rgba(255,159,10,0.15)' },
+                  ]}>
+                    <Ionicons
+                      name={healthData.status === 'healthy' ? 'checkmark-circle' : 'warning'}
+                      size={13}
+                      color={healthData.status === 'healthy' ? p.success : '#FF9F0A'}
+                    />
+                    <Text style={[
+                      styles.healthStatusText,
+                      { color: healthData.status === 'healthy' ? p.success : '#FF9F0A' },
+                    ]}>
+                      {healthData.status?.toUpperCase()}
+                    </Text>
+                  </View>
+                  {healthData.mode && (
+                    <View style={[styles.healthModeBadge, { backgroundColor: p.primaryGlass }]}>
+                      <Text style={[styles.healthModeText, { color: p.primary }]}>{healthData.mode}</Text>
+                    </View>
+                  )}
+                </View>
+
+                {/* Models */}
+                {healthData.models && Object.keys(healthData.models).length > 0 && (
+                  <View style={styles.healthModels}>
+                    {Object.entries(healthData.models).map(([name, info]) => {
+                      if (typeof info !== 'object' || info === null) return null;
+                      const loaded = info.loaded === true;
+                      return (
+                        <View key={name} style={[styles.healthModelRow, { borderColor: p.border }]}>
+                          <Ionicons
+                            name={loaded ? 'checkmark-circle-outline' : 'close-circle-outline'}
+                            size={14}
+                            color={loaded ? p.success : p.error}
+                          />
+                          <Text style={[styles.healthModelName, { color: p.text }]}>
+                            {name.charAt(0).toUpperCase() + name.slice(1)}
+                          </Text>
+                          <Text style={[styles.healthModelStatus, { color: loaded ? p.success : p.error }]}>
+                            {loaded ? 'Loaded' : 'Not loaded'}
+                          </Text>
+                          {info.note && (
+                            <Text style={[styles.healthModelNote, { color: p.muted }]} numberOfLines={1}>
+                              {info.note}
+                            </Text>
+                          )}
+                        </View>
+                      );
+                    })}
+                  </View>
+                )}
+              </View>
+            </>
+          )}
+        </SectionCard>
+
         {/* About */}
         <Text style={[styles.sectionHeader, { color: p.subtext }]}>ABOUT</Text>
         <SectionCard>
@@ -204,4 +300,70 @@ const styles = StyleSheet.create({
   settingValue: { fontSize: 14 },
 
   divider: { height: StyleSheet.hairlineWidth, marginLeft: 56 },
+
+  /* Health check result */
+  healthResult: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  healthTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  healthStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 100,
+  },
+  healthStatusText: {
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  healthModeBadge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 100,
+  },
+  healthModeText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  healthModels: {
+    gap: 6,
+  },
+  healthModelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    borderWidth: StyleSheet.hairlineWidth,
+    flexWrap: 'wrap',
+  },
+  healthModelName: {
+    fontSize: 13,
+    fontWeight: '600',
+    flex: 1,
+  },
+  healthModelStatus: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  healthModelNote: {
+    fontSize: 11,
+    width: '100%',
+    marginTop: 1,
+  },
+  healthErrorText: {
+    fontSize: 13,
+    flex: 1,
+    lineHeight: 18,
+  },
 });
