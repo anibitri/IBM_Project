@@ -1,49 +1,19 @@
 import axios from 'axios';
+import { resolveBaseURL } from '../utils/urlResolver';
 
 const API_ACCESS_TOKEN = 'ibm-project-dev-token';
 
-// ── Backend URL configuration ────────────────────────────────
-// Set PHYSICAL_DEVICE = true  when running on a real device via USB
-// Set PHYSICAL_DEVICE = false when using an Android or iOS simulator/emulator
-const PHYSICAL_DEVICE = true;
-
-// iOS physical device only: set this to the Mac's iPhone USB interface IP
-// (found via System Preferences → Network → "iPhone USB", e.g. 172.20.10.1)
-// Android physical device uses localhost via adb reverse, so this is ignored.
-const IOS_USB_HOST = '192.168.x.x'; // Replace with Mac's IP: run `ipconfig getifaddr en0`
-
-const getBaseURL = () => {
-  // Web browser — use relative path (Vite proxy handles /api -> backend)
-  if (typeof window !== 'undefined' && typeof document !== 'undefined') {
-    return '/api';
-  }
-  // React Native
-  try {
-    // eslint-disable-next-line no-undef
-    const isAndroid = typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent || '');
-    if (isAndroid && !PHYSICAL_DEVICE) {
-      // Android emulator: 10.0.2.2 is the special alias for the host machine
-      return 'http://10.0.2.2:4200/api';
-    }
-  } catch { /* ignore */ }
-  // iOS physical device: use the Mac's iPhone USB interface IP directly
-  if (PHYSICAL_DEVICE) {
-    return `http://${IOS_USB_HOST}:4200/api`;
-  }
-  // iOS simulator: localhost works (simulator shares Mac's network stack)
-  return 'http://localhost:4200/api';
-};
-
 const api = axios.create({
-  baseURL: getBaseURL(),
+  baseURL: resolveBaseURL(),
   headers: {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${API_ACCESS_TOKEN}`,
+    'ngrok-skip-browser-warning': 'true',
   },
 });
 
-// Normalise error messages so callers always get a human-readable string,
-// not the raw Axios "Request failed with status 503" message.
+// Normalise error messages so callers always receive a human-readable string
+// instead of a raw Axios "Request failed with status 503" message.
 api.interceptors.response.use(
   (res) => res,
   (err) => {
@@ -62,15 +32,17 @@ export const backend = {
   uploadFile: async (file) => {
     const formData = new FormData();
     if (file.uri) {
+      // React Native file object
       formData.append('file', {
         uri: file.uri,
         type: file.type || 'image/png',
         name: file.name || 'diagram.png',
       });
     } else {
+      // Web File / Blob
       formData.append('file', file);
     }
-    const response = await axios.post(`${getBaseURL()}/upload/`, formData, {
+    const response = await axios.post(`${resolveBaseURL()}/upload/`, formData, {
       headers: {
         'Content-Type': 'multipart/form-data',
         Authorization: `Bearer ${API_ACCESS_TOKEN}`,

@@ -1,5 +1,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
 import { backend } from '../api/backend';
+import { buildChatContext, buildComponentQuestion } from '../utils/contextBuilder';
+import { deriveSessionName } from '../utils/sessionUtils';
 
 const DocumentContext = createContext(null);
 
@@ -7,7 +9,8 @@ const HISTORY_KEY = 'ar-viewer-history';
 const MAX_HISTORY = 20;
 
 // Platform-safe storage: localStorage on web, no-op on React Native
-const hasLocalStorage = typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
+const hasLocalStorage =
+  typeof window !== 'undefined' && typeof window.localStorage !== 'undefined';
 
 function loadHistory() {
   if (!hasLocalStorage) return [];
@@ -23,7 +26,7 @@ function saveHistory(history) {
   if (!hasLocalStorage) return;
   try {
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, MAX_HISTORY)));
-  } catch { /* quota exceeded */ }
+  } catch { /* quota exceeded — silently ignore */ }
 }
 
 export const DocumentProvider = ({ children }) => {
@@ -36,57 +39,20 @@ export const DocumentProvider = ({ children }) => {
   const [selectedComponent, setSelectedComponent] = useState(null);
   const [currentImageIndex, setCurrentImageIndex] = useState(0);
 
-  // Ref to always have current chatHistory without stale closures
+  // Ref ensures async callbacks always read the latest chat history
   const chatHistoryRef = useRef(chatHistory);
   useEffect(() => { chatHistoryRef.current = chatHistory; }, [chatHistory]);
 
-  // Persist history whenever it changes
+  // Persist session history to localStorage on every change
   useEffect(() => {
     saveHistory(recentSessions);
   }, [recentSessions]);
 
-  // Derive a short contextual session name from the AI summary or components
-  const _deriveSessionName = useCallback((doc) => {
-    // Try to extract a meaningful name from AI summary
-    const summary = doc?.ai_summary || '';
-    if (summary) {
-      // Clean prompt artifacts first
-      let text = summary;
-      const markers = ['Summary:', 'Analysis:', 'Provide a clear'];
-      for (const m of markers) {
-        const idx = text.lastIndexOf(m);
-        if (idx !== -1) text = text.slice(idx + m.length);
-      }
-      text = text.replace(/^\s+/, '');
-      // Take the first meaningful sentence/phrase (up to ~50 chars)
-      const firstSentence = text.split(/[.\n]/).find(s => s.trim().length > 10);
-      if (firstSentence) {
-        let name = firstSentence.trim().replace(/\*+/g, '').substring(0, 50);
-        // Trim to last whole word if cut mid-word
-        if (name.length === 50) {
-          const lastSpace = name.lastIndexOf(' ');
-          if (lastSpace > 20) name = name.substring(0, lastSpace);
-        }
-        return name;
-      }
-    }
-    // Fallback: use component labels if available
-    const components = doc?.ar?.components || [];
-    if (components.length > 0) {
-      const labels = components.slice(0, 3).map(c => c.label).filter(Boolean);
-      if (labels.length > 0) return labels.join(', ');
-    }
-    // Last resort: filename without extension
-    const rawName = doc?.file?.original_name || doc?.file?.name || 'Untitled';
-    return rawName.replace(/\.[^.]+$/, '');
-  }, []);
-
-  // Save current session to history
   const _saveCurrentToHistory = useCallback(() => {
     if (!document) return;
     const session = {
       id: document.storedName || Date.now().toString(),
-      fileName: _deriveSessionName(document),
+      fileName: deriveSessionName(document),
       storedName: document.storedName,
       file: document.file,
       componentCount: document.ar?.componentCount || document.ar?.components?.length || 0,
@@ -100,7 +66,7 @@ export const DocumentProvider = ({ children }) => {
       const filtered = prev.filter((s) => s.id !== session.id);
       return [session, ...filtered].slice(0, MAX_HISTORY);
     });
-  }, [document, chatHistory, _deriveSessionName]);
+  }, [document, chatHistory]);
 
   const uploadAndProcess = useCallback(async (file) => {
     if (document) _saveCurrentToHistory();
@@ -134,39 +100,12 @@ export const DocumentProvider = ({ children }) => {
 
   const askQuestion = useCallback(async (query) => {
     if (!document) throw new Error('No document loaded');
-
     setError(null);
 
     try {
       addMessage('user', query);
 
-      // Build rich context including AI summary and per-page vision data
-      // so the chat model has full document knowledge
-      const images = document.images || [];
-      const isPdf = document.type === 'pdf' && images.length > 0;
-
-      // Compile all vision summaries for PDFs
-      let visionContext = document.vision || {};
-      if (isPdf && images.length > 0) {
-        const pageSummaries = images
-          .filter((img) => img.vision_summary)
-          .map((img) => `Page ${img.page}: ${img.vision_summary}`)
-          .join('\n');
-        if (pageSummaries) {
-          visionContext = { analysis: { summary: pageSummaries } };
-        }
-      }
-
-      const context = {
-        text_excerpt: document.full_text || document.text_excerpt || '',
-        ai_summary: document.ai_summary || '',
-        vision: visionContext,
-        components: document.ar?.components || [],
-        connections: document.ar?.connections || document.ar?.relationships?.connections || [],
-        stored_name: document.storedName || '',
-      };
-
-      // Use ref to get current history (avoids stale closure)
+      const context = buildChatContext(document, currentImageIndex);
       const recentHistory = chatHistoryRef.current.slice(-10);
       const result = await backend.askQuestion(query, context, recentHistory);
 
@@ -176,28 +115,14 @@ export const DocumentProvider = ({ children }) => {
       setError(err.message || 'Failed to get answer');
       throw err;
     }
-  }, [document, addMessage]);
+  }, [document, currentImageIndex, addMessage]);
 
   const askAboutComponent = useCallback((component) => {
-    // Find connections that involve this component
-    const connections = document?.ar?.connections || document?.ar?.relationships?.connections || [];
-    const related = connections
-      .filter(c => c.from === component.id || c.to === component.id)
-      .map(c => {
-        const otherLabel = c.from === component.id
-          ? (c.to_label || c.to)
-          : (c.from_label || c.from);
-        return otherLabel;
-      });
-
-    let question;
-    if (related.length > 0) {
-      const connList = related.join(', ');
-      question = `Tell me about the "${component.label}" component. It is connected to: ${connList}. What is its function, and how does it interact with these connected components?`;
-    } else {
-      question = `Tell me about the "${component.label}" component. What is its function, and how does it relate to the other components in this diagram?`;
-    }
-    setPendingQuestion(question);
+    const connections =
+      document?.ar?.connections ||
+      document?.ar?.relationships?.connections ||
+      [];
+    setPendingQuestion(buildComponentQuestion(component, connections));
   }, [document]);
 
   const consumePendingQuestion = useCallback(() => {
