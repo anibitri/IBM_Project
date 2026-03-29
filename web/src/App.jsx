@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useDocumentContext } from '@ar-viewer/shared';
+import { useDocumentContext } from '@ar-viewer/shared/context/DocumentContext';
 import Sidebar from './components/Sidebar';
 import MainView from './components/MainView';
 import './styles/App.css';

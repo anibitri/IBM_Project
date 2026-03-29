@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { DocumentProvider } from '@ar-viewer/shared';
+import { DocumentProvider } from '@ar-viewer/shared/context/DocumentContext';
 import './styles/App.css';
 import App from './App';
 

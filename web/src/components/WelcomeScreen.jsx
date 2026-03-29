@@ -1,5 +1,5 @@
 import React, { useCallback, useState } from 'react';
-import { useDocumentContext } from '@ar-viewer/shared';
+import { useDocumentContext } from '@ar-viewer/shared/context/DocumentContext';
 
 export default function WelcomeScreen() {
   const { uploadAndProcess, loading, error, clearError } = useDocumentContext();

@@ -1,5 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useDocumentContext } from '@ar-viewer/shared';
+import { useDocumentContext } from '@ar-viewer/shared/context/DocumentContext';
+import { cleanSummary, timeAgo } from '@ar-viewer/shared';
 
 export default function Sidebar({ isOpen, onToggle }) {
   const {
@@ -39,16 +40,6 @@ export default function Sidebar({ isOpen, onToggle }) {
   const handleRenameKey = (e) => {
     if (e.key === 'Enter') commitRename();
     if (e.key === 'Escape') { setEditingId(null); setEditValue(''); }
-  };
-
-  const formatTime = (ts) => {
-    const d = new Date(ts);
-    const now = new Date();
-    const diff = now - d;
-    if (diff < 60000) return 'Just now';
-    if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
-    if (diff < 86400000) return `${Math.floor(diff / 3600000)}h ago`;
-    return d.toLocaleDateString();
   };
 
   // Determine components for current view (per-page for PDFs)
@@ -102,13 +93,7 @@ export default function Sidebar({ isOpen, onToggle }) {
                     <div className="history-title">
                       {document.ai_summary
                         ? (() => {
-                            let text = document.ai_summary;
-                            const markers = ['Summary:', 'Analysis:', 'Provide a clear'];
-                            for (const m of markers) {
-                              const idx = text.lastIndexOf(m);
-                              if (idx !== -1) text = text.slice(idx + m.length);
-                            }
-                            text = text.replace(/^\s+/, '').replace(/\*+/g, '');
+                            const text = cleanSummary(document.ai_summary).replace(/\*+/g, '');
                             const first = text.split(/[.\n]/).find(s => s.trim().length > 10);
                             if (first) {
                               let name = first.trim().substring(0, 50);
@@ -208,7 +193,7 @@ export default function Sidebar({ isOpen, onToggle }) {
                             <div className="history-title">{session.fileName}</div>
                           )}
                           <div className="history-meta">
-                            {session.componentCount} components &middot; {formatTime(session.timestamp)}
+                            {session.componentCount} components &middot; {timeAgo(session.timestamp)}
                           </div>
                         </div>
                         <div className="history-actions-group">

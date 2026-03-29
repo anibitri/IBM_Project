@@ -1,20 +1,24 @@
-import React, { useState, useRef, useEffect } from 'react';
-import { useDocumentContext } from '@ar-viewer/shared';
+import React, { useState } from 'react';
+import { useDocumentContext } from '@ar-viewer/shared/context/DocumentContext';
 import { renderMarkdown } from './markdownUtils';
+import { useAutoScroll } from '../hooks/useAutoScroll';
 
 export default function ChatPanel() {
-  const { chatHistory, askQuestion, pendingQuestion, consumePendingQuestion } = useDocumentContext();
+  const {
+    chatHistory,
+    askQuestion,
+    pendingQuestion,
+    consumePendingQuestion,
+  } = useDocumentContext();
+
   const [input, setInput] = useState('');
   const [isAsking, setIsAsking] = useState(false);
   const [chatError, setChatError] = useState(null);
-  const messagesEndRef = useRef(null);
 
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [chatHistory, isAsking]);
+  const messagesEndRef = useAutoScroll([chatHistory, isAsking]);
 
-  // Auto-submit pending questions from component selection
-  useEffect(() => {
+  // Auto-submit pending questions that arrive from component selection
+  React.useEffect(() => {
     if (pendingQuestion && !isAsking) {
       const q = consumePendingQuestion();
       if (q) {
@@ -22,7 +26,7 @@ export default function ChatPanel() {
         submitQuestion(q);
       }
     }
-  }, [pendingQuestion]);
+  }, [pendingQuestion]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const submitQuestion = async (query) => {
     setChatError(null);
@@ -52,6 +56,7 @@ export default function ChatPanel() {
         </svg>
         <span>AI Assistant</span>
       </div>
+
       <div className="chat-container">
         <div className="messages-container">
           {chatHistory.length === 0 ? (
@@ -62,7 +67,9 @@ export default function ChatPanel() {
                 </svg>
               </div>
               <h3>Ask about this diagram</h3>
-              <p className="welcome-hint">Select a component and click "Ask about this component", or type a question below.</p>
+              <p className="welcome-hint">
+                Select a component and click "Ask about this component", or type a question below.
+              </p>
               <div className="example-prompts">
                 <button className="prompt-btn" onClick={() => setInput('What components are detected?')}>
                   What components are detected?
@@ -128,7 +135,13 @@ export default function ChatPanel() {
         {chatError && (
           <div className="chat-error-banner" role="alert">
             <span>{chatError}</span>
-            <button className="chat-error-dismiss" onClick={() => setChatError(null)} aria-label="Dismiss error">✕</button>
+            <button
+              className="chat-error-dismiss"
+              onClick={() => setChatError(null)}
+              aria-label="Dismiss error"
+            >
+              ✕
+            </button>
           </div>
         )}
 
