@@ -129,104 +129,79 @@ class PreprocessService:
     
     def _extract_images_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
         """
-        Extract images and diagrams from PDF using PyMuPDF.
-        
+        Render each PDF page as a full-page image using PyMuPDF.
+
+        This renders the entire page (including vector graphics, text, and
+        embedded images) rather than extracting only embedded raster images.
+        That way architecture diagrams drawn as vector graphics are captured.
+
         Args:
             pdf_path: Path to PDF file
-        
+
         Returns:
             List of dicts with image metadata:
             - path: Saved image path
             - page: Page number (1-indexed)
             - size: (width, height) tuple
             - index: Global image index
-            - filename: Extracted image filename
+            - filename: Rendered page filename
         """
-        logger.info("📸 Extracting images from PDF...")
+        logger.info("📸 Rendering PDF pages as images...")
 
         if not HAS_PYMUPDF or fitz is None:
-            logger.warning("PyMuPDF unavailable. Skipping PDF image extraction.")
+            logger.warning("PyMuPDF unavailable. Skipping PDF page rendering.")
             return []
-        
+
         extracted_images = []
-        
-        # Create output directory for extracted images
+
+        # Create output directory for rendered pages
         pdf_name = Path(pdf_path).stem
         output_dir = os.path.join(
             os.path.dirname(pdf_path),
             f"{pdf_name}_extracted"
         )
         os.makedirs(output_dir, exist_ok=True)
-        
+
         try:
-            # Open PDF with PyMuPDF
             pdf_document = fitz.open(pdf_path)
-            
-            image_count = 0
-            for page_num in range(len(pdf_document)):
-                if image_count >= self.max_images_per_pdf:
-                    logger.info(f"⚠️ Reached max images limit ({self.max_images_per_pdf})")
-                    break
-                
-                page = pdf_document[page_num]
-                image_list = page.get_images(full=True)
-                
-                logger.info(f"  Page {page_num + 1}: Found {len(image_list)} images")
-                
-                for img_index, img_info in enumerate(image_list):
-                    if image_count >= self.max_images_per_pdf:
-                        break
-                    
-                    try:
-                        # Extract image data
-                        xref = img_info[0]
-                        base_image = pdf_document.extract_image(xref)
-                        image_bytes = base_image["image"]
-                        image_ext = base_image["ext"]
-                        
-                        # Convert to PIL Image
-                        import io
-                        image = Image.open(io.BytesIO(image_bytes))
-                        
-                        # Filter out small images (likely icons, logos, decorations)
-                        if image.size[0] < self.min_image_size[0] or \
-                           image.size[1] < self.min_image_size[1]:
-                            logger.debug(f"    Skipping small image: {image.size}")
-                            continue
-                        
-                        # Convert to RGB if needed (for consistency)
-                        if image.mode not in ('RGB', 'L'):
-                            image = image.convert('RGB')
-                        
-                        # Generate filename
-                        image_filename = f"page{page_num + 1}_img{img_index + 1}.{image_ext}"
-                        image_path = os.path.join(output_dir, image_filename)
-                        
-                        # Save extracted image
-                        image.save(image_path, quality=self.image_quality, optimize=True)
-                        
-                        extracted_images.append({
-                            'path': image_path,
-                            'page': page_num + 1,
-                            'size': image.size,
-                            'index': image_count,
-                            'filename': image_filename
-                        })
-                        
-                        image_count += 1
-                        logger.info(f"    ✓ Extracted: {image_filename} ({image.size[0]}x{image.size[1]})")
-                    
-                    except Exception as e:
-                        logger.warning(f"    Failed to extract image {img_index} from page {page_num + 1}: {e}")
-                        continue
-            
+            total_pages = len(pdf_document)
+            pages_to_render = min(total_pages, self.max_images_per_pdf)
+            logger.info(f"  PDF has {total_pages} pages — rendering {pages_to_render}")
+
+            for page_num in range(pages_to_render):
+                try:
+                    page = pdf_document[page_num]
+
+                    # Render at ~150 DPI (72 DPI × 2) for a good balance of
+                    # quality and processing speed.
+                    mat = fitz.Matrix(2.0, 2.0)
+                    pix = page.get_pixmap(matrix=mat, alpha=False)
+
+                    image_filename = f"page{page_num + 1}_render.png"
+                    image_path = os.path.join(output_dir, image_filename)
+                    pix.save(image_path)
+
+                    extracted_images.append({
+                        'path': image_path,
+                        'page': page_num + 1,
+                        'size': (pix.width, pix.height),
+                        'index': page_num,
+                        'filename': image_filename,
+                    })
+
+                    logger.info(f"  ✓ Rendered page {page_num + 1} ({pix.width}x{pix.height})")
+
+                except Exception as e:
+                    logger.warning(f"  Failed to render page {page_num + 1}: {e}")
+                    continue
+
             pdf_document.close()
-            logger.info(f"✅ Extracted {len(extracted_images)} images from PDF")
-            
+            logger.info(f"✅ Rendered {len(extracted_images)} pages from PDF")
+
         except Exception as e:
-            logger.error(f"PDF image extraction failed: {e}")
+            logger.error(f"PDF page rendering failed: {e}")
             raise
-        
+
         return extracted_images
     
     def _filter_extracted_images(self, images: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
