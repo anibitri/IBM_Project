@@ -171,11 +171,56 @@ class PreprocessService:
             for page_num in range(pages_to_render):
                 try:
                     page = pdf_document[page_num]
-
-                    # Render at ~150 DPI (72 DPI × 2) for a good balance of
-                    # quality and processing speed.
                     mat = fitz.Matrix(2.0, 2.0)
-                    pix = page.get_pixmap(matrix=mat, alpha=False)
+
+                    # Find the diagram region using PyMuPDF geometry data.
+                    # get_drawings() returns all vector paths (boxes, arrows, lines).
+                    # get_images() returns embedded raster images with their positions.
+                    # The union of these bounding boxes is where the diagram lives.
+                    page_rect = page.rect  # full page in points
+                    content_rects = []
+
+                    try:
+                        for d in page.get_drawings():
+                            r = d.get('rect')
+                            if r and fitz.Rect(r).get_area() > 100:
+                                content_rects.append(fitz.Rect(r))
+                    except Exception:
+                        pass
+
+                    try:
+                        for img_info in page.get_images(full=True):
+                            xref = img_info[0]
+                            for img_rect in page.get_image_rects(xref):
+                                if img_rect.get_area() > 100:
+                                    content_rects.append(img_rect)
+                    except Exception:
+                        pass
+
+                    clip = None
+                    if content_rects:
+                        union = content_rects[0]
+                        for r in content_rects[1:]:
+                            union = union | r
+
+                        # Add 4% padding on each side
+                        pad_x = page_rect.width * 0.04
+                        pad_y = page_rect.height * 0.04
+                        padded = fitz.Rect(
+                            max(page_rect.x0, union.x0 - pad_x),
+                            max(page_rect.y0, union.y0 - pad_y),
+                            min(page_rect.x1, union.x1 + pad_x),
+                            min(page_rect.y1, union.y1 + pad_y),
+                        )
+
+                        # Only crop if the region is meaningfully smaller than the
+                        # full page (otherwise we gain nothing and may lose context)
+                        region_ratio = padded.get_area() / page_rect.get_area()
+                        if region_ratio < 0.85:
+                            clip = padded
+                            logger.info(f"  ✂ Cropped to diagram region ({region_ratio:.0%} of page)")
+
+                    pix = page.get_pixmap(matrix=mat, alpha=False, clip=clip)
 
                     image_filename = f"page{page_num + 1}_render.png"
                     image_path = os.path.join(output_dir, image_filename)
