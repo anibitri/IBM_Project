@@ -90,7 +90,7 @@ export default function ComponentsScreen({ navigation }) {
           >
             <Ionicons name="documents-outline" size={12} color={currentImageIndex === -1 ? p.primary : p.subtext} />
             <Text style={[styles.pageFilterText, { color: currentImageIndex === -1 ? p.primary : p.subtext }]}>
-              All ({document.ar?.components?.length || 0})
+              All diagrams ({document.ar?.components?.length || 0})
             </Text>
           </TouchableOpacity>
           {pages.map((pg, idx) => {
@@ -106,7 +106,7 @@ export default function ComponentsScreen({ navigation }) {
                 activeOpacity={0.7}
               >
                 <Text style={[styles.pageFilterText, { color: active ? p.primary : p.subtext }]}>
-                  Pg {pg.page || idx + 1} ({(pg.ar_components || []).length})
+                  Diagram {idx + 1} ({(pg.ar_components || []).length})
                 </Text>
               </TouchableOpacity>
             );
@@ -186,12 +186,11 @@ const styles = StyleSheet.create({
   /* Page filter */
   pageFilterRow: {
     borderBottomWidth: StyleSheet.hairlineWidth,
-    maxHeight: 44,
   },
   pageFilterContent: {
     paddingHorizontal: spacing.lg,
-    paddingVertical: 6,
-    gap: 6,
+    paddingVertical: 8,
+    gap: 8,
     flexDirection: 'row',
     alignItems: 'center',
   },
@@ -199,12 +198,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 5,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    minHeight: 34,
+    flexShrink: 0,
     borderRadius: 20,
     borderWidth: 1,
   },
-  pageFilterText: { fontSize: 12, fontWeight: '600' },
+  pageFilterText: { fontSize: 13, fontWeight: '600' },
 
   controlRow: {
     flexDirection: 'row',
