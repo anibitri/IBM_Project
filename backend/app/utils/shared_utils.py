@@ -27,13 +27,12 @@ def resolve_file_path(
     """
     # Prefer stored_name
     if stored_name:
-        safe_name = os.path.basename(stored_name.strip())
+        resolved_path = os.path.realpath(os.path.join(UPLOAD_FOLDER, stored_name.strip()))
         
         # Security check
-        if safe_name != stored_name.strip():
+        if not safe_under_uploads(resolved_path):
             return None, ({'status': 'error', 'error': 'Invalid stored_name'}, 400)
         
-        resolved_path = os.path.join(UPLOAD_FOLDER, safe_name)
     
     elif file_path:
         resolved_path = os.path.realpath(file_path.strip())

@@ -1,0 +1,18 @@
+{
+  "cases": [
+    {
+      "name": "diagram_1",
+      "image_path": "static/uploads/a7259ffeb4694da78663415b08f64221_extracted/page5_img1.png",
+      "actual_components": 6,
+      "count_tolerance": 2,
+      "expected_labels": ["api gateway", "otel collector", "instana"]
+    },
+    {
+      "name": "diagram_2",
+      "image_path": "static/uploads/a7259ffeb4694da78663415b08f64221_extracted/page13_img1.png",
+      "actual_components": 10,
+      "count_tolerance": 2,
+      "expected_labels": []
+    }
+  ]
+}
