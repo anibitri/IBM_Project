@@ -3,6 +3,7 @@ import logging
 from PIL import Image
 
 from app.services.granite_vision_service import analyze_images
+from app.services.model_manager import manager
 from app.utils.shared_utils import resolve_file_path
 from app.utils.response_formatter import error_response
 from app.utils.validators import ensure_json_object, validate_string_list
@@ -40,8 +41,12 @@ def analyze():
         
         logger.info(f"🔍 Vision analysis: {resolved_path} [Task: {task}]")
         
-        # Analyze image
-        vision_result = analyze_images(resolved_path, task=task)
+        # Analyze image with adaptive GPU housekeeping.
+        manager.maybe_cleanup_before_inference()
+        try:
+            vision_result = analyze_images(resolved_path, task=task)
+        finally:
+            manager.maybe_cleanup_after_inference()
         
         # Ensure consistent response format
         if not isinstance(vision_result, dict):
@@ -109,8 +114,12 @@ def batch_analyze():
                     })
                     continue
                 
-                # Analyze
-                vision_result = analyze_images(resolved_path, task=task)
+                # Analyze with adaptive GPU housekeeping.
+                manager.maybe_cleanup_before_inference()
+                try:
+                    vision_result = analyze_images(resolved_path, task=task)
+                finally:
+                    manager.maybe_cleanup_after_inference()
                 
                 results.append({
                     'file': stored_name,

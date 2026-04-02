@@ -2,6 +2,7 @@ from flask import Blueprint, request, jsonify
 import logging
 
 from app.services.granite_ai_service import ai_service
+from app.services.model_manager import manager
 from app.utils.shared_utils import resolve_file_path
 from app.utils.response_formatter import error_response
 from app.utils.validators import ensure_json_object, validate_components_list
@@ -51,13 +52,17 @@ def analyze():
         
         logger.info(f"🤖 AI Analysis: type={context_type}")
         
-        # Run analysis
-        result = ai_service.analyze_context(
-            text_excerpt=text_excerpt,
-            vision=vision,
-            components=components,
-            context_type=context_type
-        )
+        # Run analysis with adaptive GPU housekeeping.
+        manager.maybe_cleanup_before_inference()
+        try:
+            result = ai_service.analyze_context(
+                text_excerpt=text_excerpt,
+                vision=vision,
+                components=components,
+                context_type=context_type
+            )
+        finally:
+            manager.maybe_cleanup_after_inference()
         
         # Check for errors
         if result.get('status') == 'error':
@@ -117,8 +122,12 @@ def ask():
                 if not err:
                     context['image_path'] = resolved_path
         
-        # Run chat
-        result = ai_service.chat_with_document(query, context, chat_history=history)
+        # Run chat with adaptive GPU housekeeping.
+        manager.maybe_cleanup_before_inference()
+        try:
+            result = ai_service.chat_with_document(query, context, chat_history=history)
+        finally:
+            manager.maybe_cleanup_after_inference()
         
         # Check for errors
         if result.get('status') == 'error':
@@ -166,12 +175,16 @@ def summarize_components_endpoint():
         
         logger.info(f"📝 Summarizing {len(components)} components")
         
-        # Generate summary
-        result = ai_service.summarize_components(
-            components=components,
-            relationships=relationships,
-            document_type=document_type
-        )
+        # Generate summary with adaptive GPU housekeeping.
+        manager.maybe_cleanup_before_inference()
+        try:
+            result = ai_service.summarize_components(
+                components=components,
+                relationships=relationships,
+                document_type=document_type
+            )
+        finally:
+            manager.maybe_cleanup_after_inference()
         
         # Check for errors
         if result.get('status') == 'error':
@@ -216,12 +229,16 @@ def generate_insights_endpoint():
         
         logger.info(f"💡 Generating insights: type={insight_type}")
         
-        result = ai_service.generate_insights(
-            vision_analysis=vision_analysis,
-            ar_components=ar_components,
-            text_content=text_content,
-            insight_type=insight_type
-        )
+        manager.maybe_cleanup_before_inference()
+        try:
+            result = ai_service.generate_insights(
+                vision_analysis=vision_analysis,
+                ar_components=ar_components,
+                text_content=text_content,
+                insight_type=insight_type
+            )
+        finally:
+            manager.maybe_cleanup_after_inference()
         
         # Check for errors
         if result.get('status') == 'error':
@@ -277,10 +294,14 @@ def compare_documents():
             f"Focus on {comparison_type} aspects."
         )
         
-        result = ai_service.analyze_context(
-            text_excerpt=context,
-            context_type=comparison_type
-        )
+        manager.maybe_cleanup_before_inference()
+        try:
+            result = ai_service.analyze_context(
+                text_excerpt=context,
+                context_type=comparison_type
+            )
+        finally:
+            manager.maybe_cleanup_after_inference()
         
         return jsonify({
             'status': 'success',

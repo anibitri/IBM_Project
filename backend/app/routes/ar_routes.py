@@ -3,6 +3,7 @@ import logging
 
 from app.services.ar_service import ar_service
 from app.services.granite_vision_service import analyze_images
+from app.services.model_manager import manager
 from app.utils.shared_utils import resolve_file_path
 from app.utils.response_formatter import error_response
 from app.utils.validators import ensure_json_object, validate_components_list, validate_string_list
@@ -54,7 +55,11 @@ def generate_ar_overlay():
         
         if use_vision:
             try:
-                vision_result = analyze_images(resolved_path, task="ar_extraction")
+                manager.maybe_cleanup_before_inference()
+                try:
+                    vision_result = analyze_images(resolved_path, task="ar_extraction")
+                finally:
+                    manager.maybe_cleanup_after_inference()
                 
                 if isinstance(vision_result, dict) and vision_result.get('status') != 'error':
                     vision_analysis = vision_result.get('analysis', {})
@@ -74,7 +79,11 @@ def generate_ar_overlay():
                 # Continue with manual hints only
         
         # Step 2: Extract AR components
-        result = ar_service.extract_document_features(resolved_path, hints=ar_hints)
+        manager.maybe_cleanup_before_inference()
+        try:
+            result = ar_service.extract_document_features(resolved_path, hints=ar_hints)
+        finally:
+            manager.maybe_cleanup_after_inference()
         components = result.get('components', [])
         relationships = result.get('relationships', {})
         
@@ -194,7 +203,11 @@ def extract_from_multiple():
                 hints = list(shared_hints)
                 if use_vision:
                     try:
-                        vision_result = analyze_images(resolved_path, task="ar_extraction")
+                        manager.maybe_cleanup_before_inference()
+                        try:
+                            vision_result = analyze_images(resolved_path, task="ar_extraction")
+                        finally:
+                            manager.maybe_cleanup_after_inference()
                         if isinstance(vision_result, dict):
                             vision_comps = vision_result.get('components', [])
                             hints.extend(vision_comps)
@@ -202,7 +215,11 @@ def extract_from_multiple():
                         pass
                 
                 # Extract components
-                result = ar_service.extract_document_features(resolved_path, hints=hints)
+                manager.maybe_cleanup_before_inference()
+                try:
+                    result = ar_service.extract_document_features(resolved_path, hints=hints)
+                finally:
+                    manager.maybe_cleanup_after_inference()
                 components = result.get('components', [])
                 all_components.extend(components)
                 
