@@ -72,3 +72,6 @@ backend/app/static/*
 *.DS_Store
 backend/venv/*
 deliverables/2025_tech_project_ai_and_ar_enhanced_technical_documentation (1).pdf
+ngrok
+ngrok-v3-stable-linux-amd64.tgz
+backend/diagram_dataset/*

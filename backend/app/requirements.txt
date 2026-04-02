@@ -4,7 +4,7 @@ Flask==3.0.0
 flask-cors==4.0.0
 Werkzeug==3.0.1
 python-dotenv==1.0.0
-requests==2.31.0
+requests>=2.32.2,<3.0.0
 
 # Core image/vision stack used by routes and services
 numpy>=1.24.0
@@ -22,7 +22,8 @@ accelerate>=0.26.0
 ultralytics>=8.2.0  # SAM 2 support added in 8.2
 
 # Optional: docling is already guarded by try/except in preprocess_service
-docling
+docling>=2.0.0
+docling-core>=2.65.1,<3.0.0
 
 # bitsandbytes is CUDA/Linux focused and can fail on macOS installs
 bitsandbytes>=0.41.0; platform_system == "Linux"
