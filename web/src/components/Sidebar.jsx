@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useDocumentContext } from '@ar-viewer/shared/context/DocumentContext';
-import { cleanSummary, timeAgo } from '@ar-viewer/shared';
+import { timeAgo } from '@ar-viewer/shared';
 
 export default function Sidebar({ isOpen, onToggle }) {
   const {
@@ -52,6 +52,8 @@ export default function Sidebar({ isOpen, onToggle }) {
   } else {
     components = document?.ar?.components || [];
   }
+  const currentSessionName =
+    document?.sessionName || document?.file?.original_name || document?.file?.name || 'Current Document';
 
   const handleComponentClick = (comp) => {
     setSelectedComponent((prev) => (prev?.id === comp.id ? null : comp));
@@ -90,27 +92,35 @@ export default function Sidebar({ isOpen, onToggle }) {
                 <div className="history-item active">
                   <div className="history-dot current"></div>
                   <div className="history-content">
-                    <div className="history-title">
-                      {document.ai_summary
-                        ? (() => {
-                            const text = cleanSummary(document.ai_summary).replace(/\*+/g, '');
-                            const first = text.split(/[.\n]/).find(s => s.trim().length > 10);
-                            if (first) {
-                              let name = first.trim().substring(0, 50);
-                              if (name.length === 50) {
-                                const sp = name.lastIndexOf(' ');
-                                if (sp > 20) name = name.substring(0, sp);
-                              }
-                              return name;
-                            }
-                            return document.file?.original_name || 'Current Document';
-                          })()
-                        : document.file?.original_name || document.file?.name || 'Current Document'}
-                    </div>
+                    {editingId === document.storedName ? (
+                      <input
+                        ref={editInputRef}
+                        className="history-rename-input"
+                        value={editValue}
+                        onChange={(e) => setEditValue(e.target.value)}
+                        onBlur={commitRename}
+                        onKeyDown={handleRenameKey}
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <div className="history-title">{currentSessionName}</div>
+                    )}
                     <div className="history-meta">
                       {components.length} components &middot; {chatHistory.length} messages
                       {isPdf && <> &middot; Page {currentImageIndex + 1}/{images.length}</>}
                     </div>
+                  </div>
+                  <div className="history-actions-group">
+                    <button
+                      className="history-action-btn"
+                      onClick={(e) => startRename(e, { id: document.storedName, fileName: currentSessionName })}
+                      title="Rename"
+                    >
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                        <path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7" />
+                        <path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z" />
+                      </svg>
+                    </button>
                   </div>
                 </div>
               </div>

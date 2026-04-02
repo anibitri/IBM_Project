@@ -50,9 +50,10 @@ export const DocumentProvider = ({ children }) => {
 
   const _saveCurrentToHistory = useCallback(() => {
     if (!document) return;
+    const sessionName = document.sessionName || deriveSessionName(document);
     const session = {
       id: document.storedName || Date.now().toString(),
-      fileName: deriveSessionName(document),
+      fileName: sessionName,
       storedName: document.storedName,
       file: document.file,
       componentCount: document.ar?.componentCount || document.ar?.components?.length || 0,
@@ -60,7 +61,7 @@ export const DocumentProvider = ({ children }) => {
       chatHistory,
       ai_summary: document.ai_summary,
       timestamp: Date.now(),
-      documentData: document,
+      documentData: { ...document, sessionName },
     };
     setRecentSessions((prev) => {
       const filtered = prev.filter((s) => s.id !== session.id);
@@ -81,10 +82,12 @@ export const DocumentProvider = ({ children }) => {
       const uploadResult = await backend.uploadFile(file);
       const storedName = uploadResult.file.stored_name;
       const processResult = await backend.processDocument(storedName, true, true);
+      const sessionName = deriveSessionName({ file: uploadResult.file });
 
       setDocument({
         storedName,
         file: uploadResult.file,
+        sessionName,
         ...processResult,
       });
     } catch (err) {
@@ -148,7 +151,8 @@ export const DocumentProvider = ({ children }) => {
   const restoreSession = useCallback((session) => {
     if (document) _saveCurrentToHistory();
     if (session.documentData) {
-      setDocument(session.documentData);
+      const sessionName = session.fileName || session.documentData.sessionName || deriveSessionName(session.documentData);
+      setDocument({ ...session.documentData, sessionName });
       setChatHistory(session.chatHistory || []);
       setError(null);
       setPendingQuestion(null);
@@ -160,9 +164,19 @@ export const DocumentProvider = ({ children }) => {
   }, []);
 
   const renameSession = useCallback((sessionId, newName) => {
+    const trimmed = (newName || '').trim();
+    if (!trimmed) return;
+
     setRecentSessions((prev) =>
-      prev.map((s) => (s.id === sessionId ? { ...s, fileName: newName } : s))
+      prev.map((s) => (s.id === sessionId ? { ...s, fileName: trimmed } : s))
     );
+
+    setDocument((prev) => {
+      if (!prev) return prev;
+      const currentId = prev.storedName || '';
+      if (currentId !== sessionId) return prev;
+      return { ...prev, sessionName: trimmed };
+    });
   }, []);
 
   const clearAllHistory = useCallback(() => {

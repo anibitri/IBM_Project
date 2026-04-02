@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect, Suspense, lazy } from 'react';
+import React, { useState, useRef, useEffect, useCallback, Suspense, lazy } from 'react';
 import { useDocumentContext } from '@ar-viewer/shared/context/DocumentContext';
 import { cleanSummary } from '@ar-viewer/shared';
 import { renderMarkdown } from './markdownUtils';
@@ -19,6 +19,7 @@ export default function DiagramPanel() {
   const [imageSize, setImageSize] = useState({ width: 0, height: 0 });
   const [hoveredId, setHoveredId] = useState(null);
   const imageRef = useRef(null);
+  const wrapperRef = useRef(null);
 
   // Determine images array (multi-page PDFs) or single image
   const images = doc?.images || [];
@@ -53,24 +54,45 @@ export default function DiagramPanel() {
   const { summaryOpen, setSummaryOpen, summaryHeight, handleResizeStart } =
     useSummaryDrawer(160);
 
-  // Track rendered image dimensions for SVG overlay sizing
+  // Track rendered image dimensions for SVG overlay sizing.
+  // ResizeObserver keeps overlays in sync when panel widths change
+  // without a window resize event (e.g., opening multiple panels).
+  const updateImageSize = useCallback(() => {
+    const img = imageRef.current;
+    if (!img) return;
+    const next = {
+      width: Math.round(img.offsetWidth || 0),
+      height: Math.round(img.offsetHeight || 0),
+    };
+    setImageSize((prev) => (
+      prev.width === next.width && prev.height === next.height ? prev : next
+    ));
+  }, []);
+
   useEffect(() => {
-    if (!imageRef.current) return;
-    const updateSize = () => {
-      if (imageRef.current) {
-        setImageSize({
-          width: imageRef.current.offsetWidth,
-          height: imageRef.current.offsetHeight,
-        });
-      }
-    };
-    imageRef.current.addEventListener('load', updateSize);
-    window.addEventListener('resize', updateSize);
-    updateSize();
+    const img = imageRef.current;
+    const wrapper = wrapperRef.current;
+    if (!img) return;
+
+    let observer;
+
+    img.addEventListener('load', updateImageSize);
+    window.addEventListener('resize', updateImageSize);
+
+    if (typeof ResizeObserver !== 'undefined') {
+      observer = new ResizeObserver(updateImageSize);
+      observer.observe(img);
+      if (wrapper) observer.observe(wrapper);
+    }
+
+    requestAnimationFrame(updateImageSize);
+
     return () => {
-      window.removeEventListener('resize', updateSize);
+      img.removeEventListener('load', updateImageSize);
+      window.removeEventListener('resize', updateImageSize);
+      if (observer) observer.disconnect();
     };
-  }, [imageUrl]);
+  }, [imageUrl, updateImageSize]);
 
   const handleComponentClick = (comp) => {
     if (!wasClick()) return;
@@ -96,6 +118,7 @@ export default function DiagramPanel() {
         >
           {viewMode === '2d' ? (
             <div
+              ref={wrapperRef}
               className="diagram-wrapper"
               style={{
                 transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`,
@@ -118,10 +141,14 @@ export default function DiagramPanel() {
                       style={{ width: imageSize.width, height: imageSize.height }}
                     >
                       {components.map((comp) => {
-                        const x = comp.x * imageSize.width;
-                        const y = comp.y * imageSize.height;
-                        const width = comp.width * imageSize.width;
-                        const height = comp.height * imageSize.height;
+                        const rawX = comp.x * imageSize.width;
+                        const rawY = comp.y * imageSize.height;
+                        const rawWidth = comp.width * imageSize.width;
+                        const rawHeight = comp.height * imageSize.height;
+                        const x = Math.max(0, Math.min(rawX, imageSize.width));
+                        const y = Math.max(0, Math.min(rawY, imageSize.height));
+                        const width = Math.max(0, Math.min(rawWidth, imageSize.width - x));
+                        const height = Math.max(0, Math.min(rawHeight, imageSize.height - y));
                         const isSelected = selectedComponent?.id === comp.id;
                         const isHovered = hoveredId === comp.id;
                         const labelText = comp.label || comp.id;
@@ -130,7 +157,11 @@ export default function DiagramPanel() {
                           width + 40
                         );
                         const labelHeight = 18;
-                        const labelX = x + (width - labelWidth) / 2;
+                        const unclampedLabelX = x + (width - labelWidth) / 2;
+                        const labelX = Math.max(
+                          0,
+                          Math.min(unclampedLabelX, imageSize.width - labelWidth)
+                        );
                         const labelY = y - labelHeight - 3;
 
                         return (

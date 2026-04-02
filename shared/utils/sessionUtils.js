@@ -16,46 +16,16 @@ export function makeSessionId() {
 }
 
 /**
- * Derives a short, human-readable session name from the document data.
+ * Derives a session name from the uploaded file metadata.
  *
  * Resolution order:
- *  1. First meaningful sentence from the AI summary (≤ 50 chars, whole words)
- *  2. Comma-joined labels of the first three detected AR components
- *  3. Filename without extension
+ *  1. Original uploaded filename
+ *  2. Stored/uploaded filename
+ *  3. Untitled
  *
  * @param {object} doc - The loaded document object.
  * @returns {string}
  */
 export function deriveSessionName(doc) {
-  const summary = doc?.ai_summary || '';
-  if (summary) {
-    let text = summary;
-    // Strip prompt fragments that may have leaked into the summary
-    const markers = ['Summary:', 'Analysis:', 'Provide a clear'];
-    for (const marker of markers) {
-      const idx = text.lastIndexOf(marker);
-      if (idx !== -1) text = text.slice(idx + marker.length);
-    }
-    text = text.trimStart();
-
-    const firstSentence = text.split(/[.\n]/).find((s) => s.trim().length > 10);
-    if (firstSentence) {
-      let name = firstSentence.trim().replace(/\*+/g, '').substring(0, 50);
-      // Trim to last whole word if cut mid-word
-      if (name.length === 50) {
-        const lastSpace = name.lastIndexOf(' ');
-        if (lastSpace > 20) name = name.substring(0, lastSpace);
-      }
-      return name;
-    }
-  }
-
-  const components = doc?.ar?.components || [];
-  if (components.length > 0) {
-    const labels = components.slice(0, 3).map((c) => c.label).filter(Boolean);
-    if (labels.length > 0) return labels.join(', ');
-  }
-
-  const rawName = doc?.file?.original_name || doc?.file?.name || 'Untitled';
-  return rawName.replace(/\.[^.]+$/, '');
+  return doc?.file?.original_name || doc?.file?.name || 'Untitled';
 }

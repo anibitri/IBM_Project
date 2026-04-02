@@ -1,6 +1,8 @@
 import React, { useMemo, Suspense } from 'react';
 import { Canvas, useLoader } from '@react-three/fiber';
-import { OrbitControls, Html, Line } from '@react-three/drei';
+import { OrbitControls } from '@react-three/drei/core/OrbitControls.js';
+import { Html } from '@react-three/drei/web/Html.js';
+import { Line } from '@react-three/drei/core/Line.js';
 import * as THREE from 'three';
 
 /* ═══════════════════════════════════════════════════════════
