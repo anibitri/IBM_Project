@@ -1,10 +1,9 @@
-import { useEffect, useMemo, useRef } from 'react';
-import { View, StyleSheet, Dimensions, Animated, Easing } from 'react-native';
+import { useMemo } from 'react';
+import { View, StyleSheet, Dimensions } from 'react-native';
 import Svg, {
   Rect, G, Line, Circle, Text as SvgText, Path, Ellipse,
   Defs, LinearGradient, Stop,
 } from 'react-native-svg';
-import { FlowParticle } from './FlowAnimation';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -62,7 +61,6 @@ function CornerBrackets({ x, y, w, h, color, strokeWidth = 1.5 }) {
 
 export default function AROverlay({
   components,
-  connections = [],
   imageDimensions,
   selectedComponent,
   onComponentPress,
@@ -70,68 +68,12 @@ export default function AROverlay({
   cameraMode = false,
   containerWidth: containerWidthProp,
 }) {
-  const scanAnim = useRef(new Animated.Value(0)).current;
-  const pulseAnim = useRef(new Animated.Value(0)).current;
-
   const displayWidth  = cameraMode
     ? (imageDimensions?.displayWidth  || (SCREEN_WIDTH - 32))
     : (containerWidthProp || SCREEN_WIDTH - 32);
   const displayHeight = cameraMode
     ? (imageDimensions?.displayHeight || displayWidth * ((imageDimensions?.height || 1) / (imageDimensions?.width || 1)))
     : displayWidth * ((imageDimensions?.height || 1) / (imageDimensions?.width || 1));
-
-  useEffect(() => {
-    const scanLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(scanAnim, {
-          toValue: 1,
-          duration: 2600,
-          easing: Easing.inOut(Easing.cubic),
-          useNativeDriver: true,
-        }),
-        Animated.timing(scanAnim, {
-          toValue: 0,
-          duration: 0,
-          useNativeDriver: true,
-        }),
-        Animated.delay(550),
-      ]),
-    );
-
-    const pulseLoop = Animated.loop(
-      Animated.sequence([
-        Animated.timing(pulseAnim, {
-          toValue: 1,
-          duration: 1300,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-        Animated.timing(pulseAnim, {
-          toValue: 0,
-          duration: 1300,
-          easing: Easing.inOut(Easing.sin),
-          useNativeDriver: true,
-        }),
-      ]),
-    );
-
-    scanLoop.start();
-    pulseLoop.start();
-    return () => {
-      scanLoop.stop();
-      pulseLoop.stop();
-    };
-  }, [pulseAnim, scanAnim]);
-
-  const scanTranslateY = scanAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, displayHeight],
-  });
-
-  const pulseOpacity = pulseAnim.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0.28, 0.82],
-  });
 
   const hudGrid = useMemo(() => ({
     vertical: Array.from({ length: Math.floor(displayWidth / 44) + 1 }, (_, index) => index * 44),
@@ -198,27 +140,6 @@ export default function AROverlay({
         <Line x1={12} y1={displayHeight - 36} x2={12} y2={displayHeight - 12} stroke="#8be9fd" strokeWidth={1.2} opacity={0.7} />
         <Line x1={displayWidth - 36} y1={displayHeight - 12} x2={displayWidth - 12} y2={displayHeight - 12} stroke="#8be9fd" strokeWidth={1.2} opacity={0.7} />
         <Line x1={displayWidth - 12} y1={displayHeight - 36} x2={displayWidth - 12} y2={displayHeight - 12} stroke="#8be9fd" strokeWidth={1.2} opacity={0.7} />
-
-        {/* ── Connection lines ────────────────────────── */}
-        {connections.map((conn, i) => {
-          const fromComp = components.find(c => c.id === conn.from);
-          const toComp   = components.find(c => c.id === conn.to);
-          if (!fromComp || !toComp) return null;
-          const fx = fromComp.center_x * displayWidth;
-          const fy = fromComp.center_y * displayHeight;
-          const tx = toComp.center_x   * displayWidth;
-          const ty = toComp.center_y   * displayHeight;
-          return (
-            <Line
-              key={`cl-${i}`}
-              x1={fx} y1={fy} x2={tx} y2={ty}
-              stroke={ACCENT}
-              strokeWidth={1}
-              strokeDasharray="6,4"
-              opacity={0.35}
-            />
-          );
-        })}
 
         {/* ── Components ──────────────────────────────── */}
         {components.map((comp, index) => {
@@ -405,50 +326,6 @@ export default function AROverlay({
           );
         })}
       </Svg>
-
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          styles.scanTrail,
-          {
-            width: displayWidth,
-            transform: [{ translateY: scanTranslateY }],
-            opacity: pulseOpacity,
-          },
-        ]}
-      />
-      <Animated.View
-        pointerEvents="none"
-        style={[
-          styles.scanLine,
-          {
-            width: displayWidth,
-            transform: [{ translateY: scanTranslateY }],
-            opacity: pulseOpacity,
-          },
-        ]}
-      />
-
-      {connections.map((conn, i) => {
-        const fromComp = components.find(c => c.id === conn.from);
-        const toComp   = components.find(c => c.id === conn.to);
-        if (!fromComp || !toComp) return null;
-        const color =
-          conn.type === 'otlp'     ? '#00e6ff' :
-          conn.type === 'https' || conn.type === 'http' ? '#FFB74D' :
-          conn.type === 'internal' ? '#4ade80' :
-          conn.type === 'signal'   ? '#a78bfa' :
-          '#4a90d9';
-        return (
-          <FlowParticle
-            key={`fp-${i}`}
-            from={{ x: fromComp.center_x * displayWidth, y: fromComp.center_y * displayHeight }}
-            to={{ x: toComp.center_x * displayWidth,   y: toComp.center_y   * displayHeight }}
-            speed={2200}
-            color={color}
-          />
-        );
-      })}
     </View>
   );
 }
@@ -459,21 +336,5 @@ const styles = StyleSheet.create({
     top: 0,
     left: 0,
     overflow: 'hidden',
-  },
-  scanLine: {
-    position: 'absolute',
-    left: 0,
-    height: 2,
-    backgroundColor: 'rgba(125, 211, 252, 0.9)',
-    shadowColor: '#7dd3fc',
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.9,
-    shadowRadius: 12,
-  },
-  scanTrail: {
-    position: 'absolute',
-    left: 0,
-    height: 56,
-    backgroundColor: 'rgba(125, 211, 252, 0.08)',
   },
 });

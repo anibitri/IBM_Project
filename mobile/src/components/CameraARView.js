@@ -11,6 +11,7 @@ import {
   Text,
   StyleSheet,
   Dimensions,
+  useWindowDimensions,
   TouchableOpacity,
   Animated,
   StatusBar,
@@ -31,8 +32,6 @@ import Svg, {
   Text as SvgText,
 } from 'react-native-svg';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-
 const PARALLAX_FACTOR = 28;
 const SENSOR_INTERVAL = 50;
 const SMOOTHING = 0.18;
@@ -40,7 +39,6 @@ const CORNER = 12;
 
 export default function CameraARView({
   components,
-  connections = [],
   selectedComponent,
   onComponentPress,
   imageDimensions,
@@ -84,26 +82,6 @@ export default function CameraARView({
     });
     
     return () => subscription.unsubscribe();
-  }, []);
-
-  /* ── Scan beam — sweeps top-to-bottom like a lidar pass ── */
-  const scanY = useRef(new Animated.Value(0)).current;
-  useEffect(() => {
-    Animated.loop(
-      Animated.sequence([
-        Animated.timing(scanY, {
-          toValue: 1,
-          duration: 4000,
-          useNativeDriver: true,
-        }),
-        Animated.delay(800),
-        Animated.timing(scanY, {
-          toValue: 0,
-          duration: 0,
-          useNativeDriver: true,
-        }),
-      ]),
-    ).start();
   }, []);
 
   /* ── Component lock-on pulse ── */
@@ -199,6 +177,10 @@ export default function CameraARView({
           uri: `file://${photo.path}`,
           type: 'image/jpeg',
           name: 'scan.jpg',
+          captureSource: 'live-camera',
+          clientWidth: photo.width,
+          clientHeight: photo.height,
+          orientation: photo.orientation,
         });
       }
       setScanStatus('done');
@@ -215,14 +197,30 @@ export default function CameraARView({
   }, [hasPermission]);
 
   const isFullscreen = fullscreenProp;
-  // Non-fullscreen camera uses full SCREEN_WIDTH — the canvasWrap in DiagramScreen
-  // removes its margin when in camera mode so the camera fills edge-to-edge.
-  const displayWidth = SCREEN_WIDTH;
-  const aspectRatio =
-    (imageDimensions?.height || 600) / (imageDimensions?.width || 800);
-  const displayHeight = isFullscreen
-    ? SCREEN_HEIGHT
-    : displayWidth * (aspectRatio || 0.75);
+
+  // useWindowDimensions updates automatically on rotation — never stale.
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+
+  // Measure the actual rendered container so we know the exact pixel area the
+  // camera preview is filling. This is the ground truth for component scaling.
+  // Start as null so overlays are withheld until onLayout gives us real dimensions —
+  // the initial guess would be wrong (wrong height, doesn't account for insets /
+  // fullscreen state) and causes overlays to land in the wrong positions on first render.
+  const [containerSize, setContainerSize] = useState(null);
+  const containerWidth  = containerSize?.width  ?? windowWidth;
+  const containerHeight = containerSize?.height ?? windowWidth * 0.75;
+
+  const rawPhotoW = imageDimensions?.width  > 0 ? imageDimensions.width  : containerWidth;
+  const rawPhotoH = imageDimensions?.height > 0 ? imageDimensions.height : containerHeight;
+  const safePhotoW = Math.max(1, rawPhotoW);
+  const safePhotoH = Math.max(1, rawPhotoH);
+  const containScale = Math.min(containerWidth / safePhotoW, containerHeight / safePhotoH);
+  const renderWidth = safePhotoW * containScale;
+  const renderHeight = safePhotoH * containScale;
+  const overlayOffsetX = (containerWidth - renderWidth) / 2;
+  const overlayOffsetY = (containerHeight - renderHeight) / 2;
+
+  const remapComp = (comp) => comp;
 
   /* Early return AFTER all hooks - Ensure we have a valid camera device too! */
   if (!hasPermission || device == null) {
@@ -236,11 +234,6 @@ export default function CameraARView({
     );
   }
 
-  const scanTranslateY = scanY.interpolate({
-    inputRange: [0, 1],
-    outputRange: [0, displayHeight],
-  });
-
   const selectedPulseOpacity = pulseAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [0.5, 1],
@@ -253,28 +246,20 @@ export default function CameraARView({
   /* ═══════════════════════════════════════════════════════
    * Holographic tooltip — floats beside the locked target
    * ═══════════════════════════════════════════════════════ */
-  const floatingInfoPanel = selected
+  const floatingInfoPanel = (selected && containerSize)
     ? (() => {
-        const cx = selected.center_x * displayWidth;
-        const cy = selected.center_y * displayHeight;
-        const dockRight = cx < displayWidth * 0.5;
+        const ts = remapComp(selected);
+        const cx = ts.center_x * renderWidth;
+        const cy = ts.center_y * renderHeight;
+        const dockRight = cx < renderWidth * 0.5;
         const panelW = 168;
         const panelLeft = dockRight
-          ? Math.min(
-              cx + (selected.width * displayWidth) / 2 + 14,
-              displayWidth - panelW - 6,
-            )
-          : Math.max(
-              cx - (selected.width * displayWidth) / 2 - panelW - 10,
-              6,
-            );
-        const panelTop = Math.max(
-          Math.min(cy - 40, displayHeight - 200),
-          52,
-        );
+          ? Math.min(cx + (ts.width * renderWidth) / 2 + 14, renderWidth - panelW - 6)
+          : Math.max(cx - (ts.width * renderWidth) / 2 - panelW - 10, 6);
+        const panelTop = Math.max(Math.min(cy - 40, renderHeight - 200), 52);
         const lineFromX = dockRight
-          ? cx + (selected.width * displayWidth) / 2
-          : cx - (selected.width * displayWidth) / 2;
+          ? cx + (ts.width * renderWidth) / 2
+          : cx - (ts.width * renderWidth) / 2;
         const lineToX = dockRight ? panelLeft : panelLeft + panelW;
         const lineToY = panelTop + 18;
 
@@ -282,8 +267,8 @@ export default function CameraARView({
           <React.Fragment>
             {/* Leader line */}
             <Svg
-              width={displayWidth}
-              height={displayHeight}
+              width={renderWidth}
+              height={renderHeight}
               style={StyleSheet.absoluteFill}
               pointerEvents="none"
             >
@@ -414,13 +399,12 @@ export default function CameraARView({
    * Composited camera content
    * ═══════════════════════════════════════════════════════ */
   const cameraContent = (
-    <View style={[styles.wrapper, isFullscreen && styles.wrapperFullscreen]}>
+    // Wrapper always fills its parent (flex:1). Container fills the wrapper (flex:1).
+    // Camera fills the container (absoluteFill). AR overlay is centered via overlayOffsetY.
+    <View style={styles.wrapperFullscreen}>
       <View
-        style={[
-          styles.container,
-          { width: displayWidth, height: displayHeight },
-          isFullscreen && styles.containerFullscreen,
-        ]}
+        style={styles.container}
+        onLayout={(e) => setContainerSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
       >
         {/* Bare React Native Vision Camera Replacement */}
         <Camera
@@ -429,6 +413,7 @@ export default function CameraARView({
           device={device}
           isActive={appIsActive}
           photo={true}
+          resizeMode="contain"
         />
 
         {/* Vignette overlays */}
@@ -441,32 +426,32 @@ export default function CameraARView({
           style={[StyleSheet.absoluteFill, { opacity: gridOpacity }]}
         >
           <Svg
-            width={displayWidth}
-            height={displayHeight}
+            width={containerWidth}
+            height={containerHeight}
             style={StyleSheet.absoluteFill}
           >
             {Array.from(
-              { length: Math.floor(displayWidth / 50) + 1 },
+              { length: Math.floor(containerWidth / 50) + 1 },
               (_, i) => (
                 <SvgLine
                   key={`gv-${i}`}
                   x1={i * 50}
                   y1={0}
                   x2={i * 50}
-                  y2={displayHeight}
+                  y2={containerHeight}
                   stroke="#4a90d9"
                   strokeWidth={0.4}
                 />
               ),
             )}
             {Array.from(
-              { length: Math.floor(displayHeight / 50) + 1 },
+              { length: Math.floor(containerHeight / 50) + 1 },
               (_, i) => (
                 <SvgLine
                   key={`gh-${i}`}
                   x1={0}
                   y1={i * 50}
-                  x2={displayWidth}
+                  x2={containerWidth}
                   y2={i * 50}
                   stroke="#4a90d9"
                   strokeWidth={0.4}
@@ -476,47 +461,31 @@ export default function CameraARView({
           </Svg>
         </Animated.View>
 
-        {/* Scan beam + trail */}
+        {/* ── AR overlay layer — aligned to contain-scaled camera preview ── */}
         <Animated.View
-          pointerEvents="none"
           style={[
-            styles.scanBeam,
             {
-              width: displayWidth,
-              transform: [{ translateY: scanTranslateY }],
+              position: 'absolute',
+              top: overlayOffsetY,
+              left: overlayOffsetX,
+              width: renderWidth,
+              height: renderHeight,
+              overflow: 'hidden',
             },
-          ]}
-        />
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.scanTrail,
             {
-              width: displayWidth,
-              transform: [{ translateY: scanTranslateY }],
-            },
-          ]}
-        />
-
-        {/* ── Parallax AR layer ── */}
-        <Animated.View
-          style={[
-            StyleSheet.absoluteFillObject,
-            {
-              transform: [
-                { translateX: offsetX },
-                { translateY: offsetY },
-              ],
               opacity: fadeIn,
             },
           ]}
         >
-          {/* Component holographic frames */}
-          {components.map((comp) => {
-            const x = comp.x * displayWidth;
-            const y = comp.y * displayHeight;
-            const w = comp.width * displayWidth;
-            const h = comp.height * displayHeight;
+          {/* Component holographic frames — only render once onLayout has given us
+              real container dimensions; using the initial guess causes boxes to
+              land in the wrong positions on the very first render after a scan. */}
+          {containerSize && components.map((comp) => {
+            const tc = remapComp(comp);
+            const x = tc.x * renderWidth;
+            const y = tc.y * renderHeight;
+            const w = tc.width  * renderWidth;
+            const h = tc.height * renderHeight;
             const isSelected = selected?.id === comp.id;
             const color = comp.color || '#4a90d9';
             const borderColor = isSelected ? '#FFB74D' : color;
@@ -690,7 +659,7 @@ export default function CameraARView({
           style={[styles.bottomLeftHud, { opacity: hudFlicker }]}
         >
           <Text style={styles.hudSmallText}>
-            RES {displayWidth}x{Math.round(displayHeight)}
+            RES {containerWidth}x{containerHeight}
           </Text>
           <Text style={styles.hudSmallText}>DEPTH SCAN ACTIVE</Text>
           <Text style={styles.hudSmallText}>
@@ -712,7 +681,7 @@ export default function CameraARView({
           </Text>
         </Animated.View>
 
-        {/* Right-side control strip */}
+        {/* Right-side control strip — labels toggle + dismiss + Ask AI */}
         <View style={styles.controls}>
           <TouchableOpacity
             style={[styles.ctrlBtn, showLabels && styles.ctrlBtnActive]}
@@ -720,14 +689,6 @@ export default function CameraARView({
           >
             <Ionicons name={showLabels ? 'text' : 'text-outline'} size={18} color={showLabels ? '#00e6ff' : '#ccc'} />
           </TouchableOpacity>
-          {onToggleFullscreen && (
-            <TouchableOpacity
-              style={styles.ctrlBtn}
-              onPress={onToggleFullscreen}
-            >
-              <Ionicons name={isFullscreen ? 'contract-outline' : 'expand-outline'} size={18} color="#ccc" />
-            </TouchableOpacity>
-          )}
           {selected && (
             <TouchableOpacity
               style={[styles.ctrlBtn, { borderColor: '#FFB74D' }]}
@@ -742,33 +703,6 @@ export default function CameraARView({
               onPress={onAskAI}
             >
               <Ionicons name="sparkles-outline" size={18} color="#2997ff" />
-            </TouchableOpacity>
-          )}
-          {onScan && (
-            <TouchableOpacity
-              style={[
-                styles.ctrlBtn,
-                styles.scanBtn,
-                scanStatus !== 'idle' && styles.scanBtnActive,
-              ]}
-              onPress={captureAndScan}
-              disabled={scanStatus !== 'idle'}
-            >
-              <Ionicons
-                name={
-                  scanStatus === 'capturing' ? 'aperture-outline' :
-                  scanStatus === 'processing' ? 'sync-outline' :
-                  scanStatus === 'done' ? 'checkmark-circle-outline' :
-                  scanStatus === 'error' ? 'alert-circle-outline' :
-                  'scan-outline'
-                }
-                size={20}
-                color={
-                  scanStatus === 'done' ? '#4caf50' :
-                  scanStatus === 'error' ? '#f44336' :
-                  '#00e6ff'
-                }
-              />
             </TouchableOpacity>
           )}
         </View>
@@ -788,6 +722,66 @@ export default function CameraARView({
             </Text>
           </View>
         )}
+
+        {/* Bottom action bar — diagram button | large capture button | spacer */}
+        <View style={styles.bottomActionBar}>
+          {/* Back to Diagram */}
+          {onToggleFullscreen ? (
+            <TouchableOpacity style={styles.bottomSideBtn} onPress={onToggleFullscreen} activeOpacity={0.8}>
+              <Ionicons name="layers-outline" size={22} color="#ccc" />
+              <Text style={styles.bottomSideBtnText}>Diagram</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.bottomSideBtn} />
+          )}
+
+          {/* Large capture / analyse button */}
+          {onScan && (
+            <TouchableOpacity
+              style={[styles.captureBtn, scanStatus !== 'idle' && styles.captureBtnActive]}
+              onPress={captureAndScan}
+              disabled={scanStatus !== 'idle'}
+              activeOpacity={0.8}
+            >
+              <View style={[styles.captureRing, scanStatus !== 'idle' && styles.captureRingActive]}>
+                <View style={styles.captureCore}>
+                  <Ionicons
+                    name={
+                      scanStatus === 'capturing' ? 'aperture-outline' :
+                      scanStatus === 'processing' ? 'sync-outline' :
+                      scanStatus === 'done' ? 'checkmark-circle-outline' :
+                      scanStatus === 'error' ? 'alert-circle-outline' :
+                      'camera-outline'
+                    }
+                    size={30}
+                    color={
+                      scanStatus === 'done' ? '#4caf50' :
+                      scanStatus === 'error' ? '#f44336' :
+                      '#fff'
+                    }
+                  />
+                </View>
+              </View>
+              <Text style={[
+                styles.captureBtnLabel,
+                scanStatus === 'done' && { color: '#4caf50' },
+                scanStatus === 'error' && { color: '#f44336' },
+              ]}>
+                {scanStatus === 'idle' ? 'Capture & Analyse' :
+                 scanStatus === 'capturing' ? 'Capturing…' :
+                 scanStatus === 'processing' ? 'Analysing…' :
+                 scanStatus === 'done' ? 'Complete' :
+                 'Error — Retry'}
+              </Text>
+            </TouchableOpacity>
+          )}
+
+          {/* Spacer to balance layout when onScan is absent */}
+          {!onScan && <View style={styles.bottomSideBtn} />}
+
+          {/* Right placeholder — keeps capture button centred */}
+          <View style={styles.bottomSideBtn} />
+        </View>
       </View>
 
       {/* Static info panel — NON-fullscreen only */}
@@ -795,33 +789,25 @@ export default function CameraARView({
     </View>
   );
 
-  if (isFullscreen) {
-    return (
-      <>
-        <StatusBar hidden />
-        {cameraContent}
-      </>
-    );
-  }
-
-  return cameraContent;
+  return (
+    <>
+      {isFullscreen && <StatusBar hidden />}
+      {cameraContent}
+    </>
+  );
 }
 
 // ... styles remain completely unchanged
 const styles = StyleSheet.create({
   wrapper: {},
-  wrapperFullscreen: { flex: 1 },
-  container: {
-    position: 'relative',
-    borderRadius: 12,
-    overflow: 'hidden',
+  wrapperFullscreen: {
+    flex: 1,
     backgroundColor: '#000',
   },
-  containerFullscreen: {
-    width: SCREEN_WIDTH,
-    height: SCREEN_HEIGHT,
-    borderRadius: 0,
+  container: {
     flex: 1,
+    overflow: 'hidden',
+    backgroundColor: '#000',
   },
 
   /* Vignette */
@@ -850,31 +836,6 @@ const styles = StyleSheet.create({
     height: 120,
     zIndex: 0,
     backgroundColor: 'transparent',
-  },
-
-  /* Scan beam */
-  scanBeam: {
-    position: 'absolute',
-    left: 0,
-    height: 2,
-    backgroundColor: 'rgba(0, 230, 255, 0.65)',
-    zIndex: 6,
-    ...Platform.select({
-      ios: {
-        shadowColor: '#00e6ff',
-        shadowOffset: { width: 0, height: 0 },
-        shadowOpacity: 1,
-        shadowRadius: 14,
-      },
-      android: { elevation: 3 },
-    }),
-  },
-  scanTrail: {
-    position: 'absolute',
-    left: 0,
-    height: 60,
-    zIndex: 5,
-    backgroundColor: 'rgba(0, 230, 255, 0.04)',
   },
 
   /* Component frame */
@@ -1119,19 +1080,79 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  scanBtn: {
-    borderColor: 'rgba(0, 230, 255, 0.5)',
-    marginTop: 6,
+  /* Bottom action bar */
+  bottomActionBar: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 60 : 44,
+    left: 0,
+    right: 0,
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+    paddingHorizontal: 20,
+    paddingBottom: 16,
+    paddingTop: 12,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+    zIndex: 12,
   },
-  scanBtnActive: {
-    backgroundColor: 'rgba(0, 230, 255, 0.15)',
+  bottomSideBtn: {
+    width: 72,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingBottom: 4,
+  },
+  bottomSideBtnText: {
+    color: '#ccc',
+    fontSize: 11,
+    fontWeight: '600',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    letterSpacing: 0.4,
+  },
+  captureBtn: {
+    alignItems: 'center',
+    gap: 6,
+  },
+  captureBtnActive: {
+    opacity: 0.75,
+  },
+  captureRing: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 3,
+    borderColor: 'rgba(255,255,255,0.6)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.3)',
+  },
+  captureRingActive: {
     borderColor: '#00e6ff',
   },
+  captureCore: {
+    width: 62,
+    height: 62,
+    borderRadius: 31,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255,255,255,0.25)',
+  },
+  captureBtnLabel: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: '700',
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+    letterSpacing: 0.5,
+    textAlign: 'center',
+  },
+
   scanStatusBanner: {
     position: 'absolute',
-    bottom: 52,
+    bottom: Platform.OS === 'ios' ? 160 : 140,
     left: 10,
-    right: 60,
+    right: 10,
     backgroundColor: 'rgba(0,0,0,0.72)',
     paddingHorizontal: 12,
     paddingVertical: 7,
@@ -1291,14 +1312,15 @@ const styles = StyleSheet.create({
 
   /* No-camera fallback */
   noCameraContainer: {
-    width: SCREEN_WIDTH - 32,
-    height: 200,
+    flex: 1,
+    minHeight: 200,
     justifyContent: 'center',
     alignItems: 'center',
     backgroundColor: '#0a1628',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: 'rgba(74, 144, 217, 0.3)',
+    margin: 16,
   },
   noCameraText: {
     color: '#fff',

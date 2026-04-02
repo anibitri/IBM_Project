@@ -34,12 +34,20 @@ export default function UploadScreen({ navigation, route }) {
 
   const handleImagePicker = async () => {
     try {
-      const result = await launchImageLibrary({ mediaType: 'photo', quality: 1 });
+      const result = await launchImageLibrary({ mediaType: 'photo', quality: 1, includeExtra: true });
       if (result.didCancel) return;
       if (result.errorCode) { Alert.alert('Error', result.errorMessage || 'Failed to open gallery'); return; }
       if (!result.assets?.length) return;
       const asset = result.assets[0];
-      const file = { uri: asset.uri, type: asset.type || 'image/png', name: asset.fileName || 'diagram.png' };
+      const file = {
+        uri: asset.uri,
+        type: asset.type || 'image/png',
+        name: asset.fileName || 'diagram.png',
+        captureSource: 'gallery',
+        clientWidth: asset.width,
+        clientHeight: asset.height,
+        orientation: asset.orientation ?? asset.exif?.Orientation,
+      };
       setPreview(asset.uri);
       const ok = await processFile(file);
       if (ok) { postUploadNav(); } else { showAnalysisError(error); }
@@ -65,12 +73,20 @@ export default function UploadScreen({ navigation, route }) {
 
   const handleCamera = async () => {
     try {
-      const result = await launchCamera({ mediaType: 'photo', quality: 1, saveToPhotos: false });
+      const result = await launchCamera({ mediaType: 'photo', quality: 1, saveToPhotos: false, includeExtra: true });
       if (result.didCancel) return;
       if (result.errorCode) { Alert.alert('Camera Error', result.errorMessage || 'Camera permission is required'); return; }
       if (!result.assets?.length) return;
       const asset = result.assets[0];
-      const file = { uri: asset.uri, type: asset.type || 'image/png', name: asset.fileName || 'diagram.png' };
+      const file = {
+        uri: asset.uri,
+        type: asset.type || 'image/png',
+        name: asset.fileName || 'diagram.png',
+        captureSource: 'camera',
+        clientWidth: asset.width,
+        clientHeight: asset.height,
+        orientation: asset.orientation ?? asset.exif?.Orientation,
+      };
       setPreview(asset.uri);
       const ok = await processFile(file);
       if (ok) { postUploadNav(); } else { showAnalysisError(error); }

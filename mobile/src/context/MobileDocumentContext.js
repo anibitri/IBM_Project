@@ -6,8 +6,7 @@
  */
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect } from 'react';
 import { mockBackend } from '../mocks/mockBackend';
-import { buildChatContext, buildComponentQuestion } from '@ar-viewer/shared';
-import { makeSessionId } from '@ar-viewer/shared';
+import { buildChatContext, buildComponentQuestion, makeSessionId, resolveBaseURL } from '@ar-viewer/shared';
 
 const USE_MOCK_BACKEND = false; // flip to false when the real backend is reachable
 
@@ -104,6 +103,29 @@ export const MobileDocumentProvider = ({ children }) => {
     }
   }, [document, chatHistory, upsertSession]);
 
+  // ── Builds per-page image URLs from the process result ──────────────────────
+  const buildImagesWithUrls = (processResult, uploadResult, file) => {
+    const originalUri = file.uri || null;
+    const fileType = (file.type || uploadResult.file?.type || '').toLowerCase();
+    const fileName = (file.name || uploadResult.file?.original_name || '').toLowerCase();
+    const isPDF = fileType.includes('pdf') || fileName.endsWith('.pdf');
+
+    const apiBase = resolveBaseURL().replace(/\/api\/?$/, '');
+    const staticBase = `${apiBase}/static/uploads/`;
+
+    return (processResult.images || []).map((img, idx) => {
+      // For image uploads: always display from the local gallery URI — server URLs
+      // may be behind ngrok/auth headers that the native Image component can't send.
+      // For PDFs: page images come from the server (no local per-page URIs exist).
+      const relPath = img.image_path
+        ? img.image_path.split('uploads/').pop()
+        : img.image_filename;
+      const serverUrl = relPath ? `${staticBase}${relPath}` : null;
+      const url = (!isPDF && idx === 0 && originalUri) ? originalUri : serverUrl;
+      return { ...img, url };
+    });
+  };
+
   // ── Upload & Process ────────────────────────────────────
   const uploadAndProcess = useCallback(async (file) => {
     setLoading(true);
@@ -118,21 +140,22 @@ export const MobileDocumentProvider = ({ children }) => {
       const storedName = uploadResult.file.stored_name;
       const processResult = await backend.processDocument(storedName, true, true);
 
-      // Build accessible URLs for per-page images
-      const serverFileUrl = uploadResult.file.url || '';
-      const hostMatch = serverFileUrl.match(/^https?:\/\/[^/]+/);
-      const staticBase = hostMatch ? `${hostMatch[0]}/static/uploads/` : '/static/uploads/';
-      const imagesWithUrls = (processResult.images || []).map(img => ({
-        ...img,
-        url: img.image_filename ? `${staticBase}${img.image_filename}` : null,
-      }));
+      const imagesWithUrls = buildImagesWithUrls(processResult, uploadResult, file);
 
       const nextDocument = {
         sessionId: makeSessionId(),
         storedName,
-        file: { ...uploadResult.file, url: file.uri || uploadResult.file.url },
         ...processResult,
         images: imagesWithUrls,
+        // Must come after ...processResult so processResult.file doesn't overwrite the local URI
+        file: {
+          ...uploadResult.file,
+          url: file.uri || uploadResult.file.url,
+          captureSource: file.captureSource || null,
+          clientWidth: file.clientWidth || null,
+          clientHeight: file.clientHeight || null,
+          orientation: file.orientation || null,
+        },
       };
       // Default to first page if multi-page, otherwise all-pages view
       setCurrentImageIndex(imagesWithUrls.length > 1 ? 0 : -1);
@@ -161,21 +184,23 @@ export const MobileDocumentProvider = ({ children }) => {
       const storedName = uploadResult.file.stored_name;
       const processResult = await backend.processDocument(storedName, true, true);
 
-      const serverFileUrl = uploadResult.file.url || '';
-      const hostMatch = serverFileUrl.match(/^https?:\/\/[^/]+/);
-      const staticBase = hostMatch ? `${hostMatch[0]}/static/uploads/` : '/static/uploads/';
-      const imagesWithUrls = (processResult.images || []).map(img => ({
-        ...img,
-        url: img.image_filename ? `${staticBase}${img.image_filename}` : null,
-      }));
+      const imagesWithUrls = buildImagesWithUrls(processResult, uploadResult, file);
 
       const updatedDocument = {
         sessionId: savedSessionId,
         sessionName: savedSessionName,
         storedName,
-        file: { ...uploadResult.file, url: file.uri || uploadResult.file.url },
         ...processResult,
         images: imagesWithUrls,
+        // Must come after ...processResult so processResult.file doesn't overwrite the local URI
+        file: {
+          ...uploadResult.file,
+          url: file.uri || uploadResult.file.url,
+          captureSource: file.captureSource || null,
+          clientWidth: file.clientWidth || null,
+          clientHeight: file.clientHeight || null,
+          orientation: file.orientation || null,
+        },
       };
 
       setCurrentImageIndex(imagesWithUrls.length > 1 ? 0 : -1);
@@ -229,7 +254,7 @@ export const MobileDocumentProvider = ({ children }) => {
     setChatHistory((prev) => [...prev, { role, content }]);
   }, []);
 
-  const askQuestion = useCallback(async (query) => {
+  const askQuestion = useCallback(async (query, questionContext = null) => {
     setError(null);
 
     let activeDoc = document;
@@ -250,7 +275,76 @@ export const MobileDocumentProvider = ({ children }) => {
     try {
       addMessage('user', query);
 
-      const context = activeDoc?.file ? buildChatContext(activeDoc, currentImageIndexRef.current) : {};
+      const normalizedQuestionContext =
+        questionContext && typeof questionContext === 'object'
+          ? questionContext
+          : null;
+
+      const requestedScope = normalizedQuestionContext?.scope || null;
+      const requestedPageIndex = Number.isInteger(normalizedQuestionContext?.pageIndex)
+        ? normalizedQuestionContext.pageIndex
+        : null;
+
+      const scopedPageIndex = requestedScope === 'document'
+        ? -1
+        : requestedPageIndex ?? currentImageIndexRef.current;
+
+      const context = activeDoc?.file ? buildChatContext(activeDoc, scopedPageIndex) : {};
+
+      const selectedComponent = normalizedQuestionContext?.selectedComponent || null;
+      const selectedPage =
+        scopedPageIndex >= 0 && (activeDoc?.images || [])[scopedPageIndex]
+          ? (activeDoc.images || [])[scopedPageIndex]
+          : null;
+
+      // When a specific page/diagram is selected, override stored_name with the
+      // page's own image file path (relative to the uploads folder) so the backend
+      // runs vision Q&A against the correct image instead of the original document
+      // file (which may be a PDF and cannot be opened by the vision model).
+      if (selectedPage) {
+        const pageRelPath = selectedPage.image_path
+          ? selectedPage.image_path.split('uploads/').pop()
+          : selectedPage.image_filename;
+        if (pageRelPath) {
+          context.stored_name = pageRelPath;
+        }
+      }
+
+      context.request_scope = requestedScope || (scopedPageIndex === -1 ? 'document' : 'diagram');
+      context.frontend_question_context = {
+        source: normalizedQuestionContext?.source || 'chat',
+        scope: context.request_scope,
+        page_index: scopedPageIndex,
+        page_number: selectedPage?.page || (scopedPageIndex >= 0 ? scopedPageIndex + 1 : null),
+        selected_diagram: {
+          page_index: scopedPageIndex,
+          page_number: selectedPage?.page || (scopedPageIndex >= 0 ? scopedPageIndex + 1 : null),
+          image_filename: selectedPage?.image_filename || selectedPage?.image_path || null,
+          total_pages: activeDoc?.images?.length || 0,
+        },
+        selected_component: selectedComponent
+          ? {
+              id: selectedComponent.id || null,
+              label: selectedComponent.label || '',
+              type: selectedComponent.type || '',
+              description: selectedComponent.description || '',
+              confidence:
+                typeof selectedComponent.confidence === 'number'
+                  ? selectedComponent.confidence
+                  : null,
+            }
+          : null,
+      };
+
+      if (context.request_scope === 'component' && selectedComponent) {
+        context.focus_component = {
+          id: selectedComponent.id || null,
+          label: selectedComponent.label || '',
+          type: selectedComponent.type || '',
+          description: selectedComponent.description || '',
+        };
+      }
+
       const recentHistory = chatHistoryRef.current.slice(-10);
       const result = await backend.askQuestion(query, context, recentHistory);
       addMessage('assistant', result.answer);
@@ -267,7 +361,23 @@ export const MobileDocumentProvider = ({ children }) => {
       document?.ar?.connections ||
       document?.ar?.relationships?.connections ||
       [];
-    setPendingQuestion(buildComponentQuestion(component, connections));
+    setPendingQuestion({
+      text: buildComponentQuestion(component, connections),
+      context: {
+        source: 'component-shortcut',
+        scope: 'component',
+        pageIndex: currentImageIndexRef.current,
+        selectedComponent: component
+          ? {
+              id: component.id || null,
+              label: component.label || '',
+              type: component.type || '',
+              description: component.description || '',
+              confidence: typeof component.confidence === 'number' ? component.confidence : null,
+            }
+          : null,
+      },
+    });
   }, [document]);
 
   const consumePendingQuestion = useCallback(() => {

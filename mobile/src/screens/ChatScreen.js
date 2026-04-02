@@ -9,7 +9,6 @@ import {
   TouchableWithoutFeedback,
   KeyboardAvoidingView,
   Platform,
-  ActivityIndicator,
   Alert,
   Modal,
   Animated,
@@ -49,6 +48,7 @@ export default function ChatScreen({ navigation }) {
   } = useDocumentContext();
 
   const [input, setInput] = useState('');
+  const [queuedQuestionContext, setQueuedQuestionContext] = useState(null);
   const [renameVisible, setRenameVisible] = useState(false);
   const [renameTargetId, setRenameTargetId] = useState(null);
   const [renameValue, setRenameValue] = useState('');
@@ -58,6 +58,24 @@ export default function ChatScreen({ navigation }) {
 
   const flatListRef = useRef(null);
   const inputRef = useRef(null);
+
+  // ── Streaming animation ──────────────────────────────────────────────────────
+  // Track which message index is currently being streamed (-1 = none)
+  const [streamingIndex, setStreamingIndex] = useState(-1);
+  // Initialised to current history length so we never animate restored messages
+  const seenLengthRef = useRef(chatHistory.length);
+
+  useEffect(() => {
+    const newLen = chatHistory.length;
+    const oldLen = seenLengthRef.current;
+    seenLengthRef.current = newLen;
+
+    // Only stream if exactly 1 message was added (not a bulk session restore)
+    if (newLen === oldLen + 1 && chatHistory[newLen - 1]?.role === 'assistant') {
+      setStreamingIndex(newLen - 1);
+    }
+  }, [chatHistory]);
+  // ────────────────────────────────────────────────────────────────────────────
 
   const darkMode = !!accessibilitySettings?.darkMode;
   const p = getPalette(darkMode);
@@ -82,9 +100,16 @@ export default function ChatScreen({ navigation }) {
   /* ── Pre-fill input from pending question (set by DiagramAskSheet) ── */
   useEffect(() => {
     if (pendingQuestion) {
-      const q = consumePendingQuestion();
+      const pending = consumePendingQuestion();
+      const q = typeof pending === 'string' ? pending : pending?.text;
+      const pendingContext =
+        pending && typeof pending === 'object' && !Array.isArray(pending)
+          ? pending.context || null
+          : null;
+
       if (q) {
         setInput(q);
+        setQueuedQuestionContext(pendingContext);
         setTimeout(() => inputRef.current?.focus(), 150);
       }
     }
@@ -94,9 +119,22 @@ export default function ChatScreen({ navigation }) {
   const handleSend = async () => {
     if (!input.trim() || loading) return;
     const q = input.trim();
+
+    const liveScopeContext = {
+      source: 'chat-screen',
+      pageIndex: currentImageIndex,
+      scope: currentImageIndex === -1 ? 'document' : 'diagram',
+    };
+
+    // If a question was pre-filled from DiagramAskSheet, trust its context
+    // (scope, pageIndex, selectedComponent) exactly — don't overwrite with the
+    // Chat screen's current page selection, which may differ.
+    const mergedQuestionContext = queuedQuestionContext || liveScopeContext;
+
     setInput('');
     try {
-      await askQuestion(q);
+      await askQuestion(q, mergedQuestionContext);
+      setQueuedQuestionContext(null);
     } catch (e) {
       clearError();
       addMessage('assistant', '⚠️ Failed to get a response. Please try again.');
@@ -161,7 +199,16 @@ export default function ChatScreen({ navigation }) {
           <Ionicons name="hardware-chip-outline" size={14} color={p.primary} />
         </View>
         <View style={[styles.aiBubble, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
-          <Text style={[styles.aiText, { color: p.text }]}>{item.content}</Text>
+          {index === streamingIndex ? (
+            <StreamingBubble
+              content={item.content}
+              textStyle={[styles.aiText, { color: p.text }]}
+              cursorColor={p.primary}
+              onComplete={() => setStreamingIndex(-1)}
+            />
+          ) : (
+            <Text style={[styles.aiText, { color: p.text }]}>{item.content}</Text>
+          )}
           <TouchableOpacity style={styles.ttsBtn} onPress={() => speakMessage(item.content, index)}>
             <Ionicons
               name={speakingIndex === index ? 'stop-circle-outline' : 'volume-high-outline'}
@@ -429,12 +476,7 @@ export default function ChatScreen({ navigation }) {
         )}
 
         {/* Typing indicator */}
-        {loading && (
-          <View style={[styles.typingRow, { backgroundColor: p.bg }]}>
-            <ActivityIndicator size="small" color={p.primary} />
-            <Text style={[styles.typingText, { color: p.subtext }]}>Thinking…</Text>
-          </View>
-        )}
+        {loading && <TypingIndicator palette={p} />}
 
         {/* Page scope chips — multi-page documents only */}
         {isMultiPage && (
@@ -452,7 +494,7 @@ export default function ChatScreen({ navigation }) {
               <Ionicons name="documents-outline" size={11} color={currentImageIndex === -1 ? p.primary : p.subtext} />
               <Text style={[styles.scopeChipText, { color: currentImageIndex === -1 ? p.primary : p.subtext }]}>Document</Text>
             </TouchableOpacity>
-            {(document?.images || []).map((pg, idx) => (
+            {(document?.images || []).map((_, idx) => (
               <TouchableOpacity
                 key={idx}
                 style={[styles.scopeChip, { borderColor: currentImageIndex === idx ? p.primary : p.border, backgroundColor: currentImageIndex === idx ? p.primaryGlass : p.cardAbs }]}
@@ -460,7 +502,7 @@ export default function ChatScreen({ navigation }) {
                 activeOpacity={0.7}
               >
                 <Text style={[styles.scopeChipText, { color: currentImageIndex === idx ? p.primary : p.subtext }]}>
-                  Page {pg.page || idx + 1}
+                  {idx + 1}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -509,6 +551,100 @@ export default function ChatScreen({ navigation }) {
     </SafeAreaView>
   );
 }
+
+// ── Typing indicator (three bouncing dots in an AI bubble) ──────────────────
+function TypingIndicator({ palette: p }) {
+  const dot0 = useRef(new Animated.Value(0)).current;
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const bounce = (dot, delay) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(dot, { toValue: -6, duration: 280, useNativeDriver: true }),
+          Animated.timing(dot, { toValue: 0,  duration: 280, useNativeDriver: true }),
+          Animated.delay(600),
+        ])
+      );
+
+    const anims = [bounce(dot0, 0), bounce(dot1, 140), bounce(dot2, 280)];
+    anims.forEach((a) => a.start());
+    return () => anims.forEach((a) => a.stop());
+  }, []);
+
+  const dots = [dot0, dot1, dot2];
+
+  return (
+    <View style={typingStyles.row}>
+      <View style={[typingStyles.avatar, { backgroundColor: p.primaryGlass, borderColor: p.border }]}>
+        <Ionicons name="hardware-chip-outline" size={14} color={p.primary} />
+      </View>
+      <View style={[typingStyles.bubble, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+        {dots.map((anim, i) => (
+          <Animated.View
+            key={i}
+            style={[typingStyles.dot, { backgroundColor: p.primary, transform: [{ translateY: anim }] }]}
+          />
+        ))}
+      </View>
+    </View>
+  );
+}
+
+const typingStyles = StyleSheet.create({
+  row: { flexDirection: 'row', alignItems: 'flex-start', marginBottom: 10, paddingHorizontal: 16 },
+  avatar: {
+    width: 28, height: 28, borderRadius: 9,
+    justifyContent: 'center', alignItems: 'center',
+    marginRight: 8, marginTop: 2, borderWidth: 1,
+  },
+  bubble: {
+    flexDirection: 'row', alignItems: 'center', gap: 5,
+    paddingHorizontal: 16, paddingVertical: 14,
+    borderRadius: 20, borderBottomLeftRadius: 5, borderWidth: 1,
+  },
+  dot: { width: 7, height: 7, borderRadius: 3.5 },
+});
+// ────────────────────────────────────────────────────────────────────────────
+
+// ── Streaming typewriter component ──────────────────────────────────────────
+function StreamingBubble({ content, textStyle, cursorColor, onComplete }) {
+  const [displayed, setDisplayed] = useState('');
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    if (!content) return;
+    setDisplayed('');
+    setDone(false);
+
+    let idx = 0;
+    // Aim for ~2 s total; short messages get at least 20 ms/char
+    const charsPerTick = Math.max(1, Math.ceil(content.length / 100));
+    const intervalMs = Math.max(16, Math.min(30, (2000 / content.length) * charsPerTick));
+
+    const timer = setInterval(() => {
+      idx = Math.min(content.length, idx + charsPerTick);
+      setDisplayed(content.slice(0, idx));
+      if (idx >= content.length) {
+        clearInterval(timer);
+        setDone(true);
+        onComplete?.();
+      }
+    }, intervalMs);
+
+    return () => clearInterval(timer);
+  }, [content]);
+
+  return (
+    <Text style={textStyle}>
+      {displayed}
+      {!done && <Text style={{ color: cursorColor, fontWeight: '300' }}>|</Text>}
+    </Text>
+  );
+}
+// ────────────────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
@@ -586,20 +722,11 @@ const styles = StyleSheet.create({
   ttsBtn: { flexDirection: 'row', alignItems: 'center', marginTop: 8, gap: 4, alignSelf: 'flex-end' },
   ttsBtnText: { fontSize: 12, fontWeight: '600' },
 
-  /* Typing */
-  typingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    gap: 8,
-  },
-  typingText: { fontSize: 13 },
-
   /* Scope chips */
   scopeRow: {
     borderTopWidth: StyleSheet.hairlineWidth,
     maxHeight: 44,
+    flexShrink: 0,
   },
   scopeRowContent: {
     paddingHorizontal: 10,
@@ -627,6 +754,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     borderTopWidth: StyleSheet.hairlineWidth,
     gap: 8,
+    flexShrink: 0,
   },
   iconBtn: {
     width: 36,

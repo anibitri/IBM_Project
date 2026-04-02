@@ -142,6 +142,20 @@ export default function DiagramAskSheet({
     const q = (question || input).trim();
     if (!q) return;
 
+    const questionPageIndex = scope === 'document' ? -1 : currentImageIndex;
+    const normalizedSelectedComponent = scope === 'component' && selectedComponent
+      ? {
+          id: selectedComponent.id || null,
+          label: selectedComponent.label || '',
+          type: selectedComponent.type || '',
+          description: selectedComponent.description || '',
+          confidence:
+            typeof selectedComponent.confidence === 'number'
+              ? selectedComponent.confidence
+              : null,
+        }
+      : null;
+
     // Adjust page scope based on the chosen scope
     if (scope === 'document') {
       setCurrentImageIndex(-1);
@@ -150,7 +164,15 @@ export default function DiagramAskSheet({
     }
     // For component scope, keep current page too
 
-    setPendingQuestion(q);
+    setPendingQuestion({
+      text: q,
+      context: {
+        source: 'diagram-ask-sheet',
+        scope,
+        pageIndex: questionPageIndex,
+        selectedComponent: normalizedSelectedComponent,
+      },
+    });
     onClose();
 
     // Navigate to Chat tab

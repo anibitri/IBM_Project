@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useMemo } from 'react';
 import {
   View,
   Text,
@@ -22,6 +22,7 @@ import AROverlay from '../components/AROverlay';
 import CameraARView from '../components/CameraARView';
 import DiagramAskSheet from '../components/DiagramAskSheet';
 import { spacing, getPalette } from '../styles/theme';
+import Pdf from 'react-native-pdf';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 const SCREEN_HEIGHT = Dimensions.get('window').height;
@@ -31,19 +32,84 @@ const COMP_COLORS = {
   Storage: '#C8A028', GPU: '#B43232', 'I/O': '#50A0A0', Network: '#6450B4',
 };
 
+const clamp01 = (value) => Math.max(0, Math.min(1, value));
+
+const parseOrientationCode = (orientationHint) => {
+  if (typeof orientationHint === 'number' && Number.isFinite(orientationHint)) {
+    return orientationHint;
+  }
+  if (typeof orientationHint === 'string') {
+    const digits = orientationHint.match(/\d+/);
+    if (digits?.[0]) return Number(digits[0]);
+  }
+  return null;
+};
+
+const hasDirectionalOrientationHint = (orientationHint) => {
+  const code = parseOrientationCode(orientationHint);
+  if (code === 6 || code === 8) return true;
+  // 'portrait' is a valid VisionCamera orientation string handled by getRotationDirection
+  return /(left|right|cw|ccw|portrait)/i.test(String(orientationHint || ''));
+};
+
+const getRotationDirection = (orientationHint) => {
+  const code = parseOrientationCode(orientationHint);
+  if (code === 6) return 'cw';
+  if (code === 8) return 'ccw';
+
+  const raw = String(orientationHint || '').toLowerCase();
+  if (raw.includes('left') || raw.includes('ccw')) return 'ccw';
+  if (raw.includes('right') || raw.includes('cw') || raw.includes('portrait')) return 'cw';
+  return 'cw';
+};
+
+const rotateNormalizedComponent = (comp, direction) => {
+  if (!comp || (direction !== 'cw' && direction !== 'ccw')) return comp;
+
+  const x = Number(comp.x) || 0;
+  const y = Number(comp.y) || 0;
+  const w = Number(comp.width) || 0;
+  const h = Number(comp.height) || 0;
+  const cx = Number.isFinite(comp.center_x) ? comp.center_x : x + w / 2;
+  const cy = Number.isFinite(comp.center_y) ? comp.center_y : y + h / 2;
+
+  if (direction === 'cw') {
+    return {
+      ...comp,
+      x: clamp01(1 - (y + h)),
+      y: clamp01(x),
+      width: h,
+      height: w,
+      center_x: clamp01(1 - cy),
+      center_y: clamp01(cx),
+    };
+  }
+
+  return {
+    ...comp,
+    x: clamp01(y),
+    y: clamp01(1 - (x + w)),
+    width: h,
+    height: w,
+    center_x: clamp01(cy),
+    center_y: clamp01(1 - cx),
+  };
+};
+
 export default function DiagramScreen({ navigation, route }) {
   const { document, clearDocument, accessibilitySettings, uploadAndProcess, loading, currentImageIndex, setCurrentImageIndex } = useDocumentContext();
   const [selectedComponent, setSelectedComponent] = useState(null);
   const darkMode = !!accessibilitySettings?.darkMode;
   const p = getPalette(darkMode);
 
-  const [imageDimensions, setImageDimensions] = useState({ width: 0, height: 0 });
+  const [loadedImageDimensions, setLoadedImageDimensions] = useState({ width: 0, height: 0 });
   const isCameraEntry = route?.params?.cameraMode || false;
   const [cameraMode, setCameraMode] = useState(isCameraEntry);
-  const [cameraFullscreen, setCameraFullscreen] = useState(false);
+  // Camera is always fullscreen — no toggle.
+  const [cameraFullscreen, setCameraFullscreen] = useState(isCameraEntry);
   const [switcherHeight, setSwitcherHeight] = useState(44);
   const [diagramFullscreen, setDiagramFullscreen] = useState(false);
-  const [showLabels, setShowLabels] = useState(true);
+  const [showLabels, setShowLabels] = useState(false);
   const [askSheetVisible, setAskSheetVisible] = useState(false);
   // 'document' = clean scrollable view of all pages, no AR
   // 'diagram'  = per-page AR annotated view
@@ -143,6 +209,11 @@ export default function DiagramScreen({ navigation, route }) {
     }
   }, [diagramFullscreen]);
 
+  // Camera is always fullscreen — sync state whenever camera mode changes.
+  useEffect(() => {
+    setCameraFullscreen(cameraMode);
+  }, [cameraMode]);
+
   useEffect(() => {
     // Only navigate away when not loading, not in camera mode, and no document
     if (!document && !cameraMode && !loading) {
@@ -151,11 +222,36 @@ export default function DiagramScreen({ navigation, route }) {
   }, [document, cameraMode, loading]);
 
   useEffect(() => {
-    if (!document) return;
-    const diagramWidth = document.meta?.width || 900;
-    const diagramHeight = document.meta?.height || 600;
-    setImageDimensions({ width: diagramWidth, height: diagramHeight });
-  }, [document]);
+    setLoadedImageDimensions({ width: 0, height: 0 });
+  }, [document, currentImageIndex]);
+
+  const probePageIndex = currentImageIndex >= 0 ? currentImageIndex : 0;
+  const probeImageUrl = document?.images?.[probePageIndex]?.url || document?.file?.url || '';
+
+  // Resolve image dimensions as soon as the page URL is known so AR overlays
+  // use orientation-correct sizing immediately after live-camera analysis.
+  useEffect(() => {
+    if (!probeImageUrl) return;
+
+    let cancelled = false;
+    Image.getSize(
+      probeImageUrl,
+      (width, height) => {
+        if (cancelled || width <= 0 || height <= 0) return;
+        setLoadedImageDimensions((prev) => {
+          if (prev.width === width && prev.height === height) return prev;
+          return { width, height };
+        });
+      },
+      () => {
+        // Keep existing fallbacks (capture/backend dimensions) when size probing fails.
+      },
+    );
+
+    return () => {
+      cancelled = true;
+    };
+  }, [probeImageUrl]);
 
   useEffect(() => {
     if (route?.params?.selectedComponent) {
@@ -174,16 +270,92 @@ export default function DiagramScreen({ navigation, route }) {
 
   const currentPage = effectiveIndex >= 0 && pages[effectiveIndex] ? pages[effectiveIndex] : null;
   const components = currentPage?.ar_components || document?.ar?.components || [];
-  const connections = currentPage?.ar_relationships?.connections || document?.ar?.relationships?.connections || [];
-  // For a document with no pages array (legacy), fall back to the original file URL.
-  const imageUrl = currentPage?.url || (pages.length === 0 ? document?.file?.url : '') || '';
+  // Fall back to the original uploaded file URL when page-level URL is unavailable.
+  const imageUrl = currentPage?.url || document?.file?.url || '';
   const diagramWidth = currentPage?.image_size?.[0] || document?.meta?.width || 900;
   const diagramHeight = currentPage?.image_size?.[1] || document?.meta?.height || 600;
   const pageAiSummary = currentPage?.vision_summary || document?.ai_summary || 'No summary available for this diagram.';
 
+  const backendImageDimensions = {
+    width: currentPage?.image_size?.[0] || document?.meta?.width || 900,
+    height: currentPage?.image_size?.[1] || document?.meta?.height || 600,
+  };
+  const captureImageDimensions = {
+    width: document?.file?.clientWidth || 0,
+    height: document?.file?.clientHeight || 0,
+  };
+  const isCameraSource = document?.file?.captureSource === 'camera' || document?.file?.captureSource === 'live-camera';
+  const backendIsLandscape = backendImageDimensions.width > backendImageDimensions.height;
+  const backendIsPortrait = backendImageDimensions.height > backendImageDimensions.width;
+  const loadedLooksPortrait = loadedImageDimensions.height > loadedImageDimensions.width;
+  const captureLooksPortrait = captureImageDimensions.height > captureImageDimensions.width;
+  const hasLoadedDimensions = loadedImageDimensions.width > 0 && loadedImageDimensions.height > 0;
+  const hasCaptureDimensions = captureImageDimensions.width > 0 && captureImageDimensions.height > 0;
+  const orientationHint = document?.file?.orientation;
+
+  // For live-camera captures, photo.width/height from VisionCamera are raw sensor
+  // dimensions — the sensor is physically landscape on most phones, so these are
+  // always something like 4032×3024 even when the phone is held in portrait.
+  // The Image component auto-applies EXIF, so loadedImageDimensions is correct,
+  // but it is only available after the user visits diagram mode once.
+  // Use photo.orientation ('portrait', 'landscape-left', etc.) as a reliable
+  // fallback so the rotation is correct immediately after a scan.
+  const captureIsPortraitFromHint = (() => {
+    if (!isCameraSource || !orientationHint) return null;
+    const s = String(orientationHint).toLowerCase();
+    if (s.startsWith('portrait')) return true;
+    if (s.startsWith('landscape')) return false;
+    const code = parseOrientationCode(orientationHint);
+    if (code === 6 || code === 8) return true;
+    if (code === 1 || code === 3) return false;
+    return null;
+  })();
+
+  const displayLooksPortrait = hasLoadedDimensions
+    ? loadedLooksPortrait
+    : captureIsPortraitFromHint != null
+    ? captureIsPortraitFromHint   // orientation string from takePhoto() — reliable
+    : hasCaptureDimensions
+    ? captureLooksPortrait        // last resort: raw sensor dims (often wrong)
+    : null;
+  const shouldRotateCoordinates =
+    isCameraSource &&
+    displayLooksPortrait != null &&
+    ((backendIsLandscape && displayLooksPortrait) || (backendIsPortrait && !displayLooksPortrait));
+  const rotationDirection = shouldRotateCoordinates
+    ? hasDirectionalOrientationHint(orientationHint)
+      ? getRotationDirection(orientationHint)
+      : backendIsLandscape
+      ? 'cw'
+      : 'ccw'
+    : 'none';
+
+  const imageDimensions = useMemo(() => {
+    const preferred = loadedImageDimensions.width > 0 && loadedImageDimensions.height > 0
+      ? loadedImageDimensions
+      : captureImageDimensions.width > 0 && captureImageDimensions.height > 0
+      ? captureImageDimensions
+      : backendImageDimensions;
+
+    if (shouldRotateCoordinates && preferred.width > preferred.height) {
+      return { width: preferred.height, height: preferred.width };
+    }
+    return preferred;
+  }, [loadedImageDimensions, captureImageDimensions.width, captureImageDimensions.height, backendImageDimensions.width, backendImageDimensions.height, shouldRotateCoordinates]);
+
+  const displayComponents = useMemo(
+    () => components.map((comp) => rotateNormalizedComponent(comp, rotationDirection)),
+    [components, rotationDirection],
+  );
+
+  const selectedOverlayComponent = useMemo(() => {
+    if (!selectedComponent) return null;
+    return displayComponents.find((comp) => comp.id === selectedComponent.id) || selectedComponent;
+  }, [selectedComponent, displayComponents]);
+
   const handleImageLoad = (event) => {
     const { width, height } = event.nativeEvent.source;
-    setImageDimensions({ width, height });
+    setLoadedImageDimensions({ width, height });
   };
 
   const handleComponentToggle = (comp) => {
@@ -215,7 +387,7 @@ export default function DiagramScreen({ navigation, route }) {
     const gridStroke = darkMode ? 'rgba(255,255,255,0.06)' : '#DCE1EB';
     const headerFill = darkMode ? '#1a1f2e' : '#323246';
 
-    const boxes = components.map((c) => ({
+    const boxes = displayComponents.map((c) => ({
       x: c.x, y: c.y, w: c.width, h: c.height,
       label: c.label,
       color: c.color || COMP_COLORS[c.label] || '#2997ff',
@@ -310,11 +482,10 @@ export default function DiagramScreen({ navigation, route }) {
                 renderPlaceholder(fsImgW, fsImgH)
               )}
               <AROverlay
-                components={components}
-                connections={connections}
+                components={displayComponents}
                 containerWidth={fsImgW}
                 imageDimensions={imageDimensions}
-                selectedComponent={selectedComponent}
+                selectedComponent={selectedOverlayComponent}
                 onComponentPress={handleComponentToggle}
                 showLabels={showLabels}
               />
@@ -386,94 +557,98 @@ export default function DiagramScreen({ navigation, route }) {
     </Modal>
   ) : null;
 
-  // ── Document view: all pages, no AR overlay ─────────────────────────────────
+  // ── Document view: raw document browser ────────────────────────────────────
   const renderDocumentView = () => {
-    // Support both multi-page (images array) and single-file documents.
-    const docPages = pages.length > 0
-      ? pages
-      : document?.file?.url
-        ? [{ url: document.file.url, page: 1 }]
-        : [];
+    const fileType = document?.file?.type || '';
+    const isPDF = fileType.includes('pdf') ||
+      (document?.file?.original_name || '').toLowerCase().endsWith('.pdf');
+    const fileUrl = document?.file?.url || '';
 
-    if (docPages.length === 0) {
+    if (isPDF && fileUrl) {
       return (
-        <View style={styles.emptyDoc}>
-          <Ionicons name="document-outline" size={48} color={p.muted} />
-          <Text style={[styles.emptyDocText, { color: p.subtext }]}>No document pages available</Text>
-        </View>
+        <Pdf
+          source={{ uri: fileUrl, cache: true }}
+          style={[styles.pdfViewer, { backgroundColor: p.bg }]}
+          onError={(err) => console.warn('PDF load error', err)}
+          enablePaging={false}
+          horizontal={false}
+          page={currentImageIndex >= 0 ? currentImageIndex + 1 : 1}
+          onPageChanged={(page) => setCurrentImageIndex(page - 1)}
+        />
       );
     }
 
-    return docPages.map((pg, idx) => {
-      const pageNum = pg.page || idx + 1;
-      const hasAR = (pg.ar_components?.length ?? 0) > 0;
-      return (
-        <View key={idx} style={[styles.docPageWrap, { borderColor: p.border, backgroundColor: p.cardAbs }]}>
-          <View style={[styles.docPageHeader, { borderBottomColor: p.border }]}>
-            <View style={[styles.docPageBadge, { backgroundColor: p.primaryGlass }]}>
-              <Text style={[styles.docPageBadgeText, { color: p.primary }]}>Page {pageNum}</Text>
-            </View>
-            {hasAR && (
-              <TouchableOpacity
-                style={[styles.docDiagramBtn, { backgroundColor: p.primaryGlass, borderColor: p.primary + '44' }]}
-                onPress={() => handleViewDiagram(idx)}
-                activeOpacity={0.75}
-              >
-                <Ionicons name="layers-outline" size={13} color={p.primary} />
-                <Text style={[styles.docDiagramBtnText, { color: p.primary }]}>View Diagram</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-          {pg.url ? (
-            <Image
-              source={{ uri: pg.url }}
-              style={styles.docPageImage}
-              resizeMode="contain"
-            />
-          ) : (
-            <View style={[styles.docPagePlaceholder, { backgroundColor: darkMode ? '#0d1117' : '#f0f0f5' }]}>
-              <Ionicons name="image-outline" size={36} color={p.muted} />
-            </View>
-          )}
-          {pg.vision_summary ? (
-            <View style={[styles.docPageSummary, { borderTopColor: p.border }]}>
-              <Text style={[styles.docPageSummaryText, { color: p.subtext }]} numberOfLines={3}>
-                {pg.vision_summary}
-              </Text>
-            </View>
-          ) : null}
+    // Single image upload — no separate document to browse
+    return (
+      <View style={styles.emptyDoc}>
+        <View style={[styles.emptyDocIcon, { backgroundColor: p.primaryGlass, borderColor: p.border }]}>
+          <Ionicons name="image-outline" size={28} color={p.primary} />
         </View>
-      );
-    });
+        <Text style={[styles.emptyDocText, { color: p.text }]}>No document to browse</Text>
+        <Text style={[styles.emptyDocHint, { color: p.subtext }]}>
+          This upload is a single image.{'\n'}Switch to the Diagrams tab to view it with AR analysis.
+        </Text>
+      </View>
+    );
   };
 
   // ── Diagram view: current page with AR overlay ──────────────────────────────
   const renderDiagramCanvas = () => (
     <>
-      {/* Page tabs — only shown when there are multiple pages */}
+      {/* Page navigation — only shown when there are multiple pages */}
       {pages.length > 1 && (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          style={[styles.pageTabs, { backgroundColor: p.bg }]}
-          contentContainerStyle={styles.pageTabsContent}
-        >
-          {pages.map((pg, idx) => (
+        <View style={[styles.pageNavContainer, { backgroundColor: p.bg }]}>
+          {/* Prev / counter / next row */}
+          <View style={[styles.pageNavRow, { backgroundColor: p.cardAbs, borderColor: p.border }]}>
             <TouchableOpacity
-              key={idx}
-              style={[
-                styles.pageTab,
-                { backgroundColor: p.cardAbs, borderColor: effectiveIndex === idx ? p.primary : p.border },
-              ]}
-              onPress={() => setCurrentImageIndex(idx)}
+              style={[styles.pageNavArrow, effectiveIndex === 0 && styles.pageNavArrowDisabled]}
+              onPress={() => effectiveIndex > 0 && handleViewDiagram(effectiveIndex - 1)}
               activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
             >
-              <Text style={[styles.pageTabText, { color: effectiveIndex === idx ? p.primary : p.subtext }]}>
-                Pg {pg.page || idx + 1}
-              </Text>
+              <Ionicons name="chevron-back" size={18} color={effectiveIndex === 0 ? p.muted : p.primary} />
             </TouchableOpacity>
-          ))}
-        </ScrollView>
+
+            <Text style={[styles.pageNavCounter, { color: p.text }]}>
+              Page{' '}
+              <Text style={{ color: p.primary, fontWeight: '700' }}>{effectiveIndex + 1}</Text>
+              {' '}of {pages.length}
+            </Text>
+
+            <TouchableOpacity
+              style={[styles.pageNavArrow, effectiveIndex === pages.length - 1 && styles.pageNavArrowDisabled]}
+              onPress={() => effectiveIndex < pages.length - 1 && handleViewDiagram(effectiveIndex + 1)}
+              activeOpacity={0.7}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Ionicons name="chevron-forward" size={18} color={effectiveIndex === pages.length - 1 ? p.muted : p.primary} />
+            </TouchableOpacity>
+          </View>
+
+          {/* Scrollable tab strip for direct page access */}
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            style={styles.pageTabs}
+            contentContainerStyle={styles.pageTabsContent}
+          >
+            {pages.map((_, idx) => (
+              <TouchableOpacity
+                key={idx}
+                style={[
+                  styles.pageTab,
+                  { backgroundColor: p.cardAbs, borderColor: effectiveIndex === idx ? p.primary : p.border },
+                ]}
+                onPress={() => handleViewDiagram(idx)}
+                activeOpacity={0.7}
+              >
+                <Text style={[styles.pageTabText, { color: effectiveIndex === idx ? p.primary : p.subtext }]}>
+                  {idx + 1}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
       )}
 
       {/* Diagram canvas */}
@@ -499,82 +674,15 @@ export default function DiagramScreen({ navigation, route }) {
               renderPlaceholder()
             )}
             <AROverlay
-              components={components}
-              connections={connections}
+              components={displayComponents}
               containerWidth={SCREEN_WIDTH - spacing.lg * 2}
               imageDimensions={imageDimensions}
-              selectedComponent={selectedComponent}
+              selectedComponent={selectedOverlayComponent}
               onComponentPress={handleComponentToggle}
               showLabels={showLabels}
             />
           </View>
         )}
-      </View>
-
-      {/* Toolbar row */}
-      <View style={styles.toolbarRow}>
-        {!cameraMode && (
-          <View style={[styles.zoomGroup, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
-            <TouchableOpacity
-              style={styles.zoomBtn}
-              onPress={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons name="add" size={18} color={p.text} />
-            </TouchableOpacity>
-            <Text style={[styles.zoomLabel, { color: p.subtext }]}>{Math.round(zoom * 100)}%</Text>
-            <TouchableOpacity
-              style={styles.zoomBtn}
-              onPress={() => setZoom((z) => Math.max(1, +(z - 0.25).toFixed(2)))}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons name="remove" size={18} color={p.text} />
-            </TouchableOpacity>
-            <View style={[styles.zoomDivider, { backgroundColor: p.border }]} />
-            <TouchableOpacity
-              style={styles.zoomBtn}
-              onPress={() => { setZoom(1); updatePan({ x: 0, y: 0 }); }}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Ionicons name="contract-outline" size={16} color={p.text} />
-            </TouchableOpacity>
-            <View style={[styles.zoomDivider, { backgroundColor: p.border }]} />
-            <TouchableOpacity
-              style={[styles.zoomBtn, showLabels && { backgroundColor: p.primaryGlass }]}
-              onPress={() => setShowLabels((v) => !v)}
-              hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
-            >
-              <Text style={[styles.aaLabel, { color: showLabels ? p.primary : p.muted }]}>Aa</Text>
-            </TouchableOpacity>
-          </View>
-        )}
-
-        <TouchableOpacity
-          style={[
-            styles.modeToggle,
-            { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop },
-            cameraMode && { backgroundColor: p.primary, borderColor: p.primary, borderTopColor: p.primary },
-          ]}
-          onPress={() => { setCameraMode((v) => !v); setCameraFullscreen(false); }}
-          activeOpacity={0.8}
-        >
-          <Ionicons
-            name={cameraMode ? 'image-outline' : 'camera-outline'}
-            size={18}
-            color={cameraMode ? '#fff' : p.primary}
-          />
-          <Text style={[styles.modeToggleText, { color: cameraMode ? '#fff' : p.text }]}>
-            {cameraMode ? 'Diagram' : 'AR Camera'}
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[styles.fullscreenBtn, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}
-          onPress={() => cameraMode ? setCameraFullscreen(true) : setDiagramFullscreen(true)}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="expand-outline" size={18} color={p.primary} />
-        </TouchableOpacity>
       </View>
 
       {/* Selected component detail card */}
@@ -638,11 +746,6 @@ export default function DiagramScreen({ navigation, route }) {
           <Text style={[styles.statLabel, { color: p.muted }]}>Components</Text>
         </View>
         <View style={[styles.statDivider, { backgroundColor: p.border }]} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: p.primary }]}>{connections.length}</Text>
-          <Text style={[styles.statLabel, { color: p.muted }]}>Connections</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: p.border }]} />
         {pages.length > 1 ? (
           <View style={styles.statItem}>
             <Text style={[styles.statValue, { color: p.primary }]}>
@@ -703,19 +806,81 @@ export default function DiagramScreen({ navigation, route }) {
         </TouchableOpacity>
       </View>
 
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ paddingBottom: 100 }}
-        showsVerticalScrollIndicator={false}
-      >
-        {viewMode === 'document' ? (
-          <View style={styles.docContainer}>
-            {renderDocumentView()}
-          </View>
-        ) : (
-          renderDiagramCanvas()
-        )}
-      </ScrollView>
+      {/* Toolbar row — sits just below the view switcher, above the diagram canvas */}
+      {viewMode === 'diagram' && !cameraFullscreen && (
+        <View style={[styles.toolbarRow, { zIndex: 20 }]}>
+          {!cameraMode && (
+            <View style={[styles.zoomGroup, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}>
+              <TouchableOpacity
+                style={styles.zoomBtn}
+                onPress={() => setZoom((z) => Math.min(3, +(z + 0.25).toFixed(2)))}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="add" size={18} color={p.text} />
+              </TouchableOpacity>
+              <Text style={[styles.zoomLabel, { color: p.subtext }]}>{Math.round(zoom * 100)}%</Text>
+              <TouchableOpacity
+                style={styles.zoomBtn}
+                onPress={() => setZoom((z) => Math.max(1, +(z - 0.25).toFixed(2)))}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="remove" size={18} color={p.text} />
+              </TouchableOpacity>
+              <View style={[styles.zoomDivider, { backgroundColor: p.border }]} />
+              <TouchableOpacity
+                style={styles.zoomBtn}
+                onPress={() => { setZoom(1); updatePan({ x: 0, y: 0 }); }}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Ionicons name="contract-outline" size={16} color={p.text} />
+              </TouchableOpacity>
+              <View style={[styles.zoomDivider, { backgroundColor: p.border }]} />
+              <TouchableOpacity
+                style={[styles.zoomBtn, showLabels && { backgroundColor: p.primaryGlass }]}
+                onPress={() => setShowLabels((v) => !v)}
+                hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+              >
+                <Text style={[styles.aaLabel, { color: showLabels ? p.primary : p.muted }]}>Aa</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[
+              styles.modeToggle,
+              { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop },
+            ]}
+            onPress={() => setCameraMode(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="camera-outline" size={18} color={p.primary} />
+            <Text style={[styles.modeToggleText, { color: p.text }]}>AR Camera</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.fullscreenBtn, { backgroundColor: p.cardAbs, borderColor: p.border, borderTopColor: p.borderTop }]}
+            onPress={() => setDiagramFullscreen(true)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="expand-outline" size={18} color={p.primary} />
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {viewMode === 'document' ? (
+        // PDF viewer needs flex:1 and cannot be inside a ScrollView
+        <View style={{ flex: 1 }}>
+          {renderDocumentView()}
+        </View>
+      ) : (
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ paddingBottom: 100 }}
+          showsVerticalScrollIndicator={false}
+        >
+          {renderDiagramCanvas()}
+        </ScrollView>
+      )}
 
       {/* Camera overlay — lives outside the ScrollView so the Camera component
           never remounts during fullscreen transitions; only the container style changes */}
@@ -728,14 +893,13 @@ export default function DiagramScreen({ navigation, route }) {
           pointerEvents="box-none"
         >
           <CameraARView
-            components={components}
-            connections={connections}
-            selectedComponent={selectedComponent}
+            components={displayComponents}
+            selectedComponent={selectedOverlayComponent}
             onComponentPress={handleComponentToggle}
             imageDimensions={imageDimensions}
             showLabels={showLabels}
             fullscreen={cameraFullscreen}
-            onToggleFullscreen={() => setCameraFullscreen((v) => !v)}
+            onToggleFullscreen={() => { setCameraMode(false); setCameraFullscreen(false); }}
             onScan={handleCameraCapture}
             onAskAI={() => setAskSheetVisible(true)}
           />
@@ -846,55 +1010,58 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 100,
   },
-  docPageBadgeText: {
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  docDiagramBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 5,
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 100,
-    borderWidth: 1,
-  },
-  docDiagramBtnText: {
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  docPageImage: {
-    width: '100%',
-    aspectRatio: 0.77, // approximate portrait page ratio
-    backgroundColor: '#f5f5f5',
-  },
-  docPagePlaceholder: {
-    width: '100%',
-    height: 200,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  docPageSummary: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderTopWidth: StyleSheet.hairlineWidth,
-  },
-  docPageSummaryText: {
-    fontSize: 12,
-    lineHeight: 18,
+  pdfViewer: {
+    flex: 1,
+    width: SCREEN_WIDTH,
   },
   emptyDoc: {
+    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 60,
-    gap: 12,
+    paddingHorizontal: spacing.xl,
+    gap: 14,
+  },
+  emptyDocIcon: {
+    width: 60,
+    height: 60,
+    borderRadius: 18,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 4,
   },
   emptyDocText: {
+    fontSize: 17,
+    fontWeight: '600',
+    textAlign: 'center',
+  },
+  emptyDocHint: {
     fontSize: 14,
+    textAlign: 'center',
+    lineHeight: 20,
   },
 
-  /* Page tabs (diagram mode) */
-  pageTabs: { marginHorizontal: spacing.lg, marginBottom: 6 },
+  /* Page navigation (diagram mode) */
+  pageNavContainer: { marginHorizontal: spacing.lg, marginTop: 8, marginBottom: 6, gap: 6 },
+  pageNavRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderRadius: 12,
+    borderWidth: 1,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  pageNavArrow: {
+    width: 32,
+    height: 32,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+  },
+  pageNavArrowDisabled: { opacity: 0.35 },
+  pageNavCounter: { fontSize: 14, fontWeight: '500' },
+  pageTabs: { marginBottom: 0 },
   pageTabsContent: { paddingVertical: 4, gap: 6, flexDirection: 'row' },
   pageTab: {
     flexDirection: 'row',
