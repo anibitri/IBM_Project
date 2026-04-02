@@ -1,10 +1,14 @@
+import logging
 import torch
 from typing import Dict, List, Optional, Any
 from app.services.model_manager import manager
+
+logger = logging.getLogger(__name__)
 from app.services.granite_vision_service import query_image
 from app.services.prompt_builder import (
     AI_ANALYZE_SYSTEM_PROMPT,
     AI_CHAT_SYSTEM_PROMPT,
+    AI_INSIGHTS_SYSTEM_PROMPT,
     get_context_analysis_task,
     get_insight_task,
     build_analyze_context_prompt,
@@ -84,7 +88,8 @@ class AIService:
         prompt: str,
         max_tokens: int = None,
         temperature: float = 0.7,
-        top_p: float = 0.9
+        top_p: float = 0.9,
+        system_prompt: str = None,
     ) -> str:
         """
         Generate text using the IBM Granite Vision model.
@@ -99,12 +104,14 @@ class AIService:
 
         try:
             # Text-only generation — pass text only (no image) for chat tasks.
+            # Build the chat string manually (same approach as build_vision_chat_text)
+            # because apply_chat_template requires typed content dicts for this model.
             device = manager.vision_model.device
-            chat_text = manager.vision_processor.apply_chat_template(
-                [{"role": "user", "content": prompt}],
-                tokenize=False,
-                add_generation_prompt=True,
-            )
+            if system_prompt:
+                chat_text = f"<|system|>\n{system_prompt}\n<|user|>\n{prompt}\n<|assistant|>\n"
+            else:
+                chat_text = f"<|user|>\n{prompt}\n<|assistant|>\n"
+
             inputs = manager.vision_processor(
                 text=chat_text,
                 return_tensors="pt",
@@ -122,8 +129,22 @@ class AIService:
                 )
 
             prompt_len = inputs["input_ids"].shape[1]
+
+            # Free input tensors immediately
+            del inputs
+            import gc as _gc
+            _gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             new_tokens = output_ids[:, prompt_len:]
             text = manager.vision_processor.batch_decode(new_tokens, skip_special_tokens=True)[0]
+
+            del output_ids
+            _gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
             return self._clean_response(text)
 
         except Exception as e:
@@ -382,7 +403,7 @@ class AIService:
         task = get_context_analysis_task(context_type)
         prompt = build_analyze_context_prompt(context_str, task)
 
-        answer = self._generate_text(prompt, max_tokens=400)
+        answer = self._generate_text(prompt, max_tokens=400, system_prompt=AI_ANALYZE_SYSTEM_PROMPT)
 
         return {
             "status": "ok",
@@ -463,8 +484,8 @@ class AIService:
                 history_str += f"{role}: {text}\n"
         
         prompt = build_chat_with_document_prompt(context_str, query, history_str)
-        
-        answer = self._generate_text(prompt, max_tokens=400, temperature=0.3)
+
+        answer = self._generate_text(prompt, max_tokens=400, temperature=0.3, system_prompt=AI_CHAT_SYSTEM_PROMPT)
         
         return {
             "status": "ok",
@@ -581,7 +602,7 @@ class AIService:
         task = get_insight_task(insight_type)
         prompt = build_generate_insights_prompt(context_str, task)
         
-        insights_text = self._generate_text(prompt, max_tokens=256)
+        insights_text = self._generate_text(prompt, max_tokens=256, system_prompt=AI_INSIGHTS_SYSTEM_PROMPT)
         
         # Parse into list if possible
         insights_list = [

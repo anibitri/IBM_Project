@@ -93,15 +93,45 @@ def _extract_diagram_type(text: str) -> str:
     """
     Parse the DIAGRAM_TYPE line produced by AR_EXTRACTION_PROMPT.
     Returns one of: 'sequence', 'uml', 'flowchart', 'architecture', 'other'.
-    Falls back to 'other' if the line is absent or unrecognised.
+
+    Strategy:
+    1. Look for an explicit "DIAGRAM_TYPE: <label>" line.
+       If the value contains multiple labels (model copied the format line),
+       treat it as unrecognised and fall through.
+    2. Keyword-scan the full text for diagram-type vocabulary as a fallback.
+    3. Default to 'other'.
     """
     for line in text.splitlines():
-        line = line.strip()
-        if line.upper().startswith("DIAGRAM_TYPE:"):
-            value = line.split(":", 1)[1].strip().lower()
+        stripped = line.strip()
+        if stripped.upper().startswith("DIAGRAM_TYPE:"):
+            value = stripped.split(":", 1)[1].strip().lower()
+            # If the model copied multiple options (contains "|"), skip this line
+            if "|" in value:
+                break
             for key, canonical in _DIAGRAM_TYPE_ALIASES.items():
-                if key in value:
+                if re.search(rf'\b{re.escape(key)}\b', value):
                     return canonical
+            break  # Found the line but couldn't parse it — stop here
+
+    # Fallback: keyword scan of the full text (handles prose descriptions)
+    text_lower = text.lower()
+    # Order matters: more specific terms first
+    fallback_keywords = [
+        ("sequence diagram", "sequence"),
+        ("lifeline",         "sequence"),
+        ("class diagram",    "uml"),
+        ("uml",              "uml"),
+        ("flowchart",        "flowchart"),
+        ("flow chart",       "flowchart"),
+        ("flow diagram",     "flowchart"),
+        ("architecture",     "architecture"),
+        ("infrastructure",   "architecture"),
+        ("system diagram",   "architecture"),
+    ]
+    for keyword, canonical in fallback_keywords:
+        if keyword in text_lower:
+            return canonical
+
     return "other"
 
 
@@ -234,6 +264,13 @@ def analyze_images(input_data, task="general_analysis", **kwargs):
 
         prompt_len = processed_inputs.get("input_ids", torch.empty(1, 0)).shape[1]
 
+        # Free input tensors immediately — they are no longer needed
+        del processed_inputs, inputs
+        import gc as _gc
+        _gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         # Decode
         print(f"   ⏳ Decoding output...")
         generated_text = ""
@@ -242,6 +279,11 @@ def analyze_images(input_data, task="general_analysis", **kwargs):
             generated_text = manager.vision_processor.batch_decode(
                 new_tokens, skip_special_tokens=True
             )[0]
+
+        del output_ids
+        _gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         # Clean and process output
         summary = _clean_generated_text(generated_text)
@@ -338,13 +380,27 @@ def query_image(image_path: str, question: str) -> str:
             )
 
         prompt_len = processed_inputs.get("input_ids", torch.empty(1, 0)).shape[1]
+
+        # Free input tensors immediately
+        del processed_inputs, inputs
+        import gc as _gc
+        _gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+
         if output_ids.shape[1] <= prompt_len:
+            del output_ids
             return ""
 
         new_tokens = output_ids[:, prompt_len:]
         answer = manager.vision_processor.batch_decode(
             new_tokens, skip_special_tokens=True
         )[0]
+
+        del output_ids
+        _gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
 
         answer = _clean_generated_text(answer)
         print(f"👁️ Vision Q&A: '{question[:60]}' → '{answer[:100]}'")

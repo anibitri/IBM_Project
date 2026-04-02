@@ -62,15 +62,17 @@ CONNECTION_PROMPT_TEMPLATE = (
 
 AR_EXTRACTION_PROMPT = (
     "Analyse this technical diagram. "
-    "First, on a single line, state the diagram type using EXACTLY one of these labels:\n"
-    "DIAGRAM_TYPE: sequence | uml | flowchart | architecture | other\n\n"
-    "Then list every distinct component, service, or module shown.\n\n"
-    "For each component provide:\n"
-    "1. Its name (read the label text)\n"
-    "2. Its role (one short phrase, e.g. 'handles authentication')\n\n"
+    "First, on a single line, write the diagram type:\n\n"
+    "Example outputs (pick the one that matches):\n"
+    "DIAGRAM_TYPE: sequence\n"
+    "DIAGRAM_TYPE: uml\n"
+    "DIAGRAM_TYPE: flowchart\n"
+    "DIAGRAM_TYPE: architecture\n"
+    "DIAGRAM_TYPE: other\n\n"
+    "Then list every distinct component, service, or module shown.\n"
     "Format — one component per line:\n"
     "NAME — ROLE\n\n"
-    "Example output:\n"
+    "Full example output:\n"
     "DIAGRAM_TYPE: architecture\n"
     "API Gateway — routes incoming requests\n"
     "Redis Cache — caches session data\n"
@@ -85,12 +87,17 @@ GENERAL_IMAGE_ANALYSIS_PROMPT = (
 
 
 DIAGRAM_CLASSIFICATION_PROMPT = (
-    "Is this image a technical diagram (e.g. schematic, flowchart, UML, sequence, "
-    "class diagram, activity diagram, state diagram, etc)? "
-    "Demos, photos of real-world objects, gantt charts, schedules, UI mocks, "
-    "(e.g. devices, people, screenshots, timetables, schedules) should be "
-    "classified as non-diagrams. "
-    "Answer with ONLY 'yes' or 'no'."
+    "Task: classify this extracted PDF image as DIAGRAM or NON-DIAGRAM.\n\n"
+    "Answer YES only if the image primarily shows a structured technical diagram "
+    "with components connected by lines/arrows/boxes/symbols (for example: UML "
+    "class/sequence/activity/state diagrams, architecture diagrams, flowcharts, "
+    "network topologies, circuit schematics, block diagrams).\n\n"
+    "Answer NO for anything else, including: photos, people, devices, logos, UI "
+    "screenshots, tables, calendars, timetables, Gantt charts, plain text pages, "
+    "paragraph-heavy pages, decorative icons, or isolated illustrations without "
+    "clear component relationships.\n\n"
+    "If uncertain, answer NO.\n"
+    "Return exactly one word: yes or no."
 )
 
 
@@ -174,7 +181,6 @@ def get_insight_task(insight_type: str) -> str:
 def build_analyze_context_prompt(context_str: str, task: str) -> str:
     """Build chat-model prompt for context analysis."""
     return (
-        f"{AI_ANALYZE_SYSTEM_PROMPT}\n\n"
         f"Context:\n{context_str}\n\n"
         f"Task: {task}\n\n"
         'Provide a clear, structured analysis based ONLY on the context above:\n'
@@ -184,7 +190,6 @@ def build_analyze_context_prompt(context_str: str, task: str) -> str:
 def build_chat_with_document_prompt(context_str: str, query: str, history_str: str = '') -> str:
     """Build chat-model prompt for document Q&A."""
     prompt = (
-        f"{AI_CHAT_SYSTEM_PROMPT}\n\n"
         f"Document Context:\n{context_str}\n\n"
     )
     if history_str:
@@ -215,7 +220,6 @@ def build_component_summary_prompt(document_type: str, component_list: str, rela
 def build_generate_insights_prompt(context_str: str, task: str) -> str:
     """Build chat-model prompt for insight generation."""
     return (
-        f"{AI_INSIGHTS_SYSTEM_PROMPT}\n\n"
         f"Technical Data:\n{context_str}\n\n"
         f"Task: {task}\n\n"
         'Provide 3-5 specific, actionable insights:\n'

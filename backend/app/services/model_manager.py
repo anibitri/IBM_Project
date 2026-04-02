@@ -1,9 +1,9 @@
 
-
-
-import torch
 import os
-# os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
+import time
+#os.environ['HF_HOME'] = "/dcs/large/u2287990/AI_models"
+os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+import torch
 import logging
 from typing import Optional
 
@@ -18,6 +18,7 @@ class ModelManager:
         self._configure_hardware()
         self._configure_vision()
         self._initialise_model_refs()
+        self._configure_cleanup_policy()
         if self.mock_mode:
             print("🧪 GRANITE_MOCK=1 detected - skipping model loading")
         else:
@@ -155,6 +156,24 @@ class ModelManager:
         self.ar_device = "cpu"
         # No separate chat model — vision model handles both vision and text tasks
 
+    def _configure_cleanup_policy(self):
+        """Configure adaptive GPU cleanup policy.
+
+        Goal: keep enough VRAM headroom while avoiding unnecessary synchronize()
+        and empty_cache() calls that can reduce throughput.
+        """
+        # If free VRAM is below this, pre-inference cleanup is triggered.
+        self.cleanup_low_vram_gb = float(os.getenv("GPU_CLEANUP_LOW_VRAM_GB", "1.5"))
+        # If free VRAM is below this after inference, cleanup is triggered.
+        self.cleanup_post_low_vram_gb = float(os.getenv("GPU_CLEANUP_POST_LOW_VRAM_GB", "2.5"))
+        # If allocated VRAM exceeds this ratio of total, post cleanup is triggered.
+        self.cleanup_high_alloc_ratio = float(os.getenv("GPU_CLEANUP_HIGH_ALLOC_RATIO", "0.80"))
+        # Minimum seconds between adaptive cleanups to avoid churn.
+        self.cleanup_min_interval_s = float(os.getenv("GPU_CLEANUP_MIN_INTERVAL_S", "2.0"))
+        # Force a periodic cleanup even under low pressure.
+        self.cleanup_max_interval_s = float(os.getenv("GPU_CLEANUP_MAX_INTERVAL_S", "45.0"))
+        self._last_cleanup_ts = 0.0
+
     # ============================================================
     # 5. MODEL LOADING
     # ============================================================
@@ -233,7 +252,7 @@ class ModelManager:
             self._log_vram("Before SAM 2 load")
 
             self.ar_device = self._get_ar_device()
-            self.ar_model = SAM("sam2_t.pt")
+            self.ar_model = SAM("sam2_l.pt")
 
             self._log_vram("After SAM 2 load")
             print(f"   ✅ SAM 2 loaded on {self.ar_device.upper()}")
@@ -284,6 +303,74 @@ class ModelManager:
         """Clear CUDA cache to free fragmented memory"""
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
+
+    def between_requests_cleanup(self):
+        """Clear GPU memory between inference requests.
+
+        Frees fragmented / intermediate CUDA memory that accumulated during
+        the previous inference pass WITHOUT unloading model weights.  Call
+        this both before and after each request so that:
+
+          • The incoming request starts with maximum VRAM headroom.
+          • The next queued request does not inherit leftover activations.
+
+        Safe to call when CUDA is not available (no-op on CPU/MPS).
+        """
+        import gc
+        gc.collect()                          # release Python-held tensor refs
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()          # wait for any pending CUDA ops
+            torch.cuda.empty_cache()          # return cached blocks to allocator
+            self._last_cleanup_ts = time.monotonic()
+            free_gb = self._get_free_vram_gb()
+            logger.debug(f"🧹 GPU cache cleared — {free_gb:.2f} GB free")
+
+    def _should_skip_cleanup_due_to_interval(self) -> bool:
+        """Avoid over-cleaning by enforcing a short minimum interval."""
+        if self._last_cleanup_ts <= 0:
+            return False
+        return (time.monotonic() - self._last_cleanup_ts) < self.cleanup_min_interval_s
+
+    def maybe_cleanup_before_inference(self):
+        """Adaptive pre-inference cleanup.
+
+        Runs cleanup only when VRAM headroom is low or when a periodic
+        maintenance window is reached.
+        """
+        if not torch.cuda.is_available():
+            return
+
+        if self._should_skip_cleanup_due_to_interval():
+            return
+
+        free_gb = self._get_free_vram_gb()
+        elapsed = time.monotonic() - self._last_cleanup_ts if self._last_cleanup_ts > 0 else 1e9
+        if free_gb < self.cleanup_low_vram_gb or elapsed >= self.cleanup_max_interval_s:
+            self.between_requests_cleanup()
+
+    def maybe_cleanup_after_inference(self):
+        """Adaptive post-inference cleanup.
+
+        Runs cleanup when memory pressure is high after generation or if a
+        periodic maintenance interval is reached.
+        """
+        if not torch.cuda.is_available():
+            return
+
+        if self._should_skip_cleanup_due_to_interval():
+            return
+
+        free_gb = self._get_free_vram_gb()
+        alloc_gb = self._get_used_vram_gb()
+        alloc_ratio = alloc_gb / max(self.total_vram_gb, 1e-6)
+        elapsed = time.monotonic() - self._last_cleanup_ts if self._last_cleanup_ts > 0 else 1e9
+
+        if (
+            free_gb < self.cleanup_post_low_vram_gb or
+            alloc_ratio >= self.cleanup_high_alloc_ratio or
+            elapsed >= self.cleanup_max_interval_s
+        ):
+            self.between_requests_cleanup()
 
     def move_sam_to_cpu(self):
         """Move SAM model to CPU after an OOM error."""

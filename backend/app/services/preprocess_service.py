@@ -1,7 +1,7 @@
 import os
 import logging
 from typing import Dict, Any, Optional, List
-from PIL import Image
+from PIL import Image, ImageOps
 from pathlib import Path
 
 # PyMuPDF import (avoid crashing if wrong 'fitz' package is installed)
@@ -55,7 +55,7 @@ class PreprocessService:
         
         # Configuration
         self.min_image_size = (100, 100)  # Minimum image dimensions (filter icons/logos)
-        self.max_images_per_pdf = 20  # Limit extracted images to prevent memory issues
+        self.max_images_per_pdf = 30  # Limit extracted images to prevent memory issues
         self.image_quality = 95  # JPEG quality for extracted images
         self.max_text_excerpt = 3000  # Max characters for AI context
     
@@ -129,11 +129,10 @@ class PreprocessService:
     
     def _extract_images_from_pdf(self, pdf_path: str) -> List[Dict[str, Any]]:
         """
-        Render each PDF page as a full-page image using PyMuPDF.
+        Extract embedded raster images from a PDF using PyMuPDF.
 
-        This renders the entire page (including vector graphics, text, and
-        embedded images) rather than extracting only embedded raster images.
-        That way architecture diagrams drawn as vector graphics are captured.
+        This method does not render full pages or cropped vector regions.
+        It only extracts image objects that already exist in the PDF.
 
         Args:
             pdf_path: Path to PDF file
@@ -144,12 +143,12 @@ class PreprocessService:
             - page: Page number (1-indexed)
             - size: (width, height) tuple
             - index: Global image index
-            - filename: Rendered page filename
+            - filename: Extracted image filename
         """
-        logger.info("📸 Rendering PDF pages as images...")
+        logger.info("📸 Extracting embedded images from PDF...")
 
         if not HAS_PYMUPDF or fitz is None:
-            logger.warning("PyMuPDF unavailable. Skipping PDF page rendering.")
+            logger.warning("PyMuPDF unavailable. Skipping PDF image extraction.")
             return []
 
         extracted_images = []
@@ -165,86 +164,53 @@ class PreprocessService:
         try:
             pdf_document = fitz.open(pdf_path)
             total_pages = len(pdf_document)
-            pages_to_render = min(total_pages, self.max_images_per_pdf)
-            logger.info(f"  PDF has {total_pages} pages — rendering {pages_to_render}")
+            pages_to_scan = min(total_pages, self.max_images_per_pdf)
+            logger.info(f"  PDF has {total_pages} pages — scanning {pages_to_scan}")
 
-            for page_num in range(pages_to_render):
+            for page_num in range(pages_to_scan):
                 try:
                     page = pdf_document[page_num]
-                    mat = fitz.Matrix(2.0, 2.0)
 
-                    # Find the diagram region using PyMuPDF geometry data.
-                    # get_drawings() returns all vector paths (boxes, arrows, lines).
-                    # get_images() returns embedded raster images with their positions.
-                    # The union of these bounding boxes is where the diagram lives.
-                    page_rect = page.rect  # full page in points
-                    content_rects = []
-
-                    try:
-                        for d in page.get_drawings():
-                            r = d.get('rect')
-                            if r and fitz.Rect(r).get_area() > 100:
-                                content_rects.append(fitz.Rect(r))
-                    except Exception:
-                        pass
-
+                    # Extract embedded raster images directly.
                     try:
                         for img_info in page.get_images(full=True):
                             xref = img_info[0]
-                            for img_rect in page.get_image_rects(xref):
-                                if img_rect.get_area() > 100:
-                                    content_rects.append(img_rect)
-                    except Exception:
-                        pass
-
-                    clip = None
-                    if content_rects:
-                        union = content_rects[0]
-                        for r in content_rects[1:]:
-                            union = union | r
-
-                        # Add 4% padding on each side
-                        pad_x = page_rect.width * 0.04
-                        pad_y = page_rect.height * 0.04
-                        padded = fitz.Rect(
-                            max(page_rect.x0, union.x0 - pad_x),
-                            max(page_rect.y0, union.y0 - pad_y),
-                            min(page_rect.x1, union.x1 + pad_x),
-                            min(page_rect.y1, union.y1 + pad_y),
-                        )
-
-                        # Only crop if the region is meaningfully smaller than the
-                        # full page (otherwise we gain nothing and may lose context)
-                        region_ratio = padded.get_area() / page_rect.get_area()
-                        if region_ratio < 0.85:
-                            clip = padded
-                            logger.info(f"  ✂ Cropped to diagram region ({region_ratio:.0%} of page)")
-
-                    pix = page.get_pixmap(matrix=mat, alpha=False, clip=clip)
-
-                    image_filename = f"page{page_num + 1}_render.png"
-                    image_path = os.path.join(output_dir, image_filename)
-                    pix.save(image_path)
-
-                    extracted_images.append({
-                        'path': image_path,
-                        'page': page_num + 1,
-                        'size': (pix.width, pix.height),
-                        'index': page_num,
-                        'filename': image_filename,
-                    })
-
-                    logger.info(f"  ✓ Rendered page {page_num + 1} ({pix.width}x{pix.height})")
+                            img_w, img_h = img_info[2], img_info[3]
+                            if img_w < self.min_image_size[0] or img_h < self.min_image_size[1]:
+                                continue
+                            img_dict = pdf_document.extract_image(xref)
+                            if not img_dict:
+                                continue
+                            ext = img_dict.get('ext', 'png')
+                            img_bytes = img_dict['image']
+                            idx = sum(1 for x in extracted_images if x['page'] == page_num + 1)
+                            image_filename = f"page{page_num + 1}_img{idx}.{ext}"
+                            image_path = os.path.join(output_dir, image_filename)
+                            with open(image_path, 'wb') as f:
+                                f.write(img_bytes)
+                            extracted_images.append({
+                                'path': image_path,
+                                'page': page_num + 1,
+                                'size': (img_w, img_h),
+                                'index': len(extracted_images),
+                                'filename': image_filename,
+                            })
+                            logger.info(
+                                f"  ✓ Extracted embedded image from page {page_num + 1} "
+                                f"({img_w}x{img_h})"
+                            )
+                    except Exception as e:
+                        logger.warning(f"  Embedded image extraction error on page {page_num + 1}: {e}")
 
                 except Exception as e:
-                    logger.warning(f"  Failed to render page {page_num + 1}: {e}")
+                    logger.warning(f"  Failed to process page {page_num + 1}: {e}")
                     continue
 
             pdf_document.close()
-            logger.info(f"✅ Rendered {len(extracted_images)} pages from PDF")
+            logger.info(f"✅ Extracted {len(extracted_images)} embedded image(s) from PDF")
 
         except Exception as e:
-            logger.error(f"PDF page rendering failed: {e}")
+            logger.error(f"PDF image extraction failed: {e}")
             raise
 
         return extracted_images
@@ -559,6 +525,7 @@ class PreprocessService:
             # Validate image
             try:
                 with Image.open(file_path) as img:
+                    img = ImageOps.exif_transpose(img)
                     img.load()
                     image_size = img.size
                     image_mode = img.mode
