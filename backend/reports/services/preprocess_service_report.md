@@ -35,8 +35,8 @@ preprocess_document(
       },
       "ar": {
         "components": [...],
-        "connections": [...],
-        "relationships": {...},
+        "connections": [],
+        "relationships": {},
         "metadata": {...}
       },
       "ai": {
@@ -51,7 +51,7 @@ preprocess_document(
 
 ### Output Shape (PDF mode)
 
-Same top-level structure, with `"type": "pdf"` and `"images"` containing one entry per diagram page extracted from the PDF.
+Same top-level structure, with `"type": "pdf"` and `"images"` containing one entry per diagram image extracted from the PDF.
 
 ---
 
@@ -59,19 +59,21 @@ Same top-level structure, with `"type": "pdf"` and `"images"` containing one ent
 
 When a single image file is uploaded, the pipeline runs as follows:
 
-### Step 1 — Diagram Classification (Vision Model)
+### Step 1 — Orientation Correction
+
+Before any analysis, `ImageOps.exif_transpose` is applied to the loaded image to correct camera-rotated photos. This ensures the image is always processed in the correct orientation regardless of EXIF metadata. (AR service also applies this independently during its own image load.)
+
+### Step 2 — Diagram Classification (Vision Model)
 
 ```python
 vision_result = analyze_images(file_path, task="ar_extraction")
 ```
 
-`analyze_images` runs the IBM Granite Vision 3.3-2B model on the image. It:
-- Builds the `AR_EXTRACTION_PROMPT` which asks the model to output a `DIAGRAM_TYPE:` classification line followed by a `NAME — ROLE` component list.
-- Returns `vision_result` containing `summary`, `components` (extracted names), and `diagram_type` (e.g., `"sequence"`, `"uml"`, `"architecture"`, `"other"`).
+`analyze_images` runs the IBM Granite Vision 3.3-2B model on the image. It returns `vision_result` containing `summary`, `components` (extracted names), and `diagram_type` (e.g., `"sequence"`, `"uml"`, `"architecture"`, `"other"`).
 
 The `diagram_type` from this step is critical — it is passed forward as the first hint to the AR service.
 
-### Step 2 — AR Component Detection
+### Step 3 — AR Component Detection
 
 ```python
 diagram_type = vision_result.get('diagram_type', 'other')
@@ -81,11 +83,9 @@ ar_result = ar_service.extract_document_features(
 )
 ```
 
-The `hints` list is constructed as `[diagram_type, component_name_1, component_name_2, ...]`. Passing the diagram type as the first element means the AR service always receives an explicit classification hint before any component names, allowing it to immediately select the right detection strategy (e.g., the dedicated sequence pipeline).
+The `hints` list is constructed as `[diagram_type, component_name_1, ...]`. The AR service returns components with normalized coordinates, confidence, shape features, and semantic labels.
 
-The AR service returns components with normalized coordinates, confidence, shape features, and connectivity information.
-
-### Step 3 — AI Summarization
+### Step 4 — AI Summarization
 
 ```python
 ai_result = ai_service.summarize_components(
@@ -95,35 +95,39 @@ ai_result = ai_service.summarize_components(
 )
 ```
 
-The AI service generates a plain-language technical summary of the detected components and their relationships. The `document_type` is passed so the AI can tailor its language to the diagram style (e.g., "sequence diagram showing interactions between...").
+The AI service generates a plain-language technical summary of the detected components.
 
 ---
 
 ## PDF Pipeline
 
-PDFs are processed page by page:
+PDFs are processed image by image:
 
-### Step 1 — Page Rendering
+### Step 1 — Embedded Image Extraction
 
-Pages are rendered to images using PyMuPDF (`fitz`). Rendering resolution is chosen to produce a clear, adequately-sized image without excessive file size.
+The service extracts **embedded raster images** from the PDF using PyMuPDF (`fitz`). It does not render full pages or crop vector graphics regions — only image objects already present in the PDF are extracted.
+
+For each page (up to `max_images_per_pdf = 30`):
+- `page.get_images(full=True)` enumerates all embedded image xrefs.
+- Images smaller than `min_image_size` (100×100 px) are skipped.
+- `pdf_document.extract_image(xref)` retrieves the raw image bytes and extension.
+- Images are written to the upload extraction directory and recorded with their page number and dimensions.
+
+This approach targets the actual diagrams that authors embedded in the document, avoiding false positives from background textures, watermarks, or layout artifacts that page-rendering would capture.
 
 ### Step 2 — Diagram Filtering
 
-Before running the full vision + AR pipeline on every page, the service uses a quick vision classification check using `DIAGRAM_CLASSIFICATION_PROMPT`:
-```
-Is this image a technical diagram (e.g. schematic, flowchart, UML, sequence diagram)?
-Answer with ONLY 'yes' or 'no'.
-```
+Before running the full vision + AR pipeline on every extracted image, the service uses a quick vision classification check using `DIAGRAM_CLASSIFICATION_PROMPT` — a binary yes/no classification against explicit criteria for what counts as a technical diagram (UML diagrams, architecture diagrams, flowcharts, circuit schematics, block diagrams) vs. non-diagrams (photos, UI screenshots, tables, Gantt charts, plain text pages). Uncertain cases default to `"no"` to reduce false positives.
 
-Pages that answer `"no"` are skipped. This prevents the heavier AR and AI steps from running on photo pages, gantt charts, or title slides.
+Images that answer `"no"` are skipped.
 
 ### Step 3 — Text Extraction (Docling)
 
-If Docling is installed, structured text is extracted from each page. This text is passed to the AI service as additional context for summarization and Q&A. If Docling is unavailable, text context degrades but vision + AR still run.
+If Docling is installed, structured text is extracted from the full PDF. This text is passed to the AI service as additional context. If Docling is unavailable, the service warns but continues with vision + AR only.
 
-### Step 4 — Per-Page Vision + AR + AI
+### Step 4 — Per-Image Vision + AR + AI
 
-Each diagram page goes through the same three-step pipeline as the image mode (Vision → AR → AI summarization), with the diagram type forwarded from the vision result to the AR service on each page.
+Each diagram image goes through the same three-step pipeline as the image mode (Vision → AR → AI summarization), with the diagram type forwarded from the vision result to the AR service on each image.
 
 ---
 
@@ -131,27 +135,27 @@ Each diagram page goes through the same three-step pipeline as the image mode (V
 
 The order Vision → AR → AI is intentional:
 
-1. **Vision runs first** because it classifies the diagram type as a side effect. The AR service needs this classification to pick the right detection strategy without doing its own analysis.
+1. **Vision runs first** because it classifies the diagram type as a side effect. The AR service needs this classification to pick the right detection strategy.
 
-2. **AR runs second** because it has the diagram type available. It also gets the vision component names as hints, which can assist label assignment in some pipelines.
+2. **AR runs second** because it has the diagram type available. It also gets the vision component names as hints.
 
-3. **AI runs last** because it needs both the vision summary and the AR component list to generate a coherent description. It combines all available context — text from Docling, the vision summary, AR components, and connection metadata — into a compact, accurate explanation.
+3. **AI runs last** because it needs both the vision summary and the AR component list. It combines all available context — text from Docling, the vision summary, AR components — into a compact explanation.
 
 ---
 
 ## Error Handling
 
 Each stage is wrapped in a `try/except`. A failure in one stage does not abort the others:
-- If vision fails, `diagram_type` defaults to `"other"` and `vision_components` is empty. AR still runs with a generic configuration.
-- If AR fails, the image entry is returned with an empty `ar` block and the vision and AI results are still included.
+- If vision fails, `diagram_type` defaults to `"other"` and `vision_components` is empty. AR still runs with generic configuration.
+- If AR fails, the image entry is returned with an empty `ar` block; vision and AI results are still included.
 - If AI summarization fails, a fallback summary derived from the component list is used.
 
 ---
 
 ## Dependencies
 
-- `Pillow` — image loading and conversion.
-- `fitz` (PyMuPDF) — PDF page rendering.
+- `Pillow` (including `ImageOps`) — image loading, orientation correction, and conversion.
+- `fitz` (PyMuPDF) — PDF embedded image extraction.
 - `docling` (optional) — structured text extraction from PDFs.
 - `app.services.granite_vision_service.analyze_images` — vision analysis and diagram type classification.
 - `app.services.granite_ai_service.ai_service` — text-based summarization and Q&A.
@@ -162,7 +166,8 @@ Each stage is wrapped in a `try/except`. A failure in one stage does not abort t
 
 ## Risks and Notes
 
-- **Latency** — each page runs three model passes. On CPU, a single image can take several minutes. On GPU, a typical diagram takes 5–30 seconds.
+- **Latency** — each image runs three model passes. On GPU, a typical diagram takes 5–30 seconds.
+- **Embedded-only extraction**: PDFs that contain vector-drawn diagrams (no embedded raster images) will yield zero extractable images. The vision+AR pipeline will not run on such documents. Page rendering was removed because it produced too many false positives from layout elements.
 - **Docling availability** — if not installed, text context for AI summarization is absent. The service warns but continues.
-- **Diagram classification reliability** — the `yes/no` filter for PDFs relies on the vision model. Misclassifying a diagram page as a non-diagram will silently skip it. The threshold can be adjusted if too many diagram pages are being skipped.
-- **Memory** — running three models (Granite Vision, AR/SAM) simultaneously can cause VRAM pressure on smaller GPUs. The model manager handles VRAM monitoring and SAM CPU fallback, but very large PDFs may require streaming pages rather than parallel processing.
+- **Diagram classification reliability** — the `yes/no` filter for PDFs relies on the vision model. Misclassifying a diagram image as a non-diagram will silently skip it.
+- **Memory** — running Granite Vision and SAM simultaneously can cause VRAM pressure on smaller GPUs. The model manager handles VRAM monitoring and SAM CPU fallback.

@@ -1,0 +1,196 @@
+# App Factory Report (`app.py`)
+
+## Overview
+
+`app.py` is the Flask application factory. It configures the full server stack: CORS, logging, authentication middleware, security headers, error handlers, blueprint registration, static file serving, and OpenTelemetry tracing. The `create_app()` function is called by `run.py` at startup.
+
+---
+
+## Application Factory — `create_app()`
+
+Returns a fully configured `Flask` application. Called once at startup (not per-request). `use_reloader=False` is set in `run.py` to prevent the Werkzeug reloader from triggering a second `create_app()` call (which would double-load all AI models).
+
+---
+
+## Authentication
+
+All `/api/*` routes (except those in `PUBLIC_API_PATHS`) require a `Bearer` token in the `Authorization` header:
+
+```
+Authorization: Bearer ibm-project-dev-token
+```
+
+The token value is read from the `API_ACCESS_TOKEN` environment variable (set in `.env`). If the variable is absent, a hardcoded development default is used.
+
+**Public paths** (no token required):
+
+| Path                        | Reason                        |
+|-----------------------------|-------------------------------|
+| `/api/health`               | Liveness probe                |
+| `/api/routes`               | API introspection             |
+| `/api/upload/health`        | Upload service liveness       |
+| `/api/vision/health`        | Vision model liveness         |
+| `/api/ar/health`            | AR model liveness             |
+| `/api/ai/health`            | AI model liveness             |
+| `/api/process/health`       | Pipeline liveness             |
+
+Auth failures return 401 with `code: "AUTH_INVALID_TOKEN"` and the request ID from `X-Request-ID`. The token in the log message is masked to the first 10 characters to prevent credential leakage in logs.
+
+---
+
+## CORS
+
+Allowed origins (for `/api/*` and `/static/*`):
+- `http://localhost:3000` — React dev server
+- `http://localhost:8081` — Expo dev server
+- `http://localhost:19006` — Expo web
+- `http://127.0.0.1:3000`
+
+Allowed methods: `GET`, `POST`, `PUT`, `DELETE`, `OPTIONS`.
+Allowed headers: `Content-Type`, `Authorization`.
+
+---
+
+## Security Headers (middleware)
+
+Every response from a non-static route gets:
+
+| Header                    | Value                                        |
+|---------------------------|----------------------------------------------|
+| `X-Content-Type-Options`  | `nosniff`                                    |
+| `Referrer-Policy`         | `no-referrer`                                |
+| `Permissions-Policy`      | `camera=(self), microphone=()`               |
+| `X-Frame-Options`         | `DENY` (API routes) / `SAMEORIGIN` (static)  |
+| `Strict-Transport-Security` | `max-age=31536000; includeSubDomains` (HTTPS only) |
+
+---
+
+## Request Logging and Request IDs
+
+`@app.before_request` assigns a `request_id` to `flask.g` (from the incoming `X-Request-ID` header or a fresh UUID4). This ID is:
+- Logged on every request and response line.
+- Injected into every error response body under `"request_id"`.
+- Added to every response via `X-Request-ID` response header.
+
+This allows request correlation across logs and client-side error tracking.
+
+---
+
+## Blueprint Registration
+
+| Blueprint    | URL Prefix      | Source file          |
+|--------------|-----------------|----------------------|
+| `upload_bp`  | `/api/upload`   | `upload_route.py`    |
+| `vision_bp`  | `/api/vision`   | `vision_routes.py`   |
+| `ar_bp`      | `/api/ar`       | `ar_routes.py`       |
+| `ai_bp`      | `/api/ai`       | `ai_routes.py`       |
+| `process_bp` | `/api/process`  | `process_route.py`   |
+
+`auth_routes.py` exists but is currently empty — no `auth_bp` is registered.
+
+---
+
+## Global Health — `GET /api/health`
+
+Reports the status of all loaded models:
+
+```json
+{
+  "status": "healthy",
+  "mode": "REAL AI",
+  "models": {
+    "vision": {
+      "loaded": true,
+      "processor_loaded": true,
+      "note": "handles vision analysis and text chat"
+    },
+    "ar": {"loaded": true}
+  }
+}
+```
+
+Status is `"healthy"` (HTTP 200) if mock mode is active or the vision model is loaded. Otherwise `"degraded"` (HTTP 207). If the model manager failed to import, `models` contains `{"error": "Model Manager not available"}`.
+
+---
+
+## Route Introspection — `GET /api/routes`
+
+Returns a sorted list of all registered URL rules:
+
+```json
+{
+  "status": "success",
+  "total": 18,
+  "routes": [
+    {"endpoint": "ai.analyze", "methods": ["POST"], "path": "/api/ai/analyze"},
+    ...
+  ]
+}
+```
+
+Useful for debugging, API documentation, and client auto-discovery.
+
+---
+
+## OpenTelemetry Tracing
+
+If the `opentelemetry` packages are installed and `OTEL_SDK_DISABLED` is not set:
+- A `TracerProvider` is created with service name `ibm-ar-doc-backend`.
+- An `OTLPSpanExporter` is configured to the endpoint in `OTEL_EXPORTER_OTLP_ENDPOINT` (default: `http://localhost:4317`).
+- `FlaskInstrumentor().instrument_app(app)` wraps every request in an OTel span.
+
+If the packages are missing or `OTEL_SDK_DISABLED=true`, tracing is silently disabled. This makes OTel an optional observability layer that doesn't affect functionality.
+
+---
+
+## Logging
+
+`_ColourFormatter` provides ANSI-coloured log output:
+
+| Level    | Colour   |
+|----------|----------|
+| DEBUG    | Cyan     |
+| INFO     | Green    |
+| WARNING  | Yellow   |
+| ERROR    | Red      |
+| CRITICAL | Magenta  |
+
+Werkzeug's own request log is suppressed to `WARNING` level to reduce noise (the middleware logs requests instead with more context).
+
+---
+
+## Error Handlers
+
+Registered for: 400, 401, 403, 404, 405, 413, 500, and catch-all `HTTPException` and `Exception`. All return JSON with `{"status": "error", "error": "...", "request_id": "..."}` for consistency.
+
+---
+
+## Static File Serving
+
+Two routes serve files from `backend/static/`:
+- `GET /static/uploads/<filename>` — serves uploaded files (PDFs, images) to the frontend.
+- `GET /static/<path>` — serves any other static asset.
+
+`X-Frame-Options: SAMEORIGIN` is set on static responses to allow PDFs to be embedded in iframes from the same origin.
+
+---
+
+## Environment Variables
+
+| Variable                      | Default                   | Description                              |
+|-------------------------------|---------------------------|------------------------------------------|
+| `GRANITE_MOCK`                | `"0"`                     | `"1"` to skip model loading              |
+| `API_ACCESS_TOKEN`            | `"ibm-project-dev-token"` | Bearer token for API authentication      |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | `"http://localhost:4317"` | OTel collector address                   |
+| `OTEL_SDK_DISABLED`           | `"false"`                 | `"true"` or `"1"` to disable tracing     |
+| `PORT`                        | `4200`                    | Server port (read by `run.py`)           |
+| `FLASK_DEBUG`                 | `"False"`                 | `"true"` to enable debug mode            |
+
+---
+
+## Dependencies
+
+- `flask`, `flask-cors`, `werkzeug`
+- `python-dotenv`
+- `opentelemetry` stack (optional)
+- `app.utils.response_formatter.error_response`

@@ -7,7 +7,7 @@
 The module serves three consumers:
 - **`granite_vision_service`** — vision model prompts for diagram analysis, component extraction, and diagram classification.
 - **`granite_ai_service`** — text model prompts for analysis, chat, summarization, and insight generation.
-- **`ar_service`** (ARv1) — component labeling and connection detection prompts with coordinate injection.
+- **`ar_service`** — component labeling prompts.
 
 ---
 
@@ -17,11 +17,22 @@ The module serves three consumers:
 
 The primary prompt used when `analyze_images` is called in `ar_extraction` mode. This prompt has two key jobs:
 
-1. **Diagram type classification** — the model is instructed to output exactly one of: `sequence`, `uml`, `flowchart`, `architecture`, `other` on a line beginning with `DIAGRAM_TYPE:`. This line is parsed by `_extract_diagram_type` in `granite_vision_service.py` and forwarded to the AR service as its first hint.
+1. **Diagram type classification** — the model is instructed to write one of five possible `DIAGRAM_TYPE:` lines. Each possible value is shown on its own line as a concrete example rather than a pipe-separated list:
 
-2. **Component listing** — the model lists every component in `NAME — ROLE` format (one per line), enabling reliable structured extraction without free-form parsing.
+```
+Example outputs (pick the one that matches):
+DIAGRAM_TYPE: sequence
+DIAGRAM_TYPE: uml
+DIAGRAM_TYPE: flowchart
+DIAGRAM_TYPE: architecture
+DIAGRAM_TYPE: other
+```
 
-Example expected output:
+This format change prevents the model from copying the format line literally (with `|` separators) as its answer, which was a failure mode with the previous format. The `_extract_diagram_type` function in `granite_vision_service.py` has a corresponding guard that skips any `DIAGRAM_TYPE:` value containing `|`.
+
+2. **Component listing** — the model lists every component in `NAME — ROLE` format (one per line), enabling reliable structured extraction.
+
+**Full example output shown to the model:**
 ```
 DIAGRAM_TYPE: architecture
 API Gateway — routes incoming requests
@@ -29,37 +40,38 @@ Redis Cache — caches session data
 PostgreSQL — primary data store
 ```
 
-**Why this format works well on small models:**
-- Short, directive instructions outperform verbose prompts on 2B-parameter models.
-- Few-shot examples anchor format better than rule-based constraints.
-- Negative instructions ("Do NOT include…") are often ignored by small models; this prompt avoids them entirely.
-- Putting the desired format last keeps it freshest in the model's context window.
-
 ### `COMPONENT_LABEL_PROMPT`
 
-Used by `ar_service` (ARv1) to label individual cropped components. It instructs the model to read text inside the element first (highest priority), then nearby captions, then infer from shape. Provides 8 one-phrase examples to anchor the output format. Returns 1–4 words only.
+Used by `ar_service._try_vision_label` to label individual cropped components. It instructs the model to read text inside the element first (highest priority), then nearby captions, then infer from shape. Provides one-phrase output examples. Returns 1–4 words only.
 
 ### `CONNECTION_PROMPT_TEMPLATE`
 
 Used to detect connections between components. Takes a list of component labels and their normalized (x, y) center coordinates and asks the model to identify arrows connecting them. Outputs one `SOURCE -> TARGET` line per connection. Built by `build_connection_prompt(components)`.
 
+Note: connection detection is currently disabled in `ar_service.py` — this template is retained for forward compatibility.
+
 ### `GENERAL_IMAGE_ANALYSIS_PROMPT`
 
-Simple fallback for non-AR analysis tasks: `"Describe the image in detail and list all visible technical components."` Used when task is not `ar_extraction`.
+Simple fallback for non-AR analysis tasks: describes the image in detail and lists all visible technical components. Used when task is not `ar_extraction`.
 
 ### `DIAGRAM_CLASSIFICATION_PROMPT`
 
-Used in the PDF pipeline to decide whether a page is a diagram worth processing. Returns only `"yes"` or `"no"`. Explicitly lists non-diagram types (photos, gantt charts, UI mocks, schedules) to reduce false positives.
+Used in the PDF pipeline to decide whether an extracted image is a diagram worth processing. The prompt has been significantly expanded to reduce false positives and false negatives:
+
+- **YES criteria**: structured technical diagrams with components connected by lines/arrows/boxes/symbols — specifically: UML class/sequence/activity/state diagrams, architecture diagrams, flowcharts, network topologies, circuit schematics, block diagrams.
+- **NO criteria**: photos, people, devices, logos, UI screenshots, tables, calendars, timetables, Gantt charts, plain text pages, paragraph-heavy pages, decorative icons, isolated illustrations without clear component relationships.
+- **Uncertain default**: `"If uncertain, answer NO."` — reduces noisy pages reaching the full pipeline.
+- **Output format**: `"Return exactly one word: yes or no."` — replaces the previous `"Answer with ONLY 'yes' or 'no'."` for more explicit output control.
 
 ### System Prompts
 
 ```python
-AI_ANALYZE_SYSTEM_PROMPT = "You are an expert technical analyst."
-AI_CHAT_SYSTEM_PROMPT    = "You are a helpful technical assistant answering questions about a document."
+AI_ANALYZE_SYSTEM_PROMPT  = "You are an expert technical analyst."
+AI_CHAT_SYSTEM_PROMPT     = "You are a helpful technical assistant answering questions about a document."
 AI_INSIGHTS_SYSTEM_PROMPT = "You are a senior technical analyst."
 ```
 
-These are prepended to AI service prompts to frame the model's role.
+These constants are **exported** from `prompt_builder.py` and injected directly at the `<|system|>` level in `granite_ai_service._generate_text`. They are no longer embedded inside the individual prompt-builder functions.
 
 ---
 
@@ -74,32 +86,37 @@ Wraps a vision prompt in Granite's required chat image format:
 {user_prompt}
 <|assistant|>
 ```
-The `<image>` token signals where `pixel_values` should be integrated during forward pass. Without this exact format, the vision model receives the prompt as text-only and ignores the image.
 
 ### `build_vision_qa_prompt(question: str) -> str`
 
-Builds a focused visual Q&A prompt: "Look at this technical diagram carefully. Question: {question}. Give a direct, concise answer based on what you see in the image." Avoids general analysis framing so the model gives a specific answer to the question rather than describing the whole diagram.
+Builds a focused visual Q&A prompt for `query_image`. Frames the question as a direct, concise answer task to prevent the model from describing the whole diagram.
 
 ### `build_analyze_context_prompt(context_str, task) -> str`
 
-Builds the full prompt for `ai_service.analyze_context`. Prepends the system prompt, then document context, then the task instruction. Ends with `"Provide a clear, structured analysis based ONLY on the context above:"` to prevent hallucination beyond the provided context.
+Builds the user prompt for `ai_service.analyze_context`. Contains only:
+- Document context.
+- Task instruction.
+- "Provide a clear, structured analysis based ONLY on the context above."
+
+The system prompt (`AI_ANALYZE_SYSTEM_PROMPT`) is passed separately via `_generate_text(system_prompt=...)`, not embedded here. This separation ensures the system prompt is placed at the `<|system|>` position of the Granite chat format rather than prepended to the user turn.
 
 ### `build_chat_with_document_prompt(context_str, query, history_str='') -> str`
 
-Builds the chat prompt for document Q&A. Includes:
-- System prompt framing the model as a document assistant.
+Builds the user prompt for document Q&A. Contains:
 - Full document context.
 - Optional conversation history (previous turns).
 - The user's question.
-- Explicit instruction: "Do not make up information. If the context doesn't cover the topic, say so." — this significantly reduces hallucinated answers for questions the document doesn't address.
+- Anti-hallucination instruction: "Do not make up information. If the context doesn't cover the topic, say so."
+
+System prompt (`AI_CHAT_SYSTEM_PROMPT`) is passed separately.
 
 ### `build_component_summary_prompt(document_type, component_list, relationship_str='') -> str`
 
-Used by `ai_service.summarize_components`. Tells the model what type of diagram it's analyzing, lists the detected components, and optionally includes relationship/connection data. Returns a brief technical summary explaining what the diagram shows.
+Used by `ai_service.summarize_components`. Lists the detected components and optionally includes relationship data.
 
 ### `build_generate_insights_prompt(context_str, task) -> str`
 
-Used by `ai_service.generate_insights`. Instructs the model to produce 3–5 specific, actionable insights from the technical data. The `task` parameter specializes the insight type (architecture, complexity, optimization, relationships, or general).
+Used by `ai_service.generate_insights`. Instructs the model to produce 3–5 specific, actionable insights from the technical data. System prompt (`AI_INSIGHTS_SYSTEM_PROMPT`) is passed separately.
 
 ### `get_context_analysis_task(context_type: str) -> str`
 
@@ -130,10 +147,10 @@ Normalizes a raw vision model response into a concise 1–4 word component name.
 2. Strip noise tokens (`<|end_of_text|>`, chat role tokens, etc.).
 3. Strip trailing punctuation and structural words.
 4. Check against `_REFUSAL_MARKERS` — if the model said it can't identify the component, return `"Unknown"`.
-5. Extract quoted names if present (e.g., `The component is called "API Gateway"` → `API Gateway`).
-6. Strip common prefix patterns (e.g., "The component name is…", "This is a…", "Label: …") using `_PREFIX_PATTERNS`.
+5. Extract quoted names if present.
+6. Strip common prefix patterns using `_PREFIX_PATTERNS`.
 7. Remove trailing filler words (component, element, block, box, node, module).
-8. Strip leading articles that survived prefix cleaning.
+8. Strip leading articles.
 9. Enforce 4-word maximum.
 10. Enforce 50-character length cap.
 
@@ -141,15 +158,15 @@ Returns `None` for empty input and `"Unknown"` for explicit refusals.
 
 ### `build_connection_prompt(components: List[Dict]) -> str`
 
-Formats the `CONNECTION_PROMPT_TEMPLATE` with the list of detected component labels and their normalized center coordinates. Caps at 25 components to avoid prompt overflow. Used to ask the vision model to identify arrows between already-detected components.
+Formats the `CONNECTION_PROMPT_TEMPLATE` with component labels and normalized center coordinates. Caps at 25 components to avoid prompt overflow.
 
 ### `make_unique_labels(labels: list[str]) -> list[str]`
 
-Ensures no two components share the same label by appending numeric suffixes to duplicates:
+Appends numeric suffixes to duplicate labels:
 ```
-["CPU", "CPU", "GPU", "Unknown", "Unknown"] → ["CPU 1", "CPU 2", "GPU", "Unknown", "Unknown"]
+["CPU", "CPU", "GPU"] → ["CPU 1", "CPU 2", "GPU"]
 ```
-`"Unknown"` is deliberately never deduplicated — it's a placeholder label and there's no semantic value in distinguishing `Unknown 1` from `Unknown 2`.
+`"Unknown"` is never deduplicated — it's a placeholder and there's no semantic value in distinguishing `Unknown 1` from `Unknown 2`.
 
 ---
 
@@ -160,8 +177,7 @@ The module comment summarizes the prompt design rules that produced good results
 - Few-shot output examples anchor format better than rule-based descriptions.
 - Avoid "Do NOT" — small models frequently ignore negations.
 - Put the desired output format last so it's freshest in context.
-
-These rules were arrived at through iterative testing and directly influence why `AR_EXTRACTION_PROMPT` uses examples rather than a detailed rule list.
+- Separate system prompts from user content — inject at `<|system|>` level, not inside the user turn.
 
 ---
 

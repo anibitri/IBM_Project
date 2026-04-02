@@ -2,11 +2,13 @@
 
 ## Overview
 
-`ARService` is the production AR component detection pipeline. It takes a diagram image and returns a structured list of detected components with normalized coordinates, confidence scores, shape metadata, and connectivity information.
+`ARService` is the production AR component detection pipeline. It takes a diagram image and returns a structured list of detected components with normalized coordinates, confidence scores, shape metadata, and semantic labels.
 
 The pipeline uses two detection strategies depending on diagram type:
 - **Sequence diagrams** use a dedicated structural pipeline based on lifeline geometry.
 - **All other types** use a hybrid SAM + classical contour pipeline with adaptive scoring.
+
+Connection and relationship extraction are **intentionally disabled** — line/arrow detection accuracy was insufficient for reliable results, so `connections` is always `[]` and `relationships` is always `{}`.
 
 ---
 
@@ -25,13 +27,13 @@ ar_service.extract_document_features(image_path: str, hints: List[str] = None) -
 {
   "components": [...],        # list of detected component dicts
   "componentCount": int,      # number of components
-  "connections": [...],       # inferred connections between components
-  "relationships": {...},     # graph-derived spatial and topological metadata
+  "connections": [],          # always empty (disabled)
+  "relationships": {},        # always empty (disabled)
   "metadata": {
     "image_size": {"width": int, "height": int},
     "diagram_type": str,      # e.g. "sequence", "uml", "architecture"
-    "total_connections": int,
-    "connected_components": int
+    "total_connections": 0,
+    "connected_components": 0
   }
 }
 ```
@@ -40,14 +42,16 @@ Each component in the list contains:
 ```python
 {
   "id": "component_0",
-  "label": "Process Box",     # shape-derived label
-  "confidence": 0.85,
-  "x": 0.12, "y": 0.08,      # top-left corner, normalised 0–1
+  "label": "API Gateway",      # semantic label (OCR/vision first, shape fallback)
+  "semantic_label": "API Gateway",
+  "confidence": 0.85,          # capped at 0.95
+  "x": 0.12, "y": 0.08,       # top-left corner, normalised 0–1
   "width": 0.22, "height": 0.10,
   "center_x": 0.23, "center_y": 0.13,
   "area": 0.022,
   "shape_features": {...},
-  "terminals": [...]
+  "terminals": [],
+  "description": "API Gateway at (0.23, 0.13)"
 }
 ```
 
@@ -60,7 +64,7 @@ Each component in the list contains:
 Before detection begins, `extract_document_features` examines the hints list:
 
 - If the first hint contains `"sequence"`, `"uml"`, `"flowchart"`, or `"architecture"`, that string is stored in `_hint_diagram_type` and used to override auto-detection.
-- `_calculate_adaptive_thresholds` then analyses the image using Canny edge density, Hough line orientation (horizontal / vertical / diagonal counts), lifeline clustering, rectangle counting, diamond counting, and compartmented rectangle detection.
+- `_calculate_adaptive_thresholds` analyses the image using Canny edge density, Hough line orientation (horizontal / vertical / diagonal counts), lifeline clustering, rectangle counting, diamond counting, and compartmented rectangle detection.
 - The result is a `diagram_type` string and a set of per-type thresholds:
 
 | Diagram Type  | Min Area                | Max Area     | Aspect Ratio Range |
@@ -71,7 +75,7 @@ Before detection begins, `extract_document_features` examines the hints list:
 | `architecture`| 0.2 % of image          | **70 %**     | 0.10 – 10.0        |
 | dense/medium/sparse | 0.2 % of image   | 20 %         | generic            |
 
-The architecture type allows very large containers (group boxes, cloud regions) that span up to 70 % of the image — other types would reject these as background.
+Image loading applies `ImageOps.exif_transpose` to correct camera-rotated images before any processing.
 
 **How auto-detection works:**
 - `lifeline_count ≥ 3` + `h_lines > v_lines × 2.5` → `sequence`
@@ -93,13 +97,13 @@ Orchestrates the full sequence pipeline:
 
 2. **`_find_seq_actor_boxes`** — searches the top 20 % and bottom 15 % of the image for rectangles (from multiple threshold variants) whose horizontal center aligns within 60 px of a known lifeline. These are the participant boxes at the top of a sequence diagram.
 
-3. **`_find_seq_activation_bars`** — finds small filled rectangles anywhere in the diagram that sit on a lifeline (center within 40 px). Crucially, **no aspect ratio constraint is applied** — activation boxes can be horizontal (short/wide) or vertical (tall/narrow) depending on diagram style.
+3. **`_find_seq_activation_bars`** — finds small filled rectangles anywhere in the diagram that sit on a lifeline (center within 40 px). No aspect ratio constraint is applied — activation boxes can be horizontal or vertical depending on diagram style.
 
 4. **`_find_seq_fragment_boxes`** — finds combined-fragment frames (alt, loop, opt, ref boxes). These span multiple lifelines (width ≥ 6 % of image width), have low interior fill (5–80 % indicating mostly-empty interior), and have a clear polygon border (≥ 4 vertices after `approxPolyDP`).
 
-5. **`_threshold_variants`** — to handle diagrams with variable contrast, all detection passes run on four binary images: Otsu threshold, fixed 180 threshold (light background), fixed 100 threshold (dark background), and adaptive Gaussian threshold.
+5. **`_threshold_variants`** — all detection passes run on four binary images: Otsu threshold, fixed 180 threshold, fixed 100 threshold, and adaptive Gaussian threshold.
 
-6. **`_dedup_boxes_list`** — IoU-based deduplication removes near-identical detections. Largest box wins ties, which preserves the primary fragment over slight contour variants.
+6. **`_dedup_boxes_list`** — IoU-based deduplication removes near-identical detections. Largest box wins ties.
 
 Results are returned directly without going through SAM or the scoring pipeline. If the sequence pipeline returns zero results, the service falls back to the SAM pipeline.
 
@@ -107,10 +111,11 @@ Results are returned directly without going through SAM or the scoring pipeline.
 
 ### Step 3 — SAM Segmentation (non-sequence diagrams)
 
-**`_run_sam(img_array)`** calls the SAM 2 Tiny model via `manager.ar_model`. For each detected mask, it:
+**`_run_sam(img_array)`** calls the SAM 2 Large model via `manager.ar_model`. For each detected mask, it:
 - Resizes the mask to match image dimensions if needed.
 - Computes bounding box from mask pixel coordinates.
-- Stores: `segmentation`, `bbox`, `area`, `predicted_iou` (SAM confidence).
+- Stores: `segmentation`, `bbox`, `area`, `predicted_iou` (SAM confidence, used as quality score but capped at 0.95).
+- Default quality score when boxes are unavailable: **0.5** (was 0.8 previously).
 
 ---
 
@@ -121,6 +126,19 @@ Results are returned directly without going through SAM or the scoring pipeline.
 - Uses Otsu thresholding on both light and dark interpretations.
 - Filters candidates via `_contour_to_candidate` (area, fill ratio, aspect, polygon vertex count).
 - Merges with SAM results via `_merge_detection_results` using IoU uniqueness — a contour candidate is only kept if it does not substantially overlap any existing SAM mask.
+
+---
+
+### Step 4b — Adjacent Component Merging
+
+**`_merge_adjacent_components(components, img_w, img_h)`** runs after mask conversion to component objects. It merges fragments that are directly adjacent (stacked vertically or side-by-side horizontally) and share a near-identical dimension.
+
+Two components are merged when:
+- **Width or height match**: the differing dimension is within 0.2 % of each other.
+- **Vertical adjacency**: y-gap ≤ 0.5 % of image height, and x-overlap covers ≥ 70 % of the narrower component's width.
+- **Horizontal adjacency**: x-gap ≤ 0.5 % of image width, and y-overlap covers ≥ 70 % of the shorter component's height.
+
+The merge is greedy — the closest adjacent pair is merged first, then the process repeats until no more merges are possible. This corrects the common pattern where SAM segments each section of a UML class box separately along its horizontal divider lines. After merging, component IDs are re-indexed but semantic labels are preserved.
 
 ---
 
@@ -156,53 +174,60 @@ Results are returned directly without going through SAM or the scoring pipeline.
 
 | Type          | Hard Rejects                              | Score Adjustments                                    |
 |---------------|-------------------------------------------|------------------------------------------------------|
-| `uml`         | area < 0.3 %, aspect > 6                 | +0.15 for compartmented boxes (class diagrams)       |
+| `uml`         | area < 0.3 %, aspect > 6, fill < 0.65   | +0.15 for compartmented boxes; rejects empty framed boxes |
 | `flowchart`   | area < 0.2 %, aspect > 7 or < 0.14      | +0.15 for diamonds, +0.10 for ovals/terminators      |
-| `architecture`| thin connectors (aspect > 10 and small)  | +0.10 if visible border frame, −0.10 if no frame     |
+| `architecture`| thin connectors, small regions (< 0.5 %), empty framed boxes | +0.05 if visible border frame, −0.15 if no frame |
 | `sequence`    | no hard rejects (handled separately)     | neutral (0.0, False)                                 |
 
-**`_has_compartments(roi)`** — used by the UML path. Detects horizontal divider lines inside a region using Hough line detection. A line spanning ≥ 35 % of the region width is taken as a UML class box section divider. This boosts proper class boxes over plain rectangles.
+**Empty framed box rejection** (UML and architecture): even if a border frame is detected, regions whose interior has edge density < 3–4 and variance < 400–500 are rejected as whitespace containers with no content.
 
-**`_has_rect_frame(roi)`** — used by the architecture path. Measures gradient magnitude along the four borders of a region. If both top+bottom or both left+right have > 13 % strong gradient pixels, the region is considered a framed box. This preserves named service boxes in architecture diagrams.
+**`_has_rect_frame(roi)`** — detects border frame lines to preserve text-in-box components. Accepts both full 4-sided frames AND 3-sided frames (e.g., the methods compartment of a UML class box whose top edge is an interior dividing line rather than a true outer border).
+
+**`_has_compartments(roi)`** — used by the UML path. Detects horizontal divider lines inside a region using Hough line detection. A line spanning ≥ 35 % of the region width is taken as a UML class box section divider.
 
 ---
 
 ### Step 6 — Non-Maximum Suppression
 
-**`_non_maximum_suppression`** removes duplicates using:
-- **Mask IoU** ≥ 0.25 → suppress lower-ranked mask.
-- **Containment ratio** ≥ 0.85 in either direction → suppress smaller/inner mask.
+**`_non_maximum_suppression`** removes duplicates and spanning artifacts using three rules:
 
-The 0.85 containment threshold is deliberately loose to allow legitimate nested components (e.g., a service box inside a cloud region) to coexist.
+1. **Pixel IoU** ≥ 0.25 → suppress lower-ranked mask.
+2. **Containment ratio** ≥ 0.85 in either direction → suppress smaller/inner mask.
+3. **Spanning-artifact detection** — a candidate mask is suppressed if it has bbox IoU > 0.12 with 2 or more already-kept masks, AND does not cleanly contain those masks (bbox containment < 0.88). This catches hollow outline masks whose pixel overlap with individual components is low (escaping rules 1 & 2) even though their bounding box spans multiple valid components. Legitimate container boxes are exempt because they cleanly contain their children (containment ≈ 1.0).
+
+Two new bbox geometry helpers support rule 3:
+- **`_bbox_iou(m, k)`** — axis-aligned bounding box IoU.
+- **`_bbox_contain_k_in_m(m, k)`** — fraction of `k`'s bounding box that lies inside `m`'s bounding box.
+
+The containment threshold (0.85) is deliberately loose to allow legitimate nested components (e.g., a service box inside a cloud region) to coexist with their containers.
 
 ---
 
-### Step 7 — Component Construction
+### Step 7 — Component Construction and Semantic Labeling
 
 **`_masks_to_components`** converts filtered masks to component objects:
-- Normalizes all coordinates to 0–1 range relative to image dimensions.
-- Calls `_extract_shape_features` which computes: circularity, rectangularity, vertex count, convexity ratio, rotated bounding-rect properties, and boolean flags for diamond/oval/parallelogram shape types.
-- Calls `_classify_by_shape` which maps features to a diagram-aware label (e.g., "Decision Diamond", "Process Box", "Sequence Lifeline Header", "UML Class Box").
+- Normalizes all coordinates to 0–1 range.
+- Calls `_extract_shape_features` (circularity, rectangularity, vertex count, convexity, diamond/oval/parallelogram flags).
+- Calls `_classify_by_shape` for a shape-based fallback label.
+- Calls `_label_component_semantic` to obtain the primary semantic label.
 
----
+**`_label_component_semantic(img, x, y, w, h, fallback_label)`** — three-level label priority:
 
-### Steps 8–10 — Terminals, Connections, and Relationships
+1. **OCR text** (`_try_ocr_label`) — extracts text from the padded crop using `pytesseract` (optional dependency). Applies adaptive thresholding to improve contrast for diagram text. Returns the first non-empty line, cleaned through `clean_label`. If `pytesseract` is not installed, silently skips this step.
 
-**`_detect_component_terminals`** — finds likely connection attachment points on component boundaries using contour extremes and sampled boundary points.
+2. **Vision model** (`_try_vision_label`) — saves the component crop to a temporary file and calls `query_image(tmp_path, COMPONENT_LABEL_PROMPT)`. Cleans the raw answer through `clean_label`. Only used if OCR returns nothing.
 
-**`_detect_connections`** — uses skeletonized edge maps and geometric plausibility to infer connections between components, producing a list of `{from, to, type}` dicts.
+3. **Shape fallback** — the `_classify_by_shape` result is used if both OCR and vision fail.
 
-**`_build_connection_graph`** — constructs a NetworkX undirected graph from the connection list.
-
-**`_analyze_relationships`** — traverses the graph to produce neighbor lists, degree counts, component groupings, and spatial density analysis.
+Confidence is capped at 0.95 and rounded to 3 decimal places.
 
 ---
 
 ## Background and Text Artifact Handling
 
-**`_estimate_background_model`** — samples the image border region to estimate the dominant background color. This is used by `_is_background_like_region` to identify masks that capture background rather than components.
+**`_estimate_background_model`** — samples the image border region to estimate the dominant background color. Used by `_is_background_like_region` to identify masks that capture background rather than components.
 
-**`_looks_like_floating_text`** — rejects text-only masks that float on the background (no box frame). Uses background color match, border gradient support, text band counting, and fill ratio to distinguish floating annotations from real boxed components. Preserves framed containers that happen to contain text.
+**`_looks_like_floating_text`** — rejects text-only masks that float on the background (no box frame). Uses background color match, border gradient support, text band counting, and fill ratio to distinguish floating annotations from real boxed components.
 
 ---
 
@@ -214,26 +239,30 @@ The AR service receives the vision model's diagram type classification as the fi
 
 ## Key Design Strengths
 
-- **Diagram-type-aware detection**: Rather than one global rule set, each diagram type has its own thresholds, filtering rules, and detection strategy. This prevents the false positive patterns specific to each type (sequence space-rectangles, UML text rows, architecture connector lines) from polluting the output.
-- **Sequence structural pipeline**: Exploits the predictable geometry of sequence diagrams (lifelines, actor alignment, activation position) to find components that appearance-based methods miss or over-segment.
-- **Multi-threshold detection**: Running contour detection on four binary images (Otsu, fixed-level, adaptive) ensures components are found regardless of local contrast variation.
-- **Background model**: Per-image background estimation makes text and gap rejection adaptive to dark-background diagrams as well as light ones.
-- **SAM + classical CV hybrid**: SAM provides high recall for irregular shapes; contour detection reliably catches clean rectangular boxes that SAM may over-segment.
+- **Diagram-type-aware detection**: Each diagram type has its own thresholds, filtering rules, and detection strategy.
+- **Sequence structural pipeline**: Exploits the predictable geometry of sequence diagrams to find components that appearance-based methods miss or over-segment.
+- **Multi-threshold detection**: Running contour detection on four binary images ensures components are found regardless of local contrast.
+- **Background model**: Per-image background estimation makes text and gap rejection adaptive.
+- **SAM + classical CV hybrid**: SAM provides high recall for irregular shapes; contour detection reliably catches clean rectangular boxes.
+- **Spanning-artifact NMS**: Bbox-based suppression catches hollow outline masks that escape pixel-level IoU/containment rules.
+- **Adjacent component merging**: Corrects SAM's tendency to over-segment UML class boxes by sections.
+- **Semantic labeling**: OCR-first, vision-fallback labeling gives meaningful names rather than shape-derived placeholders.
 
 ---
 
 ## Tradeoffs
 
-- Heuristic scoring still requires threshold tuning when moving to new diagram styles or rendering tools.
-- The sequence pipeline does not currently assign semantic labels — all actors get `"Actor"`, activation bars get `"Activation"`. Labels must come from the vision model via a second pass.
-- Connection detection increases runtime and adds a dependency on skeletonization quality.
+- Heuristic scoring still requires threshold tuning when moving to new diagram styles.
+- The sequence pipeline assigns shape-based labels to actors/activations by default; semantic relabeling via OCR/vision adds one `query_image` call per component.
+- Connection and relationship detection have been disabled. The output always contains `connections: []` and `relationships: {}`. These fields are preserved in the schema for forward compatibility.
 
 ---
 
 ## Dependencies
 
-- `numpy`, `opencv-python`, `Pillow`
-- `scipy` (spatial distance)
-- `skimage` (skeletonize)
-- `networkx`
-- `app.services.model_manager.manager` (SAM 2 model)
+- `numpy`, `opencv-python`, `Pillow` (including `ImageOps`)
+- `app.services.model_manager.manager` (SAM 2 Large model)
+- `app.services.granite_vision_service.query_image` (vision-based component labeling)
+- `app.services.prompt_builder.COMPONENT_LABEL_PROMPT`, `clean_label`
+- `pytesseract` (optional, for OCR-based labeling)
+- `tempfile` (for temporary crop files passed to vision model)

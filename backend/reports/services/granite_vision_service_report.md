@@ -5,9 +5,9 @@
 `granite_vision_service.py` provides image understanding by running IBM Granite Vision 3.3-2B through the vision processor. It handles two distinct use cases:
 
 1. **Full diagram analysis** (`analyze_images`) — produces a summary, a component list, and a **diagram type classification** that feeds directly into the AR pipeline.
-2. **Targeted Q&A** (`query_image`) — answers a specific natural-language question about an image, used by the AI service for focused visual lookups.
+2. **Targeted Q&A** (`query_image`) — answers a specific natural-language question about an image, used by the AI service and the AR service (for component labeling) for focused visual lookups.
 
-Both functions share the same model inference backend and output cleaning logic.
+Both functions share the same model inference backend and output cleaning logic, and both perform **explicit tensor cleanup** after inference to reduce VRAM fragmentation.
 
 ---
 
@@ -32,39 +32,59 @@ Accepts an image path (string), a PIL Image, or a list of PIL Images.
 }
 ```
 
-The `diagram_type` field is new and critical — it is passed as the first element of the `hints` list to `ar_service.extract_document_features`, allowing the AR service to select the correct detection strategy without re-running any analysis.
+The `diagram_type` field is critical — it is passed as the first element of the `hints` list to `ar_service.extract_document_features`, allowing the AR service to select the correct detection strategy without re-running any analysis.
 
 ### `query_image(image_path: str, question: str) -> str`
 
-Answers a targeted question about an image. Used when the AI chat service needs a specific visual fact (e.g., "What color is the arrow between Service A and the Database?"). Returns a plain string answer, empty on failure.
+Answers a targeted question about an image. Used in two places:
+- By the AI chat service for specific visual facts.
+- By `ar_service._try_vision_label` for component labeling — a crop of each detected component is saved to a temporary file and passed here with `COMPONENT_LABEL_PROMPT`.
+
+Returns a plain string answer, empty on failure.
 
 ---
 
 ## Diagram Type Classification
 
-The vision model is prompted with `AR_EXTRACTION_PROMPT`, which now begins with:
+The vision model is prompted with `AR_EXTRACTION_PROMPT`, which begins with separate example lines showing each possible value:
 
 ```
-Analyse this technical diagram.
-First, on a single line, state the diagram type using EXACTLY one of these labels:
-DIAGRAM_TYPE: sequence | uml | flowchart | architecture | other
+DIAGRAM_TYPE: sequence
+DIAGRAM_TYPE: uml
+DIAGRAM_TYPE: flowchart
+DIAGRAM_TYPE: architecture
+DIAGRAM_TYPE: other
 ```
 
-The `_extract_diagram_type(text)` function parses this line from the model's output using `_DIAGRAM_TYPE_ALIASES`:
+(The previous format used `sequence | uml | flowchart | architecture | other` on one line, which caused some models to copy the format string literally rather than choosing one value.)
 
-```python
-_DIAGRAM_TYPE_ALIASES = {
-    "sequence":     "sequence",
-    "uml":          "uml",
-    "class":        "uml",       # "class diagram" → uml
-    "flowchart":    "flowchart",
-    "flow":         "flowchart",
-    "architecture": "architecture",
-    "other":        "other",
-}
-```
+**`_extract_diagram_type(text)`** parses this line using a two-stage strategy:
 
-If the `DIAGRAM_TYPE:` line is absent or uses an unrecognised label, the function falls back to `"other"`. This is defensive — even if the model produces slightly non-standard output (e.g., `"DIAGRAM_TYPE: class diagram"`), the substring match in `_DIAGRAM_TYPE_ALIASES` still returns the correct canonical type.
+**Stage 1 — Explicit `DIAGRAM_TYPE:` line:**
+- Looks for the first line beginning with `DIAGRAM_TYPE:`.
+- If the value contains `|` (model copied the format line), skips to stage 2.
+- Otherwise, matches value against `_DIAGRAM_TYPE_ALIASES` using word-boundary regex (not substring match) to avoid partial hits like "flow" matching inside "overflow".
+
+**Stage 2 — Keyword fallback scan:**
+
+If stage 1 fails (line absent, unrecognised, or contained `|`), the full model output is keyword-scanned in priority order:
+
+| Keyword              | Canonical type  |
+|----------------------|-----------------|
+| `"sequence diagram"` | `sequence`      |
+| `"lifeline"`         | `sequence`      |
+| `"class diagram"`    | `uml`           |
+| `"uml"`              | `uml`           |
+| `"flowchart"`        | `flowchart`     |
+| `"flow chart"`       | `flowchart`     |
+| `"flow diagram"`     | `flowchart`     |
+| `"architecture"`     | `architecture`  |
+| `"infrastructure"`   | `architecture`  |
+| `"system diagram"`   | `architecture`  |
+
+More specific terms appear first to avoid false matches (e.g., "sequence diagram" before just "sequence").
+
+Defaults to `"other"` if neither stage produces a match.
 
 ---
 
@@ -72,10 +92,10 @@ If the `DIAGRAM_TYPE:` line is absent or uses an unrecognised label, the functio
 
 ### 1. Input Validation
 
-Before any model call, the function validates the input:
+Before any model call:
 - Empty list → returns error without touching the model.
 - String path to non-existent file → returns error.
-- No model loaded + mock mode → returns a fixed mock response so the rest of the pipeline continues.
+- No model loaded + mock mode → returns a fixed mock response.
 - No model loaded, not mock → returns error.
 
 ### 2. Image Loading and Resizing
@@ -84,10 +104,7 @@ Before any model call, the function validates the input:
 - PIL Image → convert to RGB.
 - List → take the first element.
 
-Images are capped at **560 px on the longest side** using Lanczos resampling. This is a deliberate tradeoff:
-- Granite Vision 2B performs optimally with smaller inputs (its vision encoder was trained at lower resolution).
-- Larger inputs increase inference time quadratically without improving output quality for diagram understanding.
-- 560 px preserves enough text detail for label reading while keeping inference fast.
+Images are capped at **560 px on the longest side** using Lanczos resampling. Granite Vision 2B performs optimally with smaller inputs; larger inputs increase inference time quadratically without improving output quality for diagram understanding.
 
 ### 3. Prompt Construction
 
@@ -99,11 +116,11 @@ Images are capped at **560 px on the longest side** using Lanczos resampling. Th
 <|assistant|>
 ```
 
-This format is required by Granite Vision's chat template — the `<image>` token signals the model to integrate the pixel_values tensor at that position.
+The `<image>` token signals the model to integrate the `pixel_values` tensor at that position.
 
 ### 4. Tensor Preparation
 
-The vision processor converts the prompt text and image into input tensors. The function then moves tensors to the model device with careful dtype handling:
+The vision processor converts the prompt text and image into input tensors. Tensors are moved to the model device with dtype handling:
 - `pixel_values` → cast to `vision_compute_dtype` (float16 or bfloat16 on GPU, float32 on CPU).
 - `input_ids` → integer type, no dtype cast.
 - Other float tensors → cast to `vision_compute_dtype`.
@@ -121,13 +138,25 @@ manager.vision_model.generate(
 )
 ```
 
-Greedy decoding (`do_sample=False`) is used because the AR extraction task requires structured, deterministic output (the `DIAGRAM_TYPE:` line must be exact). The repetition penalty prevents the model from looping the component list.
+Greedy decoding (`do_sample=False`) is used because the AR extraction task requires structured, deterministic output.
 
-### 6. Decoding
+### 6. Tensor Cleanup (after generation, before decode)
 
-Only the **new tokens** are decoded — the function slices off the prompt length from `output_ids` and decodes the remaining tokens. This prevents the prompt from appearing in the output.
+Both `analyze_images` and `query_image` free input tensors immediately after the forward pass:
 
-### 7. Text Cleaning — `_clean_generated_text`
+```python
+del processed_inputs, inputs
+gc.collect()
+torch.cuda.empty_cache()
+```
+
+This returns intermediate activation buffers to the allocator **before** the decode step, reducing peak VRAM. Output tokens (`output_ids`) are similarly deleted after decoding.
+
+### 7. Decoding
+
+Only the **new tokens** are decoded — the function slices off the prompt length from `output_ids` and decodes the remaining tokens.
+
+### 8. Text Cleaning — `_clean_generated_text`
 
 Removes:
 - Noise tokens: `<|end_of_text|>`, `<fim_prefix>`, `<|system|>`, `<|user|>`, `<|assistant|>`
@@ -135,43 +164,37 @@ Removes:
 - List prefix characters: `-`, `*`, `•`
 - Lines shorter than 2 characters.
 
-### 8. Component Extraction — `_extract_components_from_text`
+### 9. Component Extraction — `_extract_components_from_text`
 
-Extracts component names from the cleaned model output using three strategies applied in sequence:
+Extracts component names from the cleaned model output using three strategies:
 
-1. **Strategy 1 — Dash-structured lines**: Matches the `NAME — ROLE` format from `AR_EXTRACTION_PROMPT`. Extracts the `NAME` part (before the em-dash, en-dash, or hyphen). Accepts names 2–50 characters with at least one alphanumeric character.
+1. **Dash-structured lines**: Matches `NAME — ROLE` format from `AR_EXTRACTION_PROMPT`. Extracts the `NAME` part (before em-dash, en-dash, or hyphen). Accepts names 2–50 characters.
 
-2. **Strategy 2 — Plain lines**: If a line doesn't match the structured format but is 2–50 characters with alphanumeric content, it's included as-is.
+2. **Plain lines**: If a line doesn't match the structured format but is 2–50 characters with alphanumeric content, it's included as-is.
 
-3. **Strategy 3 — Quoted terms**: Extracts any `"quoted"` or `'quoted'` strings, useful for model outputs that wrap names in quotes instead of using the dash format.
+3. **Quoted terms**: Extracts any `"quoted"` or `'quoted'` strings.
 
 Results are deduplicated (case-insensitive) and capped at 20 components.
-
----
-
-## Summary Truncation — `_truncate_summary`
-
-Used elsewhere to safely shorten a summary to a character limit while ending at a sentence boundary (`.`, `!`, or `?`). Falls back to hard truncation with `...` if no sentence boundary is found within the limit.
 
 ---
 
 ## Why the Vision Service Is Called Before AR
 
 The preprocessing pipeline calls the vision service first because:
-1. The vision model classifies the diagram type as a side effect of its analysis — there is no additional cost.
-2. The AR service needs the diagram type to select the right detection strategy (e.g., the dedicated sequence pipeline).
-3. The vision model's component name list provides useful hints for AR label assignment in some diagram types.
+1. The vision model classifies the diagram type as a side effect — no additional cost.
+2. The AR service needs the diagram type to select the right detection strategy.
+3. The vision model's component name list provides hints for AR label assignment.
 
-This means the vision model runs exactly once per image, and its outputs feed forward into both the AI service (for summarization) and the AR service (for type-aware detection).
+The vision model runs exactly once per image, and its outputs feed forward into both the AI service (summarization) and the AR service (type-aware detection).
 
 ---
 
 ## Risks and Notes
 
-- **Quantization is disabled** for the vision model. Both 4-bit and 8-bit quantization cause type errors or NaN propagation when applied to multimodal image tensors (`pixel_values`). The model runs in native fp16/bf16 on GPU.
-- **Diagram type classification accuracy** depends on the model correctly following the `DIAGRAM_TYPE:` instruction. For ambiguous diagrams (e.g., a sequence diagram with UML-style actor boxes), the model may choose `"other"`. The AR service handles this gracefully by falling back to the general pipeline.
+- **Quantization is disabled** for the vision model. Both 4-bit and 8-bit quantization cause type errors or NaN propagation when applied to multimodal image tensors.
+- **Diagram type classification accuracy**: the keyword fallback scan in `_extract_diagram_type` handles cases where the model doesn't produce the explicit `DIAGRAM_TYPE:` line, improving coverage for verbose model outputs.
 - **Component list quality** is heuristic — the text parsing may include role descriptions as component names if the model doesn't follow the `NAME — ROLE` format exactly.
-- **560 px cap** may cause loss of fine text detail in very dense diagrams. Increasing the cap improves label reading but increases inference time significantly.
+- **560 px cap** may cause loss of fine text detail in very dense diagrams.
 
 ---
 
