@@ -35,6 +35,16 @@ from app.services.prompt_builder import DIAGRAM_CLASSIFICATION_PROMPT
 logger = logging.getLogger(__name__)
 
 
+class ProcessingCancelled(Exception):
+    """Raised when a cancellation_event is set mid-pipeline."""
+
+
+def _check_cancel(event):
+    """Raise ProcessingCancelled if the event has been set."""
+    if event is not None and event.is_set():
+        raise ProcessingCancelled("Processing cancelled by client")
+
+
 class PreprocessService:
     """
     Central preprocessing orchestrator for all document types.
@@ -64,7 +74,8 @@ class PreprocessService:
         file_path: str,
         mock: bool = False,
         extract_ar: bool = True,
-        generate_ai_summary: bool = True
+        generate_ai_summary: bool = True,
+        cancellation_event=None,
     ) -> Dict[str, Any]:
         """
         Main preprocessing pipeline.
@@ -101,15 +112,17 @@ class PreprocessService:
                     file_path,
                     mock=mock,
                     extract_ar=extract_ar,
-                    generate_ai_summary=generate_ai_summary
+                    generate_ai_summary=generate_ai_summary,
+                    cancellation_event=cancellation_event,
                 )
-            
+
             elif file_ext in self.supported_image_formats:
                 return self._process_image(
                     file_path,
                     mock=mock,
                     extract_ar=extract_ar,
-                    generate_ai_summary=generate_ai_summary
+                    generate_ai_summary=generate_ai_summary,
+                    cancellation_event=cancellation_event,
                 )
             
             else:
@@ -314,7 +327,8 @@ class PreprocessService:
         file_path: str,
         mock: bool = False,
         extract_ar: bool = True,
-        generate_ai_summary: bool = True
+        generate_ai_summary: bool = True,
+        cancellation_event=None,
     ) -> Dict[str, Any]:
         """
         Process PDF document through full pipeline:
@@ -332,7 +346,9 @@ class PreprocessService:
             Comprehensive analysis dictionary
         """
         logger.info("📄 Processing PDF document...")
-        
+
+        _check_cancel(cancellation_event)
+
         # Step 1: Extract images from PDF
         extracted_images = []
         try:
@@ -341,9 +357,13 @@ class PreprocessService:
             logger.error(f"Image extraction failed: {e}")
             # Continue with text processing even if image extraction fails
 
+        _check_cancel(cancellation_event)
+
         # Step 1b: Filter out non-diagram images (photos, screenshots, etc.)
         if extracted_images:
             extracted_images = self._filter_extracted_images(extracted_images)
+
+        _check_cancel(cancellation_event)
 
         # Step 2: Extract text from PDF
         full_text = ""
@@ -364,9 +384,11 @@ class PreprocessService:
         all_connections = []
         
         for img_info in extracted_images:
+            _check_cancel(cancellation_event)
+
             img_path = img_info['path']
             page_num = img_info['page']
-            
+
             logger.info(f"🔍 Analyzing image from page {page_num}...")
             
             try:
@@ -421,10 +443,12 @@ class PreprocessService:
                 logger.error(f"Failed to analyze image from page {page_num}: {e}")
                 continue
         
+        _check_cancel(cancellation_event)
+
         # Step 4: Generate comprehensive AI summary
         ai_summary = ""
         ai_result = {}
-        
+
         if generate_ai_summary:
             logger.info("🤖 Generating comprehensive AI summary...")
             
@@ -502,7 +526,8 @@ class PreprocessService:
         file_path: str,
         mock: bool = False,
         extract_ar: bool = True,
-        generate_ai_summary: bool = True
+        generate_ai_summary: bool = True,
+        cancellation_event=None,
     ) -> Dict[str, Any]:
         """
         Process single image document through pipeline:
@@ -520,8 +545,10 @@ class PreprocessService:
             Analysis dictionary
         """
         logger.info("🖼️ Processing image...")
-        
+
         try:
+            _check_cancel(cancellation_event)
+
             # Validate image
             try:
                 with Image.open(file_path) as img:
@@ -552,6 +579,8 @@ class PreprocessService:
             vision_summary = vision_result.get('analysis', {}).get('summary', '')
             vision_components = vision_result.get('components', [])
             diagram_type = vision_result.get('diagram_type', 'other')
+
+            _check_cancel(cancellation_event)
 
             # Step 2: AR Extraction
             ar_result = {}
@@ -587,10 +616,12 @@ class PreprocessService:
                         'componentCount': 0
                     }
             
+            _check_cancel(cancellation_event)
+
             # Step 3: AI Summary
             ai_summary = ""
             ai_result = {}
-            
+
             if generate_ai_summary:
                 logger.info("🤖 Generating AI summary...")
                 try:

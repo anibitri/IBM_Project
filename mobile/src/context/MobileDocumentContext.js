@@ -43,6 +43,25 @@ export const MobileDocumentProvider = ({ children }) => {
   const currentImageIndexRef = useRef(-1);
   useEffect(() => { currentImageIndexRef.current = currentImageIndex; }, [currentImageIndex]);
 
+  // Track the AbortController and job_id for the currently in-progress analysis
+  // so we can cancel both the HTTP request and the server-side processing.
+  const processingAbortRef = useRef(null);
+  const activeJobIdRef     = useRef(null);
+
+  const cancelAnalysis = useCallback(() => {
+    if (processingAbortRef.current) {
+      processingAbortRef.current.abort();
+      processingAbortRef.current = null;
+    }
+    if (activeJobIdRef.current) {
+      backend.cancelProcessing(activeJobIdRef.current);
+      activeJobIdRef.current = null;
+    }
+  }, []);
+
+  // Cancel any running analysis when the provider unmounts
+  useEffect(() => () => cancelAnalysis(), []);
+
   const getNextNewChatName = useCallback((extraNames = []) => {
     const usedNumbers = new Set();
     [...recentSessions.map((s) => s?.fileName), ...extraNames].forEach((rawName) => {
@@ -128,6 +147,14 @@ export const MobileDocumentProvider = ({ children }) => {
 
   // ── Upload & Process ────────────────────────────────────
   const uploadAndProcess = useCallback(async (file) => {
+    // Cancel any previous in-progress analysis before starting a new one
+    cancelAnalysis();
+
+    const jobId      = makeSessionId();
+    const controller = new AbortController();
+    processingAbortRef.current = controller;
+    activeJobIdRef.current     = jobId;
+
     setLoading(true);
     setError(null);
     setChatHistory([]);
@@ -136,9 +163,12 @@ export const MobileDocumentProvider = ({ children }) => {
     setCurrentImageIndex(0);
 
     try {
-      const uploadResult = await backend.uploadFile(file);
+      const uploadResult = await backend.uploadFile(file, { signal: controller.signal });
       const storedName = uploadResult.file.stored_name;
-      const processResult = await backend.processDocument(storedName, true, true);
+      const processResult = await backend.processDocument(storedName, true, true, {
+        signal: controller.signal,
+        jobId,
+      });
 
       const imagesWithUrls = buildImagesWithUrls(processResult, uploadResult, file);
 
@@ -163,26 +193,46 @@ export const MobileDocumentProvider = ({ children }) => {
       upsertSession(nextDocument, []);
       return true;
     } catch (err) {
+      // If the request was aborted (user cancelled), stop server processing and bail silently
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') {
+        backend.cancelProcessing(jobId);
+        return false;
+      }
+      // For other errors the server may still be running — ask it to stop too
+      backend.cancelProcessing(jobId);
       setError(err.message || 'Failed to process document');
       return false;
     } finally {
+      processingAbortRef.current = null;
+      activeJobIdRef.current     = null;
       setLoading(false);
     }
-  }, []);
+  }, [cancelAnalysis]);
 
   // ── Attach document to existing session (keeps session ID / name / history) ──
   const attachDocumentToSession = useCallback(async (file) => {
+    // Cancel any previous in-progress analysis before starting a new one
+    cancelAnalysis();
+
+    const jobId      = makeSessionId();
+    const controller = new AbortController();
+    processingAbortRef.current = controller;
+    activeJobIdRef.current     = jobId;
+
     setLoading(true);
     setError(null);
 
-    const savedSessionId = document?.sessionId || makeSessionId();
+    const savedSessionId   = document?.sessionId || makeSessionId();
     const savedSessionName = document?.sessionName || 'New Chat';
     const savedChatHistory = [...(chatHistoryRef.current || [])];
 
     try {
-      const uploadResult = await backend.uploadFile(file);
+      const uploadResult = await backend.uploadFile(file, { signal: controller.signal });
       const storedName = uploadResult.file.stored_name;
-      const processResult = await backend.processDocument(storedName, true, true);
+      const processResult = await backend.processDocument(storedName, true, true, {
+        signal: controller.signal,
+        jobId,
+      });
 
       const imagesWithUrls = buildImagesWithUrls(processResult, uploadResult, file);
 
@@ -209,12 +259,19 @@ export const MobileDocumentProvider = ({ children }) => {
       upsertSession(updatedDocument, savedChatHistory);
       return true;
     } catch (err) {
+      if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') {
+        backend.cancelProcessing(jobId);
+        return false;
+      }
+      backend.cancelProcessing(jobId);
       setError(err.message || 'Failed to attach document');
       return false;
     } finally {
+      processingAbortRef.current = null;
+      activeJobIdRef.current     = null;
       setLoading(false);
     }
-  }, [document, upsertSession]);
+  }, [document, upsertSession, cancelAnalysis]);
 
   // ── Load demo data instantly (no file needed) ───────────
   const loadDemo = useCallback(async () => {
@@ -494,6 +551,7 @@ export const MobileDocumentProvider = ({ children }) => {
     recentSessions,
     uploadAndProcess,
     attachDocumentToSession,
+    cancelAnalysis,
     loadDemo,
     askQuestion,
     askAboutComponent,

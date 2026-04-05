@@ -5,6 +5,7 @@ const API_ACCESS_TOKEN = 'ibm-project-dev-token';
 
 const api = axios.create({
   baseURL: resolveBaseURL(),
+  timeout: 14400000, // 4 hours — allow slow GPU-based document analysis to complete
   headers: {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${API_ACCESS_TOKEN}`,
@@ -29,7 +30,7 @@ api.interceptors.response.use(
 );
 
 export const backend = {
-  uploadFile: async (file) => {
+  uploadFile: async (file, { signal } = {}) => {
     const formData = new FormData();
     if (file.uri) {
       // React Native file object
@@ -47,6 +48,8 @@ export const backend = {
         'Content-Type': 'multipart/form-data',
         Authorization: `Bearer ${API_ACCESS_TOKEN}`,
       },
+      timeout: 14400000, // 4 hours
+      signal,
     });
     return response.data;
   },
@@ -75,13 +78,23 @@ export const backend = {
     return response.data;
   },
 
-  processDocument: async (storedName, extractAR = true, generateAISummary = true) => {
+  processDocument: async (storedName, extractAR = true, generateAISummary = true, { signal, jobId } = {}) => {
     const response = await api.post('/process/document', {
       stored_name: storedName,
       extract_ar: extractAR,
       generate_ai_summary: generateAISummary,
-    });
+      ...(jobId ? { job_id: jobId } : {}),
+    }, { signal });
     return response.data;
+  },
+
+  cancelProcessing: async (jobId) => {
+    if (!jobId) return;
+    try {
+      await api.post('/process/cancel', { job_id: jobId });
+    } catch {
+      // Best-effort — ignore errors on cancel
+    }
   },
 
   health: async () => {

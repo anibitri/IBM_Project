@@ -17,7 +17,7 @@ import { useMobileDocumentContext as useDocumentContext } from '../context/Mobil
 import { spacing, getPalette } from '../styles/theme';
 
 export default function UploadScreen({ navigation, route }) {
-  const { uploadAndProcess, attachDocumentToSession, loading, error, clearError, clearDocument, accessibilitySettings } = useDocumentContext();
+  const { uploadAndProcess, attachDocumentToSession, loading, error, clearError, clearDocument, cancelAnalysis, accessibilitySettings } = useDocumentContext();
   const showAnalysisError = (msg) => {
     clearError();
     setPreview(null);
@@ -118,7 +118,7 @@ export default function UploadScreen({ navigation, route }) {
             </View>
             <TouchableOpacity
               style={[styles.cancelBtn, { borderColor: p.border }]}
-              onPress={() => { clearDocument(); setPreview(null); }}
+              onPress={() => { cancelAnalysis(); clearDocument(); setPreview(null); }}
             >
               <Text style={[styles.cancelBtnText, { color: p.subtext }]}>Cancel</Text>
             </TouchableOpacity>
