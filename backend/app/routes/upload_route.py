@@ -3,6 +3,7 @@ import os
 import hashlib
 import mimetypes
 import traceback
+from pathlib import Path
 from PIL import Image
 from werkzeug.exceptions import RequestEntityTooLarge
 
@@ -126,7 +127,7 @@ def upload_file():
             'file': {
                 'original_name': file.filename,
                 'stored_name': stored_name,
-                'path': file_path,
+                'path': Path(file_path).as_posix(),
                 'url': f"/static/uploads/{stored_name}",
                 'size': file_size,
                 'type': file_type,

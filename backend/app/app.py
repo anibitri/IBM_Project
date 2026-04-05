@@ -382,8 +382,10 @@ def _register_blueprints(app: Flask):
     POST /api/ai/compare-documents    → Compare two documents
     GET  /api/ai/health         → AI model health check
     
-    POST /api/process/document  → Full pipeline (Vision → AR → AI)
-    GET  /api/process/health    → Pipeline health check
+    POST /api/process/start          → Submit document for processing (returns job_id immediately)
+    GET  /api/process/status/<id>   → Poll job status / result
+    POST /api/process/cancel         → Cancel an in-progress job
+    GET  /api/process/health         → Pipeline health check
     """
     
     app.register_blueprint(upload_bp,  url_prefix='/api/upload')

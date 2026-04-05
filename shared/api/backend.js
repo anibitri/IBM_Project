@@ -5,7 +5,7 @@ const API_ACCESS_TOKEN = 'ibm-project-dev-token';
 
 const api = axios.create({
   baseURL: resolveBaseURL(),
-  timeout: 14400000, // 4 hours — allow slow GPU-based document analysis to complete
+  timeout: 30000, // 30 s for normal requests — analysis uses polling so no long timeout needed
   headers: {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${API_ACCESS_TOKEN}`,
@@ -78,14 +78,36 @@ export const backend = {
     return response.data;
   },
 
-  processDocument: async (storedName, extractAR = true, generateAISummary = true, { signal, jobId } = {}) => {
-    const response = await api.post('/process/document', {
+  processDocument: async (storedName, extractAR = true, generateAISummary = true, { signal, onJobId } = {}) => {
+    // Submit the job — server returns immediately with a job_id (HTTP 202)
+    const startRes = await api.post('/process/start', {
       stored_name: storedName,
       extract_ar: extractAR,
       generate_ai_summary: generateAISummary,
-      ...(jobId ? { job_id: jobId } : {}),
     }, { signal });
-    return response.data;
+
+    const jobId = startRes.data.job_id;
+    onJobId?.(jobId); // let the caller track the job_id for cancellation
+
+    // Poll every 5 s until the job finishes, errors, or is cancelled
+    while (true) {
+      // Interruptible sleep — resolves after 5 s or rejects immediately on abort
+      await new Promise((resolve, reject) => {
+        const t = setTimeout(resolve, 5000);
+        signal?.addEventListener('abort', () => {
+          clearTimeout(t);
+          reject(Object.assign(new Error('canceled'), { code: 'ERR_CANCELED' }));
+        }, { once: true });
+      });
+
+      const statusRes = await api.get(`/process/status/${jobId}`, { signal });
+      const { status, result } = statusRes.data;
+
+      if (status === 'success') return result;
+      if (status === 'error')   throw new Error(result?.error || 'Processing failed');
+      if (status === 'cancelled') throw Object.assign(new Error('canceled'), { code: 'ERR_CANCELED' });
+      // 'queued' or 'processing' → keep polling
+    }
   },
 
   cancelProcessing: async (jobId) => {

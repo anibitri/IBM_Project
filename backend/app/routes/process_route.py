@@ -1,6 +1,7 @@
 from flask import Blueprint, request, jsonify
 import logging
 import threading
+import time
 import uuid
 
 from app.services.preprocess_service import preprocess_service, ProcessingCancelled
@@ -13,147 +14,193 @@ process_bp = Blueprint('process', __name__)
 logger = logging.getLogger(__name__)
 
 # ── Inference queue ────────────────────────────────────────────────────────
-# Only one inference runs at a time (GPU serialisation).  Rather than
-# returning 503 immediately when busy, incoming requests join a queue and
-# wait their turn.  If the queue is already full, *then* we 503.
-#
-#   _inference_semaphore  — binary semaphore; controls who is running
-#   _pending_count        — how many requests are currently waiting
-#   _pending_lock         — protects _pending_count
-#   _MAX_PENDING          — queue depth limit (requests waiting, not counting
-#                           the one actively running)
-#   _QUEUE_TIMEOUT        — max seconds a request will wait before giving up
+# Only one inference runs at a time (GPU serialisation).
+# Background threads queue themselves; the HTTP handlers return immediately.
 # ──────────────────────────────────────────────────────────────────────────
 _inference_semaphore = threading.Semaphore(1)
 _pending_lock        = threading.Lock()
 _pending_count       = 0
-_MAX_PENDING         = 4    # 1 running + up to 4 waiting = 5 in flight
-_QUEUE_TIMEOUT       = 300  # 5 minutes — covers large PDFs with many pages
+_MAX_PENDING         = 4      # max jobs waiting (not counting the one running)
+_QUEUE_TIMEOUT       = 14400  # 4 hours — allow slow GPU jobs to wait their turn
+
+# ── Job store ─────────────────────────────────────────────────────────────
+# Tracks every submitted job:  job_id → {status, result, cancel_event, ts}
+# Jobs expire after _JOB_TTL seconds and are pruned lazily.
+# ─────────────────────────────────────────────────────────────────────────
+_job_store      = {}
+_job_store_lock = threading.Lock()
+_JOB_TTL        = 7200  # 2 hours
 
 # ── Cancellation registry ─────────────────────────────────────────────────
-# Maps job_id → threading.Event.  The frontend supplies a job_id with each
-# /process/document request.  Calling POST /process/cancel with that job_id
-# sets the event, which the preprocessing pipeline checks between steps.
+# Maps job_id → threading.Event so the pipeline can be stopped mid-run.
 # ─────────────────────────────────────────────────────────────────────────
 _cancellation_registry = {}
 _registry_lock         = threading.Lock()
 
 
-@process_bp.route('/document', methods=['POST'])
-def process_document():
-    """
-    Full document processing pipeline: Vision → AR → AI
-    Accepts JSON: { "stored_name": "uuid.pdf" }
+# ── Helpers ───────────────────────────────────────────────────────────────
 
-    Concurrent requests are queued rather than rejected.  A 503 is only
-    returned when the queue is full or a queued request times out.
-    """
+def _cleanup_old_jobs():
+    cutoff = time.time() - _JOB_TTL
+    with _job_store_lock:
+        stale = [jid for jid, j in _job_store.items() if j['created_at'] < cutoff]
+        for jid in stale:
+            del _job_store[jid]
+    if stale:
+        logger.debug(f"🧹 Pruned {len(stale)} stale job(s)")
+
+
+def _run_processing_job(job_id, resolved_path, mock, extract_ar, generate_ai, cancel_event):
+    """Background worker: waits for the GPU slot then runs the pipeline."""
     global _pending_count
 
-    job_id      = None
-    cancel_event = None
+    def _set_status(status, result=None):
+        with _job_store_lock:
+            if job_id in _job_store:
+                _job_store[job_id]['status'] = status
+                _job_store[job_id]['result'] = result
+
+    with _pending_lock:
+        _pending_count += 1
 
     try:
-        data = request.get_json(silent=True) or {}
-        ok, message = ensure_json_object(data)
-        if not ok:
-            body, status = error_response(message, status=400)
-            return jsonify(body), status
+        acquired = _inference_semaphore.acquire(blocking=True, timeout=_QUEUE_TIMEOUT)
+        if not acquired:
+            logger.warning(f"⏳ Job {job_id} timed out waiting in inference queue")
+            _set_status('error', {'status': 'error', 'error': 'Timed out waiting for GPU slot'})
+            return
 
-        stored_name = data.get('stored_name')
-        file_path   = data.get('file_path')
-        mock        = data.get('mock', False)
-        extract_ar  = data.get('extract_ar', True)
-        generate_ai = data.get('generate_ai_summary', True)
-
-        # Accept a client-supplied job_id for cancellation; generate one if absent
-        job_id       = data.get('job_id') or str(uuid.uuid4())
-        cancel_event = threading.Event()
-        with _registry_lock:
-            _cancellation_registry[job_id] = cancel_event
-        logger.info(f"📌 Registered job {job_id}")
-
-        # Resolve file path before entering the queue so we fail fast on bad input
-        resolved_path, path_error = resolve_file_path(stored_name, file_path)
-        if path_error:
-            return jsonify(path_error[0]), path_error[1]
-
-        # ── Queue admission ────────────────────────────────────────────────
-        with _pending_lock:
-            if _pending_count >= _MAX_PENDING:
-                logger.warning(
-                    f"⏳ Inference queue full ({_pending_count} waiting) — returning 503"
-                )
-                body, status = error_response(
-                    f'Server is busy — {_pending_count} requests already queued. '
-                    'Please retry in a moment.',
-                    status=503
-                )
-                return jsonify(body), status
-            _pending_count += 1
-
-        logger.info(
-            f"📋 Request queued (position ~{_pending_count}): {resolved_path}"
-        )
+        _set_status('processing')
+        manager.between_requests_cleanup()
 
         try:
-            # Wait for the inference slot (blocking, with timeout)
-            acquired = _inference_semaphore.acquire(
-                blocking=True, timeout=_QUEUE_TIMEOUT
+            logger.info(f"🚀 Starting inference: {resolved_path} (job {job_id})")
+            result = preprocess_service.preprocess_document(
+                resolved_path,
+                mock=mock,
+                extract_ar=extract_ar,
+                generate_ai_summary=generate_ai,
+                cancellation_event=cancel_event,
             )
-            if not acquired:
-                logger.warning("⏳ Request timed out waiting in inference queue")
-                body, status = error_response(
-                    'Request timed out waiting for the server to become free. '
-                    'Please retry.',
-                    status=503
-                )
-                return jsonify(body), status
+            final_status = 'success' if result.get('status') in ('success', 'ok') else 'error'
+            _set_status(final_status, result)
+            logger.info(f"✅ Job {job_id} finished with status: {final_status}")
 
-            # ── GPU housekeeping before inference ──────────────────────────
-            manager.between_requests_cleanup()
+        except ProcessingCancelled:
+            logger.info(f"🛑 Job {job_id} was cancelled")
+            _set_status('cancelled')
 
-            try:
-                logger.info(f"🚀 Starting inference: {resolved_path} (job {job_id})")
-                result = preprocess_service.preprocess_document(
-                    resolved_path,
-                    mock=mock,
-                    extract_ar=extract_ar,
-                    generate_ai_summary=generate_ai,
-                    cancellation_event=cancel_event,
-                )
-            finally:
-                manager.between_requests_cleanup()
-                _inference_semaphore.release()
+        except Exception:
+            logger.exception(f"Job {job_id} failed during inference")
+            _set_status('error', {'status': 'error', 'error': 'Processing failed'})
 
         finally:
-            with _pending_lock:
-                _pending_count -= 1
-
-        ok_status = result.get('status') in ['success', 'ok']
-        return jsonify(result), (200 if ok_status else 500)
-
-    except ProcessingCancelled:
-        logger.info(f"🛑 Job {job_id} was cancelled — stopping inference cleanly")
-        body, status = error_response('Processing was cancelled', status=499)
-        return jsonify(body), status
+            manager.between_requests_cleanup()
+            _inference_semaphore.release()
 
     except Exception:
-        logger.exception("Document processing failed")
-        body, status = error_response('Document processing failed', status=500)
-        return jsonify(body), status
+        logger.exception(f"Job {job_id} failed before acquiring GPU slot")
+        _set_status('error', {'status': 'error', 'error': 'Unexpected error'})
 
     finally:
-        # Always remove the job from the registry when the request ends
-        if job_id is not None:
-            with _registry_lock:
-                _cancellation_registry.pop(job_id, None)
+        with _pending_lock:
+            _pending_count -= 1
+        with _registry_lock:
+            _cancellation_registry.pop(job_id, None)
+
+
+# ── Routes ────────────────────────────────────────────────────────────────
+
+@process_bp.route('/start', methods=['POST'])
+def start_processing():
+    """
+    Submit a document for processing.  Returns immediately with a job_id.
+    The client should poll GET /process/status/<job_id> for the result.
+
+    Accepts JSON: { "stored_name": "uuid.pdf", "extract_ar": true, "generate_ai_summary": true }
+    Returns: { "job_id": "<uuid>", "status": "queued" }
+    """
+    _cleanup_old_jobs()
+
+    data = request.get_json(silent=True) or {}
+    ok, message = ensure_json_object(data)
+    if not ok:
+        body, status = error_response(message, status=400)
+        return jsonify(body), status
+
+    stored_name = data.get('stored_name')
+    file_path   = data.get('file_path')
+    mock        = data.get('mock', False)
+    extract_ar  = data.get('extract_ar', True)
+    generate_ai = data.get('generate_ai_summary', True)
+
+    # Accept a client-supplied job_id (for idempotency) or generate one
+    job_id = data.get('job_id') or str(uuid.uuid4())
+
+    resolved_path, path_error = resolve_file_path(stored_name, file_path)
+    if path_error:
+        return jsonify(path_error[0]), path_error[1]
+
+    # Reject immediately if the queue is already full
+    with _pending_lock:
+        if _pending_count >= _MAX_PENDING:
+            logger.warning(f"⏳ Queue full ({_pending_count} waiting) — rejecting job {job_id}")
+            body, status = error_response(
+                f'Server is busy — {_pending_count} jobs already queued. Please retry.',
+                status=503
+            )
+            return jsonify(body), status
+
+    # Register the cancellation event
+    cancel_event = threading.Event()
+    with _registry_lock:
+        _cancellation_registry[job_id] = cancel_event
+
+    # Create the job record
+    with _job_store_lock:
+        _job_store[job_id] = {
+            'status':     'queued',
+            'result':     None,
+            'created_at': time.time(),
+        }
+
+    # Launch background thread — HTTP handler returns immediately
+    thread = threading.Thread(
+        target=_run_processing_job,
+        args=(job_id, resolved_path, mock, extract_ar, generate_ai, cancel_event),
+        daemon=True,
+        name=f'job-{job_id[:8]}',
+    )
+    thread.start()
+    logger.info(f"📋 Job {job_id} queued for {resolved_path}")
+
+    return jsonify({'status': 'queued', 'job_id': job_id}), 202
+
+
+@process_bp.route('/status/<job_id>', methods=['GET'])
+def get_processing_status(job_id):
+    """
+    Poll the status of a processing job.
+
+    Returns: { "status": "queued|processing|success|error|cancelled", "result": {...} }
+    """
+    with _job_store_lock:
+        job = _job_store.get(job_id)
+
+    if not job:
+        body, status = error_response('Job not found or expired', status=404)
+        return jsonify(body), status
+
+    return jsonify({
+        'status': job['status'],
+        'result': job['result'],
+    }), 200
 
 
 @process_bp.route('/cancel', methods=['POST'])
 def cancel_processing():
     """
-    Cancel an in-progress document analysis.
+    Cancel an in-progress or queued job.
     Accepts JSON: { "job_id": "<uuid>" }
     """
     data   = request.get_json(silent=True) or {}
@@ -170,11 +217,9 @@ def cancel_processing():
         logger.info(f"🛑 Cancellation requested for job {job_id}")
         return jsonify({'status': 'ok', 'message': 'Cancellation requested'}), 200
 
-    # Job already finished or never existed — not an error
     return jsonify({'status': 'not_found', 'message': 'Job not found or already completed'}), 404
 
 
 @process_bp.route('/health', methods=['GET'])
 def health_check():
-    """Health check"""
     return jsonify({'status': 'healthy'}), 200

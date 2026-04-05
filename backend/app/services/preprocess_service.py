@@ -35,6 +35,16 @@ from app.services.prompt_builder import DIAGRAM_CLASSIFICATION_PROMPT
 logger = logging.getLogger(__name__)
 
 
+def _posix(path: str) -> str:
+    """Convert an OS-native path to forward-slash form for JSON / URL use.
+
+    On Windows, os.path.join produces backslashes.  The mobile frontend
+    parses image_path strings with split('uploads/'), so all paths that
+    leave the server must use forward slashes regardless of the host OS.
+    """
+    return Path(path).as_posix() if path else path
+
+
 class ProcessingCancelled(Exception):
     """Raised when a cancellation_event is set mid-pipeline."""
 
@@ -427,7 +437,7 @@ class PreprocessService:
                 # Store analysis for this image
                 image_analyses.append({
                     'page': page_num,
-                    'image_path': img_path,
+                    'image_path': _posix(img_path),
                     'image_filename': img_info['filename'],
                     'image_size': img_info['size'],
                     'vision': vision_result,
@@ -485,8 +495,8 @@ class PreprocessService:
         return {
             'status': 'success',
             'type': 'pdf',
-            'file_path': file_path,
-            
+            'file_path': _posix(file_path),
+
             # Text data
             'text_excerpt': text_excerpt,
             'full_text': full_text,
@@ -495,7 +505,7 @@ class PreprocessService:
             # Image data (per-page analysis)
             'images': image_analyses,
             'image_count': len(extracted_images),
-            'extracted_image_paths': [img['path'] for img in extracted_images],
+            'extracted_image_paths': [_posix(img['path']) for img in extracted_images],
             
             # AR data (combined from all images)
             'ar': {
@@ -649,7 +659,7 @@ class PreprocessService:
             return {
                 'status': 'success',
                 'type': 'image',
-                'file_path': file_path,
+                'file_path': _posix(file_path),
                 
                 # Vision data
                 'vision': vision_result,
@@ -665,7 +675,7 @@ class PreprocessService:
                 # Image list (single image, formatted like PDF)
                 'images': [{
                     'page': 1,
-                    'image_path': file_path,
+                    'image_path': _posix(file_path),
                     'image_filename': os.path.basename(file_path),
                     'image_size': image_size,
                     'vision': vision_result,

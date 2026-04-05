@@ -137,7 +137,7 @@ export const MobileDocumentProvider = ({ children }) => {
       // may be behind ngrok/auth headers that the native Image component can't send.
       // For PDFs: page images come from the server (no local per-page URIs exist).
       const relPath = img.image_path
-        ? img.image_path.split('uploads/').pop()
+        ? img.image_path.replace(/\\/g, '/').split('uploads/').pop()
         : img.image_filename;
       const serverUrl = relPath ? `${staticBase}${relPath}` : null;
       const url = (!isPDF && idx === 0 && originalUri) ? originalUri : serverUrl;
@@ -150,10 +150,9 @@ export const MobileDocumentProvider = ({ children }) => {
     // Cancel any previous in-progress analysis before starting a new one
     cancelAnalysis();
 
-    const jobId      = makeSessionId();
     const controller = new AbortController();
     processingAbortRef.current = controller;
-    activeJobIdRef.current     = jobId;
+    activeJobIdRef.current     = null; // will be set via onJobId once the server assigns one
 
     setLoading(true);
     setError(null);
@@ -167,7 +166,7 @@ export const MobileDocumentProvider = ({ children }) => {
       const storedName = uploadResult.file.stored_name;
       const processResult = await backend.processDocument(storedName, true, true, {
         signal: controller.signal,
-        jobId,
+        onJobId: (id) => { activeJobIdRef.current = id; },
       });
 
       const imagesWithUrls = buildImagesWithUrls(processResult, uploadResult, file);
@@ -193,12 +192,11 @@ export const MobileDocumentProvider = ({ children }) => {
       upsertSession(nextDocument, []);
       return true;
     } catch (err) {
-      // If the request was aborted (user cancelled), stop server processing and bail silently
+      const jobId = activeJobIdRef.current;
       if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') {
         backend.cancelProcessing(jobId);
         return false;
       }
-      // For other errors the server may still be running — ask it to stop too
       backend.cancelProcessing(jobId);
       setError(err.message || 'Failed to process document');
       return false;
@@ -214,10 +212,9 @@ export const MobileDocumentProvider = ({ children }) => {
     // Cancel any previous in-progress analysis before starting a new one
     cancelAnalysis();
 
-    const jobId      = makeSessionId();
     const controller = new AbortController();
     processingAbortRef.current = controller;
-    activeJobIdRef.current     = jobId;
+    activeJobIdRef.current     = null; // will be set via onJobId once the server assigns one
 
     setLoading(true);
     setError(null);
@@ -231,7 +228,7 @@ export const MobileDocumentProvider = ({ children }) => {
       const storedName = uploadResult.file.stored_name;
       const processResult = await backend.processDocument(storedName, true, true, {
         signal: controller.signal,
-        jobId,
+        onJobId: (id) => { activeJobIdRef.current = id; },
       });
 
       const imagesWithUrls = buildImagesWithUrls(processResult, uploadResult, file);
@@ -259,6 +256,7 @@ export const MobileDocumentProvider = ({ children }) => {
       upsertSession(updatedDocument, savedChatHistory);
       return true;
     } catch (err) {
+      const jobId = activeJobIdRef.current;
       if (err?.code === 'ERR_CANCELED' || err?.name === 'CanceledError' || err?.name === 'AbortError') {
         backend.cancelProcessing(jobId);
         return false;
@@ -360,7 +358,7 @@ export const MobileDocumentProvider = ({ children }) => {
       // file (which may be a PDF and cannot be opened by the vision model).
       if (selectedPage) {
         const pageRelPath = selectedPage.image_path
-          ? selectedPage.image_path.split('uploads/').pop()
+          ? selectedPage.image_path.replace(/\\/g, '/').split('uploads/').pop()
           : selectedPage.image_filename;
         if (pageRelPath) {
           context.stored_name = pageRelPath;
