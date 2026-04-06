@@ -5,7 +5,7 @@ const API_ACCESS_TOKEN = 'ibm-project-dev-token';
 
 const api = axios.create({
   baseURL: resolveBaseURL(),
-  timeout: 30000, // 30 s for normal requests — analysis uses polling so no long timeout needed
+  timeout: 30000000, // 30 s for normal requests — analysis uses polling so no long timeout needed
   headers: {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${API_ACCESS_TOKEN}`,
@@ -69,12 +69,13 @@ export const backend = {
   },
 
   askQuestion: async (query, context, history = []) => {
-    const response = await api.post('/ai/ask', { query, context, history });
+    // Chat inference runs two GPU passes (vision + text) — can take 60–120 s on slow GPUs.
+    const response = await api.post('/ai/ask', { query, context, history }, { timeout: 300000 });
     return response.data;
   },
 
   chat: async (query, context, history = []) => {
-    const response = await api.post('/ai/chat', { query, context, history });
+    const response = await api.post('/ai/chat', { query, context, history }, { timeout: 300000 });
     return response.data;
   },
 
@@ -89,11 +90,12 @@ export const backend = {
     const jobId = startRes.data.job_id;
     onJobId?.(jobId); // let the caller track the job_id for cancellation
 
-    // Poll every 5 s until the job finishes, errors, or is cancelled
+    // Poll every 15 s until the job finishes, errors, or is cancelled.
+    // GPU inference takes 30–120 s per step so 5 s was needlessly chatty.
     while (true) {
-      // Interruptible sleep — resolves after 5 s or rejects immediately on abort
+      // Interruptible sleep — resolves after 15 s or rejects immediately on abort
       await new Promise((resolve, reject) => {
-        const t = setTimeout(resolve, 5000);
+        const t = setTimeout(resolve, 15000);
         signal?.addEventListener('abort', () => {
           clearTimeout(t);
           reject(Object.assign(new Error('canceled'), { code: 'ERR_CANCELED' }));

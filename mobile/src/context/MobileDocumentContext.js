@@ -27,6 +27,7 @@ const DocumentContext = createContext(null);
 export const MobileDocumentProvider = ({ children }) => {
   const [document, setDocument] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [chatLoading, setChatLoading] = useState(false);
   const [error, setError] = useState(null);
   const [chatHistory, setChatHistory] = useState([]);
   const [pendingQuestion, setPendingQuestion] = useState(null);
@@ -401,13 +402,17 @@ export const MobileDocumentProvider = ({ children }) => {
       }
 
       const recentHistory = chatHistoryRef.current.slice(-10);
+      setChatLoading(true);
       const result = await backend.askQuestion(query, context, recentHistory);
-      addMessage('assistant', result.answer);
-      upsertSession(activeDoc, [...recentHistory, { role: 'user', content: query }, { role: 'assistant', content: result.answer }]);
-      return result.answer;
+      const answer = result.answer || '';
+      addMessage('assistant', answer);
+      upsertSession(activeDoc, [...recentHistory, { role: 'user', content: query }, { role: 'assistant', content: answer }]);
+      return answer;
     } catch (err) {
       setError(err.message || 'Failed to get answer');
       throw err;
+    } finally {
+      setChatLoading(false);
     }
   }, [document, addMessage, getNextNewChatName, upsertSession]);
 
@@ -536,6 +541,7 @@ export const MobileDocumentProvider = ({ children }) => {
   const value = {
     document,
     loading,
+    chatLoading,
     error,
     chatHistory,
     pendingQuestion,

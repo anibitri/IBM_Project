@@ -4,6 +4,20 @@ import threading
 import time
 import uuid
 
+try:
+    from opentelemetry import trace as _otel_trace
+    _tracer = _otel_trace.get_tracer('process_route')
+    _OTEL_AVAILABLE = True
+except ImportError:
+    _OTEL_AVAILABLE = False
+
+from contextlib import contextmanager
+
+@contextmanager
+def _null_span():
+    """No-op context manager used when OTel is unavailable."""
+    yield None
+
 from app.services.preprocess_service import preprocess_service, ProcessingCancelled
 from app.services.model_manager import manager
 from app.utils.shared_utils import resolve_file_path
@@ -63,6 +77,8 @@ def _run_processing_job(job_id, resolved_path, mock, extract_ar, generate_ai, ca
     with _pending_lock:
         _pending_count += 1
 
+    t_queued = time.time()
+
     try:
         acquired = _inference_semaphore.acquire(blocking=True, timeout=_QUEUE_TIMEOUT)
         if not acquired:
@@ -70,28 +86,56 @@ def _run_processing_job(job_id, resolved_path, mock, extract_ar, generate_ai, ca
             _set_status('error', {'status': 'error', 'error': 'Timed out waiting for GPU slot'})
             return
 
+        t_started = time.time()
+        queue_wait = t_started - t_queued
+        logger.info(f"🚀 Starting inference: {resolved_path} (job {job_id}, queued {queue_wait:.1f}s)")
+
         _set_status('processing')
         manager.between_requests_cleanup()
 
-        try:
-            logger.info(f"🚀 Starting inference: {resolved_path} (job {job_id})")
-            result = preprocess_service.preprocess_document(
-                resolved_path,
-                mock=mock,
-                extract_ar=extract_ar,
-                generate_ai_summary=generate_ai,
-                cancellation_event=cancel_event,
+        span_ctx = (
+            _tracer.start_as_current_span(
+                'document.process',
+                attributes={
+                    'job_id': job_id,
+                    'file': resolved_path,
+                    'extract_ar': extract_ar,
+                    'generate_ai_summary': generate_ai,
+                    'queue_wait_s': round(queue_wait, 1),
+                },
             )
-            final_status = 'success' if result.get('status') in ('success', 'ok') else 'error'
-            _set_status(final_status, result)
-            logger.info(f"✅ Job {job_id} finished with status: {final_status}")
+            if _OTEL_AVAILABLE
+            else _null_span()
+        )
+
+        try:
+            with span_ctx as span:
+                result = preprocess_service.preprocess_document(
+                    resolved_path,
+                    mock=mock,
+                    extract_ar=extract_ar,
+                    generate_ai_summary=generate_ai,
+                    cancellation_event=cancel_event,
+                )
+                final_status = 'success' if result.get('status') in ('success', 'ok') else 'error'
+                _set_status(final_status, result)
+                inference_time = time.time() - t_started
+                total_time = time.time() - t_queued
+                if _OTEL_AVAILABLE and span:
+                    span.set_attribute('inference_time_s', round(inference_time, 1))
+                    span.set_attribute('total_time_s', round(total_time, 1))
+                    span.set_attribute('final_status', final_status)
+                logger.info(
+                    f"✅ Job {job_id} finished: status={final_status}  "
+                    f"inference={inference_time:.1f}s  total(+queue)={total_time:.1f}s"
+                )
 
         except ProcessingCancelled:
-            logger.info(f"🛑 Job {job_id} was cancelled")
+            logger.info(f"🛑 Job {job_id} was cancelled after {time.time() - t_started:.1f}s")
             _set_status('cancelled')
 
         except Exception:
-            logger.exception(f"Job {job_id} failed during inference")
+            logger.exception(f"Job {job_id} failed during inference after {time.time() - t_started:.1f}s")
             _set_status('error', {'status': 'error', 'error': 'Processing failed'})
 
         finally:

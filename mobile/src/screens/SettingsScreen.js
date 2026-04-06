@@ -218,7 +218,7 @@ export default function SettingsScreen() {
               <Ionicons name="information-circle-outline" size={18} color={p.success} />
             </View>
             <Text style={[styles.settingLabel, { color: p.text }]}>Version</Text>
-            <Text style={[styles.settingValue, { color: p.subtext }]}>v1.0.0</Text>
+            <Text style={[styles.settingValue, { color: p.subtext }]}>v1.0.1</Text>
           </View>
           <RowDivider />
           <View style={styles.settingRow}>

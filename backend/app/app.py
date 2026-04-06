@@ -97,10 +97,16 @@ def create_app() -> Flask:
     app = Flask(__name__)
     app.config['MAX_CONTENT_LENGTH'] = 50 * 1024 * 1024
 
-    # Auto-instrument Flask so every request becomes an OTel span
+    # Auto-instrument Flask so every request becomes an OTel span.
+    # Status polls are excluded — they are high-frequency heartbeat calls with
+    # no diagnostic value as individual spans; the job span in process_route.py
+    # already covers the full document processing lifecycle.
     if OTEL_AVAILABLE:
         from opentelemetry.instrumentation.flask import FlaskInstrumentor
-        FlaskInstrumentor().instrument_app(app)
+        FlaskInstrumentor().instrument_app(
+            app,
+            excluded_urls=r"api/process/status/.*,api/process/health",
+        )
     
     # CORS - Allow React frontend to communicate
     allowed_origins = [
@@ -239,10 +245,13 @@ def _register_middleware(app: Flask):
                     f"from {request.remote_addr}"
                 )
 
-        app.logger.info(
-            f"→ [{g.request_id}] {request.method} {request.path} "
-            f"from {request.remote_addr}"
-        )
+        # Suppress per-request log lines for high-frequency status polls —
+        # the job runner already logs job lifecycle at the right granularity.
+        if not request.path.startswith('/api/process/status/'):
+            app.logger.info(
+                f"→ [{g.request_id}] {request.method} {request.path} "
+                f"from {request.remote_addr}"
+            )
     
     @app.after_request
     def log_response(response):
@@ -250,10 +259,11 @@ def _register_middleware(app: Flask):
         request_id = getattr(g, 'request_id', None)
         if request_id:
             response.headers['X-Request-ID'] = request_id
-        app.logger.info(
-            f"← [{request_id}] {request.method} {request.path} "
-            f"→ {response.status_code}"
-        )
+        if not request.path.startswith('/api/process/status/'):
+            app.logger.info(
+                f"← [{request_id}] {request.method} {request.path} "
+                f"→ {response.status_code}"
+            )
         return response
     
     @app.after_request

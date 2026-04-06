@@ -29,6 +29,7 @@ export default function ChatScreen({ navigation }) {
     chatHistory,
     askQuestion,
     loading,
+    chatLoading,
     startNewChat,
     loadDemo,
     recentSessions,
@@ -117,7 +118,7 @@ export default function ChatScreen({ navigation }) {
 
   /* ── Send ── */
   const handleSend = async () => {
-    if (!input.trim() || loading) return;
+    if (!input.trim() || loading || chatLoading) return;
     const q = input.trim();
 
     const liveScopeContext = {
@@ -475,8 +476,8 @@ export default function ChatScreen({ navigation }) {
           />
         )}
 
-        {/* Typing indicator */}
-        {loading && <TypingIndicator palette={p} />}
+        {/* Typing indicator — shown while AI is generating a response */}
+        {(loading || chatLoading) && <TypingIndicator palette={p} />}
 
         {/* Page scope chips — multi-page documents only */}
         {isMultiPage && (
@@ -529,7 +530,7 @@ export default function ChatScreen({ navigation }) {
             placeholderTextColor={p.muted}
             value={input}
             onChangeText={setInput}
-            editable={!loading}
+            editable={!loading && !chatLoading}
             multiline
             maxLength={500}
           />
@@ -538,10 +539,10 @@ export default function ChatScreen({ navigation }) {
             style={[
               styles.sendBtn,
               { backgroundColor: p.primary },
-              (!input.trim() || loading) && styles.sendBtnDisabled,
+              (!input.trim() || loading || chatLoading) && styles.sendBtnDisabled,
             ]}
             onPress={handleSend}
-            disabled={!input.trim() || loading}
+            disabled={!input.trim() || loading || chatLoading}
             activeOpacity={0.82}
           >
             <Ionicons name="arrow-up" size={18} color="#fff" />

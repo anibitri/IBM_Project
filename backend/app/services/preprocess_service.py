@@ -1,4 +1,5 @@
 import os
+import time
 import logging
 from typing import Dict, Any, Optional, List
 from PIL import Image, ImageOps
@@ -55,6 +56,44 @@ def _check_cancel(event):
         raise ProcessingCancelled("Processing cancelled by client")
 
 
+def _log_timing_summary(timings: dict, doc_type: str, page_count: int = 1) -> None:
+    """Log a single structured timing summary for the full pipeline run."""
+    lines = [f"📊 Pipeline timing summary ({doc_type}, {page_count} page(s)):"]
+
+    step_labels = {
+        'pdf_image_extraction': 'PDF image extraction',
+        'vision_filter':        'Vision diagram filter',
+        'text_extraction':      'Docling text extraction',
+        'vision_analysis':      'Vision analysis',
+        'ar_extraction':        'AR extraction',
+        'ai_summary':           'AI summary',
+    }
+
+    total_accounted = 0.0
+    for key, label in step_labels.items():
+        if key in timings:
+            t = timings[key]
+            total_accounted += t
+            lines.append(f"   {label:<28} {t:>6.1f}s")
+
+    # Per-page list entries (PDF multi-image)
+    for list_key, label in (('vision_analysis_pages', 'Vision/page'),
+                             ('ar_extraction_pages', 'AR/page')):
+        if list_key in timings:
+            per_page = timings[list_key]
+            total = sum(per_page)
+            total_accounted += total
+            avg = total / len(per_page) if per_page else 0
+            lines.append(
+                f"   {label:<28} {total:>6.1f}s  "
+                f"(avg {avg:.1f}s × {len(per_page)} page(s))"
+            )
+
+    lines.append(f"   {'─'*42}")
+    lines.append(f"   {'Total accounted':<28} {total_accounted:>6.1f}s")
+    logger.info('\n'.join(lines))
+
+
 class PreprocessService:
     """
     Central preprocessing orchestrator for all document types.
@@ -109,16 +148,17 @@ class PreprocessService:
                 'error': 'File not found',
                 'file_path': file_path
             }
-        
+
         filename = os.path.basename(file_path)
         file_ext = filename.lower().split('.')[-1]
-        
+
         logger.info(f"📋 Preprocessing: {filename}")
-        
+        t_total = time.time()
+
         try:
             # Route to appropriate handler based on file type
             if file_ext in self.supported_pdf_formats:
-                return self._process_pdf(
+                result = self._process_pdf(
                     file_path,
                     mock=mock,
                     extract_ar=extract_ar,
@@ -127,23 +167,28 @@ class PreprocessService:
                 )
 
             elif file_ext in self.supported_image_formats:
-                return self._process_image(
+                result = self._process_image(
                     file_path,
                     mock=mock,
                     extract_ar=extract_ar,
                     generate_ai_summary=generate_ai_summary,
                     cancellation_event=cancellation_event,
                 )
-            
+
             else:
                 return {
                     'status': 'error',
                     'error': f'Unsupported format: .{file_ext}',
                     'supported_formats': list(self.supported_image_formats | self.supported_pdf_formats)
                 }
-        
+
+            elapsed = time.time() - t_total
+            logger.info(f"⏱️  Total pipeline time for {filename}: {elapsed:.1f}s")
+            return result
+
         except Exception as e:
-            logger.exception(f"Preprocessing failed for {filename}")
+            elapsed = time.time() - t_total
+            logger.exception(f"Preprocessing failed for {filename} after {elapsed:.1f}s")
             return {
                 'status': 'error',
                 'error': str(e),
@@ -356,43 +401,49 @@ class PreprocessService:
             Comprehensive analysis dictionary
         """
         logger.info("📄 Processing PDF document...")
+        timings = {}
 
         _check_cancel(cancellation_event)
 
         # Step 1: Extract images from PDF
         extracted_images = []
         try:
+            t0 = time.time()
             extracted_images = self._extract_images_from_pdf(file_path)
+            timings['pdf_image_extraction'] = time.time() - t0
         except Exception as e:
             logger.error(f"Image extraction failed: {e}")
-            # Continue with text processing even if image extraction fails
 
         _check_cancel(cancellation_event)
 
         # Step 1b: Filter out non-diagram images (photos, screenshots, etc.)
         if extracted_images:
+            t0 = time.time()
             extracted_images = self._filter_extracted_images(extracted_images)
+            timings['vision_filter'] = time.time() - t0
 
         _check_cancel(cancellation_event)
 
         # Step 2: Extract text from PDF
         full_text = ""
         text_excerpt = ""
-        
+
         if HAS_DOCLING:
             try:
+                t0 = time.time()
                 full_text, text_excerpt = self._extract_text_from_pdf(file_path)
+                timings['text_extraction'] = time.time() - t0
             except Exception as e:
                 logger.warning(f"Text extraction failed: {e}")
                 text_excerpt = "PDF text extraction failed."
         else:
             text_excerpt = "PDF text extraction unavailable (Docling not installed)."
-        
+
         # Step 3: Process each extracted image through Vision + AR pipeline
         image_analyses = []
         all_ar_components = []
         all_connections = []
-        
+
         for img_info in extracted_images:
             _check_cancel(cancellation_event)
 
@@ -400,11 +451,14 @@ class PreprocessService:
             page_num = img_info['page']
 
             logger.info(f"🔍 Analyzing image from page {page_num}...")
-            
+
             try:
                 # Vision analysis
+                t0 = time.time()
                 vision_result = analyze_images(img_path, task="ar_extraction")
-                
+                t_vision = time.time() - t0
+                timings.setdefault('vision_analysis_pages', []).append(t_vision)
+
                 # Extract vision data
                 vision_summary = ""
                 vision_components = []
@@ -420,20 +474,23 @@ class PreprocessService:
 
                 if extract_ar:
                     try:
+                        t0 = time.time()
                         ar_result = ar_service.extract_document_features(
                             img_path,
                             hints=[diagram_type] + vision_components
                         )
+                        t_ar = time.time() - t0
+                        timings.setdefault('ar_extraction_pages', []).append(t_ar)
                         ar_components = ar_result.get('components', [])
                         relationships = ar_result.get('relationships', {})
-                        
+
                         if ar_components:
                             all_ar_components.extend(ar_components)
                             all_connections.extend(ar_result.get('connections', []))
-                    
+
                     except Exception as e:
                         logger.warning(f"AR extraction failed for page {page_num}: {e}")
-                
+
                 # Store analysis for this image
                 image_analyses.append({
                     'page': page_num,
@@ -446,13 +503,13 @@ class PreprocessService:
                     'ar_relationships': relationships,
                     'component_count': len(ar_components)
                 })
-                
+
                 logger.info(f"  ✓ Page {page_num}: {len(ar_components)} components found")
-            
+
             except Exception as e:
                 logger.error(f"Failed to analyze image from page {page_num}: {e}")
                 continue
-        
+
         _check_cancel(cancellation_event)
 
         # Step 4: Generate comprehensive AI summary
@@ -461,27 +518,25 @@ class PreprocessService:
 
         if generate_ai_summary:
             logger.info("🤖 Generating comprehensive AI summary...")
-            
+
             try:
-                # Combine all vision summaries
                 combined_vision_text = "\n\n".join([
                     f"Page {img['page']} - {img['vision_summary']}"
                     for img in image_analyses
                     if img.get('vision_summary')
                 ])
-                
-                # Generate AI summary with full context
+
+                t0 = time.time()
                 ai_result = ai_service.analyze_context(
                     text_excerpt=text_excerpt,
                     vision={'analysis': {'summary': combined_vision_text}},
-                    components=all_ar_components[:20],  # Limit to first 20 for token management
+                    components=all_ar_components[:20],
                     context_type='general',
                     connections=all_connections[:30],
                 )
-                
+                timings['ai_summary'] = time.time() - t0
                 ai_summary = ai_result.get('answer', '')
-                logger.info("✓ AI summary generated")
-            
+
             except Exception as e:
                 logger.warning(f"AI summary generation failed: {e}")
                 ai_summary = "AI summary unavailable."
@@ -490,6 +545,9 @@ class PreprocessService:
                     'error': str(e),
                     'answer': ai_summary
                 }
+
+        # Log full timing breakdown
+        _log_timing_summary(timings, doc_type='pdf', page_count=len(image_analyses))
         
         # Step 5: Compile comprehensive result
         return {
@@ -555,6 +613,7 @@ class PreprocessService:
             Analysis dictionary
         """
         logger.info("🖼️ Processing image...")
+        timings = {}
 
         try:
             _check_cancel(cancellation_event)
@@ -573,11 +632,13 @@ class PreprocessService:
                     'error': f'Invalid image: {str(e)}',
                     'file_path': file_path
                 }
-            
+
             # Step 1: Vision Analysis
             logger.info("🔍 Running vision analysis...")
+            t0 = time.time()
             vision_result = analyze_images(file_path, task="ar_extraction")
-            
+            timings['vision_analysis'] = time.time() - t0
+
             if not isinstance(vision_result, dict):
                 vision_result = {
                     'status': 'error',
@@ -585,7 +646,7 @@ class PreprocessService:
                     'analysis': {'summary': ''},
                     'components': []
                 }
-            
+
             vision_summary = vision_result.get('analysis', {}).get('summary', '')
             vision_components = vision_result.get('components', [])
             diagram_type = vision_result.get('diagram_type', 'other')
@@ -600,13 +661,15 @@ class PreprocessService:
             if extract_ar:
                 logger.info("🎯 Extracting AR components...")
                 try:
+                    t0 = time.time()
                     ar_result = ar_service.extract_document_features(
                         file_path,
                         hints=[diagram_type] + vision_components
                     )
+                    timings['ar_extraction'] = time.time() - t0
                     ar_components = ar_result.get('components', [])
                     relationships = ar_result.get('relationships', {})
-                    
+
                     ar_result = {
                         'status': 'success',
                         'components': ar_components,
@@ -614,9 +677,7 @@ class PreprocessService:
                         'connections': ar_result.get('connections', []),
                         'relationships': relationships
                     }
-                    
-                    logger.info(f"✓ Extracted {len(ar_components)} components")
-                
+
                 except Exception as e:
                     logger.warning(f"AR extraction failed: {e}")
                     ar_result = {
@@ -625,7 +686,7 @@ class PreprocessService:
                         'components': [],
                         'componentCount': 0
                     }
-            
+
             _check_cancel(cancellation_event)
 
             # Step 3: AI Summary
@@ -635,18 +696,18 @@ class PreprocessService:
             if generate_ai_summary:
                 logger.info("🤖 Generating AI summary...")
                 try:
-                    # Infer document type
                     document_type = self._infer_document_type(vision_summary)
-                    
+
+                    t0 = time.time()
                     ai_result = ai_service.analyze_context(
                         vision=vision_result,
                         components=ar_components,
                         context_type=document_type,
                         connections=relationships.get('connections', []) if isinstance(relationships, dict) else [],
                     )
+                    timings['ai_summary'] = time.time() - t0
                     ai_summary = ai_result.get('answer', vision_summary)
-                    logger.info("✓ AI summary generated")
-                
+
                 except Exception as e:
                     logger.warning(f"AI summary failed: {e}")
                     ai_summary = vision_summary
@@ -655,7 +716,10 @@ class PreprocessService:
                         'error': str(e),
                         'answer': vision_summary
                     }
-            
+
+            # Log full timing breakdown
+            _log_timing_summary(timings, doc_type='image')
+
             return {
                 'status': 'success',
                 'type': 'image',
