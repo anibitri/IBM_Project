@@ -46,9 +46,9 @@ At least one of `text_excerpt`, `vision`, or `components` must be non-empty; oth
 
 ---
 
-### `POST /api/ai/ask` and `POST /api/ai/chat`
+### `POST /api/ai/ask` and `POST /api/ai/chat` *(blocking — kept for compatibility)*
 
-Both paths route to the same handler. Answers a user question grounded in a document context dict.
+Both paths route to the same handler. Answers a user question grounded in a document context dict. This is a **synchronous, blocking** endpoint: the HTTP connection is held open for the full duration of GPU inference (60–120 s on slow hardware). It is retained for backward compatibility but **should not be used from mobile clients** — NAT/proxy TCP timeouts (~5 min on ngrok and mobile carriers) will silently drop the connection before inference completes. Use the non-blocking variants below instead.
 
 **Request body (JSON):**
 ```json
@@ -82,6 +82,61 @@ Both paths route to the same handler. Answers a user question grounded in a docu
   "answer": "The API Gateway routes incoming HTTP requests to downstream services..."
 }
 ```
+
+---
+
+### `POST /api/ai/ask/start` and `POST /api/ai/chat/start` *(non-blocking)*
+
+Submits a chat question as a background job and returns immediately with a `job_id`. The client polls `GET /api/ai/ask/status/<job_id>` until the answer is ready. This pattern is immune to NAT/proxy TCP timeouts and is the recommended path for all mobile and long-running chat requests.
+
+**Why this exists:** the blocking `/ai/ask` endpoint held the HTTP connection open during GPU inference. On ngrok and mobile carriers, NAT/proxy TCP timeouts fire at ~5 minutes, silently dropping the connection before the server finished — the client received "Failed to get a response" even though the answer arrived moments later. This endpoint solves that by decoupling submission from retrieval.
+
+**Request body (JSON):** identical to `POST /api/ai/ask`.
+
+**Response (202):**
+```json
+{
+  "job_id": "3f8a1b2c-...",
+  "status": "queued"
+}
+```
+
+**`stored_name` resolution:** same as the blocking endpoint — performed before handing off to the background thread.
+
+---
+
+### `GET /api/ai/ask/status/<job_id>` and `GET /api/ai/chat/status/<job_id>`
+
+Polls the status of a chat job submitted via `/ask/start`.
+
+**Response (200):**
+```json
+{
+  "status": "queued | processing | success | error",
+  "result": null
+}
+```
+
+Once `status` is `"success"`, `result` contains the same dict that the blocking `/ai/ask` would have returned:
+```json
+{
+  "status": "success",
+  "result": {
+    "status": "ok",
+    "answer": "The API Gateway routes incoming HTTP requests..."
+  }
+}
+```
+
+On `"error"`, `result` contains `{"status": "error", "error": "..."}`. Jobs expire after 1 hour; polling an expired or unknown `job_id` returns 404.
+
+**Recommended poll interval:** 4 seconds (matches the frontend implementation).
+
+---
+
+### Chat Job Store
+
+The non-blocking endpoints use an in-memory job store (`_chat_jobs` dict, protected by `_chat_jobs_lock`). Each entry holds `status`, `result`, and `created_at`. Jobs are pruned lazily on each `/ask/start` call when older than `_CHAT_JOB_TTL` (3600 s). Background inference runs in a daemon thread; GPU housekeeping (`maybe_cleanup_before_inference` / `maybe_cleanup_after_inference`) is called inside the thread.
 
 ---
 
@@ -186,7 +241,7 @@ Status is `"healthy"` if mock mode is active OR `manager.vision_model` is not No
 
 ## GPU Housekeeping Pattern
 
-All five inference-running endpoints use the same pattern:
+All inference-running endpoints use the same pattern:
 
 ```python
 manager.maybe_cleanup_before_inference()

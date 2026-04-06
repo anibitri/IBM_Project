@@ -2,37 +2,65 @@
 
 ## Overview
 
-`process_route.py` exposes the full document processing pipeline as a single endpoint. It orchestrates Vision → AR → AI by delegating to `preprocess_service`, and implements a **queuing mechanism** that serializes GPU inference across concurrent requests rather than immediately rejecting them with a 503.
+`process_route.py` exposes the document processing pipeline using a **background job pattern**. Submitting a job returns a `job_id` immediately (HTTP 202); the client then polls a status endpoint until the job completes. This eliminates long-lived HTTP connections that would be dropped by proxies, NAT layers, or carrier TCP timeouts during GPU inference.
 
 Blueprint: `process_bp`, registered at `/api/process`.
 
 ---
 
-## Inference Queue
+## Background Job Architecture
 
-The queue is implemented with three module-level variables protected by a threading lock:
+### Why background jobs instead of a blocking request?
+
+GPU inference takes 30–120+ seconds per document. Holding an HTTP connection open for that duration causes:
+- **NAT/proxy TCP timeouts** (~5 minutes on most mobile carriers and ngrok) silently dropping the connection mid-analysis
+- **Flask thread starvation** if cancel/status requests arrive while the main thread is blocked on inference
+
+The background job pattern solves both: the HTTP handler returns in milliseconds, GPU work runs in a daemon thread, and the cancel endpoint is always reachable.
+
+### Module-level state
 
 ```python
-_inference_semaphore = threading.Semaphore(1)   # binary: 1 running at a time
+_inference_semaphore = threading.Semaphore(1)   # serialises GPU access
 _pending_lock        = threading.Lock()
 _pending_count       = 0
-_MAX_PENDING         = 4    # max concurrent waiters (not counting the active runner)
-_QUEUE_TIMEOUT       = 300  # seconds a waiter will block before giving up
+_MAX_PENDING         = 4      # max jobs waiting (not counting the active runner)
+_QUEUE_TIMEOUT       = 14400  # 4 hours — allows slow GPU jobs to wait their turn
+
+_job_store      = {}          # job_id → {status, result, created_at}
+_job_store_lock = threading.Lock()
+_JOB_TTL        = 7200        # 2 hours — stale jobs are pruned lazily
+
+_cancellation_registry = {}   # job_id → threading.Event
+_registry_lock         = threading.Lock()
 ```
 
-**Effective concurrency:** 1 active + up to 4 waiting = **5 in-flight requests maximum**.
+**Effective concurrency:** 1 active + up to 4 waiting = **5 in-flight jobs maximum**.
 
-**Why queue instead of reject?**
+### OTel tracing
 
-Immediately returning 503 when the GPU is busy forces clients to implement retry logic with exponential backoff — this adds client-side complexity and increases round-trip time. Queuing lets clients fire and forget: they block for up to 5 minutes, which comfortably covers large PDFs with many pages. A 503 is only returned when the queue itself is full or a waiter times out.
+When OpenTelemetry is available, each background job emits a single `document.process` span covering the full inference lifecycle. This span carries the following attributes:
+
+| Attribute              | Description                                  |
+|------------------------|----------------------------------------------|
+| `job_id`               | UUID of the job                              |
+| `file`                 | Resolved file path                           |
+| `extract_ar`           | Whether AR extraction was requested          |
+| `generate_ai_summary`  | Whether AI summary was requested             |
+| `queue_wait_s`         | Seconds spent waiting in the GPU queue       |
+| `inference_time_s`     | Seconds spent in active inference            |
+| `total_time_s`         | Total time from submission to completion     |
+| `final_status`         | `success` or `error`                         |
+
+The `/api/process/status/<job_id>` endpoint is **excluded from Flask auto-instrumentation** — it is a high-frequency heartbeat with no diagnostic value as individual spans. All timing context is captured in the single `document.process` span instead.
 
 ---
 
-## Endpoint
+## Endpoints
 
-### `POST /api/process/document`
+### `POST /api/process/start`
 
-Runs the full Vision → AR → AI pipeline on an uploaded file.
+Submits a document for processing. Returns immediately with a `job_id`.
 
 **Request body (JSON):**
 ```json
@@ -44,55 +72,70 @@ Runs the full Vision → AR → AI pipeline on an uploaded file.
 }
 ```
 
-| Field                 | Required   | Default | Description                                            |
-|-----------------------|------------|---------|--------------------------------------------------------|
-| `stored_name`         | one of two | —       | Hash-based filename from the upload route              |
-| `file_path`           | one of two | —       | Absolute path (must be in uploads folder)              |
-| `mock`                | No         | `false` | Skip model inference and return mock results           |
-| `extract_ar`          | No         | `true`  | Whether to run AR component detection                  |
-| `generate_ai_summary` | No         | `true`  | Whether to generate an AI text summary                 |
+| Field                 | Required   | Default | Description                                          |
+|-----------------------|------------|---------|------------------------------------------------------|
+| `stored_name`         | one of two | —       | Hash-based filename from the upload route            |
+| `file_path`           | one of two | —       | Absolute path (must be in uploads folder)            |
+| `job_id`              | No         | auto    | Client-supplied idempotency key, or auto-generated   |
+| `mock`                | No         | `false` | Skip model inference and return mock results         |
+| `extract_ar`          | No         | `true`  | Whether to run AR component detection                |
+| `generate_ai_summary` | No         | `true`  | Whether to generate an AI text summary               |
 
 **Processing flow:**
-
 ```
-1. Validate JSON payload
-2. Resolve file path (fail-fast before entering queue)
-3. Queue admission check:
+1. Prune stale jobs older than JOB_TTL
+2. Validate JSON payload
+3. Resolve file path (fail-fast before entering queue)
+4. Queue admission check:
      if _pending_count >= _MAX_PENDING → 503 immediately
-     else _pending_count += 1
-4. Acquire _inference_semaphore (blocking, timeout=300s)
-     if timeout → 503
-5. manager.between_requests_cleanup()          ← clear prior request's VRAM
-6. preprocess_service.preprocess_document(...)  ← Vision → AR → AI
-7. manager.between_requests_cleanup()          ← clear this request's VRAM
-8. _inference_semaphore.release()
-9. _pending_count -= 1
-10. Return result (200 if success/ok, 500 otherwise)
+5. Register threading.Event in _cancellation_registry
+6. Create job record in _job_store with status='queued'
+7. Launch daemon thread → _run_processing_job(...)
+8. Return {status: 'queued', job_id: '...'} HTTP 202 immediately
 ```
 
-**Queue admission** (step 3) is checked under `_pending_lock` so the count increment and the check are atomic. The path resolution happens *before* entering the queue — a bad `stored_name` fails immediately without consuming a queue slot.
+**Response (202):**
+```json
+{"status": "queued", "job_id": "550e8400-e29b-41d4-a716-446655440000"}
+```
 
-**GPU cleanup** (steps 5 and 7) calls `manager.between_requests_cleanup()` (unconditional cache clear + gc.collect), not the adaptive variants. At the process-route level the intent is always to give the full pipeline a clean start and leave a clean state for the next queued request.
+**503 case:** queue full — `"Server is busy — N jobs already queued. Please retry."`
 
-**Response (200 or 500):** the raw result dict from `preprocess_service.preprocess_document`:
+---
+
+### `GET /api/process/status/<job_id>`
+
+Polls the status of a submitted job.
+
+**Response:**
 ```json
 {
-  "status": "success",
-  "type": "pdf",
-  "images": [
-    {
-      "vision": {...},
-      "ar": {...},
-      "ai": {...}
-    }
-  ],
-  "meta": {...}
+  "status": "queued | processing | success | error | cancelled",
+  "result": { ... }
 }
 ```
 
-**503 cases:**
-- Queue full: `"Server is busy — N requests already queued. Please retry in a moment."`
-- Timeout: `"Request timed out waiting for the server to become free. Please retry."`
+`result` is `null` while the job is queued or processing. On `success` it contains the full pipeline output from `preprocess_service`. On `error` it contains `{"error": "..."}`.
+
+**404** is returned if the job ID is unknown or has been pruned (TTL expired).
+
+> **Note:** This endpoint is excluded from request/response middleware logging and OTel auto-instrumentation. During a GPU job, a client polling every 15 seconds would otherwise generate hundreds of log lines and OTel spans with no diagnostic value.
+
+---
+
+### `POST /api/process/cancel`
+
+Requests cancellation of a queued or in-progress job.
+
+**Request body (JSON):**
+```json
+{"job_id": "550e8400-e29b-41d4-a716-446655440000"}
+```
+
+Sets the job's `threading.Event`, which is checked at cancellation checkpoints throughout the pipeline. The pipeline raises `ProcessingCancelled` at the next checkpoint and the job status transitions to `cancelled`.
+
+**Response (200):** `{"status": "ok", "message": "Cancellation requested"}`
+**Response (404):** job not found or already completed
 
 ---
 
@@ -102,29 +145,76 @@ Runs the full Vision → AR → AI pipeline on an uploaded file.
 {"status": "healthy"}
 ```
 
-Always returns healthy — this route has no model dependency of its own.
+---
+
+## Background Worker — `_run_processing_job`
+
+The worker runs in a daemon thread and logs timing at every significant boundary:
+
+```
+🚀 Starting inference: /path/file.png (job abc123, queued 0.2s)
+    ... pipeline step logs ...
+📊 Pipeline timing summary (image, 1 page(s)):
+   Vision analysis              42.3s
+   AR extraction                18.7s
+   AI summary                   31.1s
+   ──────────────────────────────────────────
+   Total accounted              92.1s
+⏱️  Total pipeline time for file.png: 92.4s
+✅ Job abc123 finished: status=success  inference=92.4s  total(+queue)=92.6s
+```
+
+Queue wait time and inference time are logged separately so GPU saturation vs. actual processing time are distinguishable.
 
 ---
 
-## Error Handling
+## Client Polling Protocol
 
-The outer `try/except Exception` catches anything that escapes the inner blocks (e.g., JSON parsing failure, unexpected exceptions in file resolution). The `_pending_count` decrement is in a `finally` block nested inside the semaphore acquisition block, ensuring the count is always decremented even if inference raises.
+The frontend (`shared/api/backend.js`) implements the polling loop:
 
-The cleanup and semaphore release are also in a `finally`, so VRAM is never left dirty and the semaphore is never leaked on an exception.
+```
+POST /api/process/start  → receives job_id (HTTP 202)
+loop every 15 s:
+    GET /api/process/status/<job_id>
+    if status == 'success'   → return result
+    if status == 'error'     → throw
+    if status == 'cancelled' → throw (ERR_CANCELED)
+    else                     → continue polling
+```
+
+The 15-second interval reflects the minimum useful granularity — GPU inference steps take 30–120 seconds each, so polling more frequently only generates noise.
+
+---
+
+## Cancellation Flow
+
+```
+Client                     Frontend              Backend HTTP          Background Thread
+  │                            │                      │                       │
+  │── tap Cancel ─────────────>│                      │                       │
+  │                            │── abort controller ──>│                      │
+  │                            │── POST /cancel ──────>│── event.set() ───────>│
+  │                            │                      │                       │── _check_cancel()
+  │                            │                      │                       │── raise ProcessingCancelled
+  │                            │                      │                       │── status='cancelled'
+```
+
+The `AbortController` on the frontend immediately stops the polling loop. The `POST /cancel` call concurrently signals the backend thread. The thread checks the event at multiple checkpoints between pipeline stages and raises `ProcessingCancelled`, which is caught in `_run_processing_job` and sets the job status to `cancelled`.
 
 ---
 
 ## Threading Model
 
-All state (`_pending_count`, `_inference_semaphore`) is module-level. Flask runs routes in threads (by default with Werkzeug's threaded dev server, or with Gunicorn workers in production). The semaphore and lock are standard `threading` primitives and are safe across threads within a single process. They are **not** safe across multiple worker processes (e.g., Gunicorn with `--workers > 1`) — in that case a Redis-backed distributed lock would be needed.
+All shared state uses standard `threading` primitives (semaphore + locks). This is safe across threads within a single process but **not** across multiple Gunicorn worker processes (`--workers > 1`). In a multi-process deployment a distributed lock (e.g. Redis) would be required.
 
 ---
 
 ## Dependencies
 
-- `app.services.preprocess_service.preprocess_service`
+- `app.services.preprocess_service.preprocess_service`, `ProcessingCancelled`
 - `app.services.model_manager.manager`
 - `app.utils.shared_utils.resolve_file_path`
 - `app.utils.response_formatter.error_response`
 - `app.utils.validators.ensure_json_object`
-- `threading` (standard library)
+- `threading`, `time`, `uuid` (standard library)
+- `opentelemetry` (optional — gracefully absent if not installed)

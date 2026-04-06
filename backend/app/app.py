@@ -105,7 +105,7 @@ def create_app() -> Flask:
         from opentelemetry.instrumentation.flask import FlaskInstrumentor
         FlaskInstrumentor().instrument_app(
             app,
-            excluded_urls=r"api/process/status/.*,api/process/health",
+            excluded_urls=r"api/process/status/.*,api/process/health,api/ai/ask/status/.*,api/ai/chat/status/.*",
         )
     
     # CORS - Allow React frontend to communicate
@@ -247,7 +247,7 @@ def _register_middleware(app: Flask):
 
         # Suppress per-request log lines for high-frequency status polls —
         # the job runner already logs job lifecycle at the right granularity.
-        if not request.path.startswith('/api/process/status/'):
+        if not (request.path.startswith('/api/process/status/') or request.path.startswith('/api/ai/ask/status/') or request.path.startswith('/api/ai/chat/status/')):
             app.logger.info(
                 f"→ [{g.request_id}] {request.method} {request.path} "
                 f"from {request.remote_addr}"
@@ -259,7 +259,7 @@ def _register_middleware(app: Flask):
         request_id = getattr(g, 'request_id', None)
         if request_id:
             response.headers['X-Request-ID'] = request_id
-        if not request.path.startswith('/api/process/status/'):
+        if not (request.path.startswith('/api/process/status/') or request.path.startswith('/api/ai/ask/status/') or request.path.startswith('/api/ai/chat/status/')):
             app.logger.info(
                 f"← [{request_id}] {request.method} {request.path} "
                 f"→ {response.status_code}"
@@ -386,7 +386,9 @@ def _register_blueprints(app: Flask):
     GET  /api/ar/health         → AR model health check
     
     POST /api/ai/analyze        → Analyze technical content
-    POST /api/ai/ask            → Q&A with document context
+    POST /api/ai/ask            → Q&A with document context (blocking, kept for compat)
+    POST /api/ai/ask/start      → Submit chat job (returns job_id immediately)
+    GET  /api/ai/ask/status/<id>→ Poll chat job status / result
     POST /api/ai/summarize-components → Summarize AR components
     POST /api/ai/generate-insights    → Generate technical insights
     POST /api/ai/compare-documents    → Compare two documents
