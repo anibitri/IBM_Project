@@ -380,6 +380,91 @@ class TestAIRouteCompareDocuments:
         assert resp.status_code == 400
 
 
+class TestAIRouteAskStart:
+    """Tests for the non-blocking POST /api/ai/ask/start endpoint."""
+
+    def test_start_returns_202_and_job_id(self, client):
+        resp = client.post('/api/ai/ask/start', json={
+            'query':   'What components are in this diagram?',
+            'context': 'Architecture diagram showing CPU, RAM, and GPU.'
+        })
+        data = resp.get_json()
+        assert resp.status_code == 202
+        assert 'job_id' in data
+        assert data['status'] == 'queued'
+
+    def test_start_missing_query_returns_400(self, client):
+        resp = client.post('/api/ai/ask/start', json={'context': 'Some context'})
+        assert resp.status_code == 400
+
+    def test_start_missing_context_returns_400(self, client):
+        resp = client.post('/api/ai/ask/start', json={'query': 'What is this?'})
+        assert resp.status_code == 400
+
+    def test_start_empty_query_returns_400(self, client):
+        resp = client.post('/api/ai/ask/start', json={'query': '', 'context': 'ctx'})
+        assert resp.status_code == 400
+
+    def test_chat_alias_also_returns_202(self, client):
+        resp = client.post('/api/ai/chat/start', json={
+            'query':   'Describe the network topology.',
+            'context': 'Network diagram with router and firewall.'
+        })
+        assert resp.status_code == 202
+        assert 'job_id' in resp.get_json()
+
+
+class TestAIRouteAskStatus:
+    """Tests for the polling GET /api/ai/ask/status/<job_id> endpoint."""
+
+    def test_unknown_job_id_returns_404(self, client):
+        resp = client.get('/api/ai/ask/status/nonexistent-job-id')
+        assert resp.status_code == 404
+
+    def test_status_after_start_is_valid(self, client):
+        # Submit a job then immediately poll — status must be one of the known states.
+        start = client.post('/api/ai/ask/start', json={
+            'query':   'What is shown?',
+            'context': 'Simple circuit diagram.'
+        })
+        job_id = start.get_json()['job_id']
+        resp   = client.get(f'/api/ai/ask/status/{job_id}')
+        assert resp.status_code == 200
+        assert resp.get_json()['status'] in ('queued', 'processing', 'success', 'error')
+
+    def test_full_polling_flow_returns_answer(self, client):
+        """Poll until success (or timeout) and verify the answer field is present."""
+        import time
+        start = client.post('/api/ai/ask/start', json={
+            'query':   'What components are visible?',
+            'context': 'IBM OTel pipeline diagram.'
+        })
+        assert start.status_code == 202
+        job_id = start.get_json()['job_id']
+
+        for _ in range(30):  # up to ~15 s in tests (0.5 s poll)
+            time.sleep(0.5)
+            resp = client.get(f'/api/ai/ask/status/{job_id}')
+            data = resp.get_json()
+            if data['status'] == 'success':
+                assert 'answer' in data['result']
+                assert len(data['result']['answer']) > 5
+                return
+            if data['status'] == 'error':
+                pytest.fail(f"Job ended with error: {data['result']}")
+
+        pytest.fail("Job did not complete within the expected time")
+
+    def test_chat_alias_status_works(self, client):
+        start = client.post('/api/ai/chat/start', json={
+            'query':   'What is the role of the collector?',
+            'context': 'IBM OTel pipeline.'
+        })
+        job_id = start.get_json()['job_id']
+        resp   = client.get(f'/api/ai/chat/status/{job_id}')
+        assert resp.status_code == 200
+
+
 class TestAIRouteHealth:
 
     def test_health_200(self, client):

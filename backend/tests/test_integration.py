@@ -9,6 +9,24 @@ import pytest
 import time
 
 
+def _process_and_poll(client, stored_name, timeout=180):
+    """Submit a process job and poll until completion. Returns the result dict."""
+    start_resp = client.post('/api/process/start', json={'stored_name': stored_name})
+    assert start_resp.status_code == 202, f"process/start failed: {start_resp.get_json()}"
+    job_id = start_resp.get_json()['job_id']
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(5)
+        status_resp = client.get(f'/api/process/status/{job_id}')
+        data = status_resp.get_json()
+        if data['status'] == 'success':
+            return data['result']
+        if data['status'] == 'error':
+            pytest.fail(f"process job failed: {data['result']}")
+    pytest.fail(f"process job did not complete within {timeout}s")
+
+
 class TestFullPipelineImage:
     """
     Simulates the complete mobile app flow for an image:
@@ -73,12 +91,7 @@ class TestFullPipelineImage:
         assert len(data['answer']) > 5
 
     def test_step5_full_process_pipeline(self, client, uploaded):
-        resp = client.post(
-            '/api/process/document',
-            json={'stored_name': uploaded['stored_name']}
-        )
-        data = resp.get_json()
-        assert resp.status_code == 200
+        data = _process_and_poll(client, uploaded['stored_name'])
         assert data['status']   == 'success'
         assert data['type']     == 'image'
         # All pipeline stages should have run
@@ -111,18 +124,16 @@ class TestFullPipelinePDF:
         assert uploaded_pdf.endswith('.pdf')
 
     def test_pdf_process_returns_success(self, client, uploaded_pdf):
-        resp = client.post('/api/process/document', json={'stored_name': uploaded_pdf})
-        data = resp.get_json()
-        assert resp.status_code == 200
-        assert data['type']     == 'pdf'
+        data = _process_and_poll(client, uploaded_pdf)
+        assert data['type'] == 'pdf'
 
     def test_pdf_process_has_ar(self, client, uploaded_pdf):
-        resp = client.post('/api/process/document', json={'stored_name': uploaded_pdf})
-        assert 'ar' in resp.get_json()
+        data = _process_and_poll(client, uploaded_pdf)
+        assert 'ar' in data
 
     def test_pdf_process_has_meta(self, client, uploaded_pdf):
-        resp = client.post('/api/process/document', json={'stored_name': uploaded_pdf})
-        meta = resp.get_json().get('meta', {})
+        data = _process_and_poll(client, uploaded_pdf)
+        meta = data.get('meta', {})
         assert 'has_text'   in meta
         assert 'has_images' in meta
 
@@ -293,6 +304,62 @@ class TestResponseConsistency:
         keys_per_component = [set(c.keys()) for c in components]
         assert all(k == keys_per_component[0] for k in keys_per_component), \
             "Components have inconsistent fields"
+
+
+class TestProcessRoute:
+    """
+    Tests for the async process pipeline:
+    POST /api/process/start  → returns job_id immediately
+    GET  /api/process/status/<id> → poll for result
+    POST /api/process/cancel → cancel an in-progress job
+    """
+
+    def test_start_returns_202_and_job_id(self, client, uploaded_diagram):
+        resp = client.post('/api/process/start', json={'stored_name': uploaded_diagram})
+        data = resp.get_json()
+        assert resp.status_code == 202
+        assert 'job_id' in data
+        assert data['status'] == 'queued'
+
+    def test_start_missing_stored_name_returns_error(self, client):
+        resp = client.post('/api/process/start', json={})
+        assert resp.status_code in (400, 404)
+
+    def test_status_unknown_job_returns_404(self, client):
+        resp = client.get('/api/process/status/nonexistent-job-id')
+        assert resp.status_code == 404
+
+    def test_status_immediately_after_start_is_valid(self, client, uploaded_diagram):
+        start = client.post('/api/process/start', json={'stored_name': uploaded_diagram})
+        job_id = start.get_json()['job_id']
+        resp   = client.get(f'/api/process/status/{job_id}')
+        assert resp.status_code == 200
+        assert resp.get_json()['status'] in ('queued', 'processing', 'success', 'error')
+
+    def test_full_polling_flow_returns_result(self, client, uploaded_diagram):
+        data = _process_and_poll(client, uploaded_diagram)
+        assert data['status'] == 'success'
+        assert 'vision' in data
+        assert 'ar'     in data
+
+    def test_cancel_unknown_job_returns_404(self, client):
+        resp = client.post('/api/process/cancel', json={'job_id': 'nonexistent'})
+        assert resp.status_code == 404
+
+    def test_cancel_missing_job_id_returns_400(self, client):
+        resp = client.post('/api/process/cancel', json={})
+        assert resp.status_code == 400
+
+    def test_cancel_queued_job(self, client, uploaded_diagram):
+        start  = client.post('/api/process/start', json={'stored_name': uploaded_diagram})
+        job_id = start.get_json()['job_id']
+        resp   = client.post('/api/process/cancel', json={'job_id': job_id})
+        # Either cancelled successfully or already finished before we could cancel
+        assert resp.status_code in (200, 404)
+
+    def test_process_health(self, client):
+        resp = client.get('/api/process/health')
+        assert resp.status_code == 200
 
 
 class TestPerformance:

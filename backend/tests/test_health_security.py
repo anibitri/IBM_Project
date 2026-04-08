@@ -58,7 +58,7 @@ class TestGlobalHealth:
         data   = client.get('/api/routes').get_json()
         paths  = [r['path'] for r in data['routes']]
         for expected in ['/api/upload/', '/api/vision/analyze', '/api/ar/generate',
-                         '/api/ai/analyze', '/api/process/document']:
+                         '/api/ai/analyze', '/api/process/start']:
             assert expected in paths, f"Missing endpoint: {expected}"
 
     def test_all_individual_health_checks(self, client):
@@ -163,8 +163,8 @@ class TestPathTraversalPrevention:
             f"Traversal not blocked for: {payload!r}"
 
     @pytest.mark.parametrize("payload", TRAVERSAL_INPUTS)
-    def test_process_document_blocks_traversal(self, client, payload):
-        resp = client.post('/api/process/document', json={'stored_name': payload})
+    def test_process_start_blocks_traversal(self, client, payload):
+        resp = client.post('/api/process/start', json={'stored_name': payload})
         assert resp.status_code in (400, 403, 404), \
             f"Traversal not blocked for: {payload!r}"
 
@@ -253,8 +253,8 @@ class TestMethodNotAllowed:
         resp = client.get('/api/ai/analyze')
         assert resp.status_code == 405
 
-    def test_process_document_get_not_allowed(self, client):
-        resp = client.get('/api/process/document')
+    def test_process_start_get_not_allowed(self, client):
+        resp = client.get('/api/process/start')
         assert resp.status_code == 405
 
 
