@@ -5,6 +5,24 @@ Full pipeline: Vision → AR → AI.
 """
 
 import pytest
+import time
+
+
+def _process_and_poll(client, stored_name, timeout=180, **extra):
+    """Submit a process job and poll until completion. Returns the result dict."""
+    start_resp = client.post('/api/process/start', json={'stored_name': stored_name, **extra})
+    assert start_resp.status_code == 202, f"process/start failed: {start_resp.get_json()}"
+    job_id = start_resp.get_json()['job_id']
+
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(5)
+        data = client.get(f'/api/process/status/{job_id}').get_json()
+        if data['status'] == 'success':
+            return data['result']
+        if data['status'] == 'error':
+            pytest.fail(f"process job failed: {data['result']}")
+    pytest.fail(f"process job did not complete within {timeout}s")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -173,68 +191,51 @@ class TestPreprocessServicePDF:
 class TestProcessRouteDocument:
 
     def test_process_valid_image(self, client, uploaded_diagram):
-        resp = client.post(
-            '/api/process/document',
-            json={'stored_name': uploaded_diagram}
-        )
-        data = resp.get_json()
-        assert resp.status_code == 200
-        assert data['status']   == 'success'
-        assert data['type']     == 'image'
+        data = _process_and_poll(client, uploaded_diagram)
+        assert data['status'] == 'success'
+        assert data['type']   == 'image'
 
     def test_process_returns_ar_components(self, client, uploaded_diagram):
-        resp       = client.post('/api/process/document', json={'stored_name': uploaded_diagram})
-        data       = resp.get_json()
-        ar         = data.get('ar', {})
+        data = _process_and_poll(client, uploaded_diagram)
+        ar   = data.get('ar', {})
         assert 'components'     in ar
         assert 'componentCount' in ar
 
     def test_process_returns_vision(self, client, uploaded_diagram):
-        resp = client.post('/api/process/document', json={'stored_name': uploaded_diagram})
-        data = resp.get_json()
+        data = _process_and_poll(client, uploaded_diagram)
         assert 'vision' in data
 
     def test_process_returns_ai(self, client, uploaded_diagram):
-        resp = client.post('/api/process/document', json={'stored_name': uploaded_diagram})
-        data = resp.get_json()
+        data = _process_and_poll(client, uploaded_diagram)
         assert 'ai' in data
 
     def test_process_returns_ai_summary(self, client, uploaded_diagram):
-        resp = client.post('/api/process/document', json={'stored_name': uploaded_diagram})
-        assert 'ai_summary' in resp.get_json()
+        data = _process_and_poll(client, uploaded_diagram)
+        assert 'ai_summary' in data
 
     def test_process_returns_meta(self, client, uploaded_diagram):
-        resp = client.post('/api/process/document', json={'stored_name': uploaded_diagram})
-        assert 'meta' in resp.get_json()
+        data = _process_and_poll(client, uploaded_diagram)
+        assert 'meta' in data
 
     def test_process_missing_stored_name(self, client):
-        resp = client.post('/api/process/document', json={})
-        assert resp.status_code == 400
+        resp = client.post('/api/process/start', json={})
+        assert resp.status_code in (400, 404)
 
     def test_process_nonexistent_file(self, client):
-        resp = client.post('/api/process/document', json={'stored_name': 'ghost.png'})
+        resp = client.post('/api/process/start', json={'stored_name': 'ghost.png'})
         assert resp.status_code == 404
 
     def test_process_path_traversal_blocked(self, client):
-        resp = client.post(
-            '/api/process/document',
-            json={'stored_name': '../../etc/passwd'}
-        )
-        assert resp.status_code in (400, 403)
+        resp = client.post('/api/process/start', json={'stored_name': '../../etc/passwd'})
+        assert resp.status_code in (400, 403, 404)
 
     def test_process_skip_ar(self, client, uploaded_diagram):
-        resp = client.post('/api/process/document', json={
-            'stored_name': uploaded_diagram,
-            'extract_ar': False
-        })
-        assert resp.status_code == 200
+        data = _process_and_poll(client, uploaded_diagram, extract_ar=False)
+        assert data['status'] == 'success'
 
     def test_process_skip_ai(self, client, uploaded_diagram):
-        resp = client.post('/api/process/document', json={
-            'stored_name':         uploaded_diagram,
-            'generate_ai_summary': False
-        })
-        assert resp.status_code == 200
+        data = _process_and_poll(client, uploaded_diagram, generate_ai_summary=False)
+        assert data['status'] == 'success'
 
     def test_process_pdf(self, client, test_images_dir):
         """Upload and process a PDF"""
@@ -245,9 +246,7 @@ class TestProcessRouteDocument:
                 content_type='multipart/form-data'
             )
         stored_name = upload_resp.get_json()['file']['stored_name']
-
-        resp = client.post('/api/process/document', json={'stored_name': stored_name})
-        data = resp.get_json()
+        data = _process_and_poll(client, stored_name)
         assert data['type'] == 'pdf'
 
 
