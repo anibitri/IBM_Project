@@ -5,7 +5,7 @@ const API_ACCESS_TOKEN = 'ibm-project-dev-token';
 
 const api = axios.create({
   baseURL: resolveBaseURL(),
-  timeout: 30000000, // 30 s for normal requests — analysis uses polling so no long timeout needed
+  timeout: 300000000, // 30 s for normal requests — analysis uses polling so no long timeout needed
   headers: {
     'Content-Type': 'application/json',
     Authorization: `Bearer ${API_ACCESS_TOKEN}`,
@@ -69,14 +69,33 @@ export const backend = {
   },
 
   askQuestion: async (query, context, history = []) => {
-    // Chat inference runs two GPU passes (vision + text) — can take 60–120 s on slow GPUs.
-    const response = await api.post('/ai/ask', { query, context, history }, { timeout: 300000 });
-    return response.data;
+    // Submit job — server returns immediately with a job_id (no long-lived connection).
+    // This avoids NAT/proxy TCP timeouts (~5 min on ngrok / mobile carriers).
+    const startRes = await api.post('/ai/ask/start', { query, context, history });
+    const { job_id } = startRes.data;
+
+    // Poll every 15 s until the job finishes or errors.
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+      const statusRes = await api.get(`/ai/ask/status/${job_id}`);
+      const { status, result } = statusRes.data;
+      if (status === 'success') return result;
+      if (status === 'error') throw new Error(result?.error || 'AI chat failed');
+      // 'queued' or 'processing' → keep polling
+    }
   },
 
   chat: async (query, context, history = []) => {
-    const response = await api.post('/ai/chat', { query, context, history }, { timeout: 300000 });
-    return response.data;
+    const startRes = await api.post('/ai/chat/start', { query, context, history });
+    const { job_id } = startRes.data;
+
+    while (true) {
+      await new Promise((resolve) => setTimeout(resolve, 15000));
+      const statusRes = await api.get(`/ai/chat/status/${job_id}`);
+      const { status, result } = statusRes.data;
+      if (status === 'success') return result;
+      if (status === 'error') throw new Error(result?.error || 'AI chat failed');
+    }
   },
 
   processDocument: async (storedName, extractAR = true, generateAISummary = true, { signal, onJobId } = {}) => {

@@ -152,14 +152,14 @@ The merge is greedy — the closest adjacent pair is merged first, then the proc
 **Hard rejects (immediate discard, score = 0):**
 - Mask covers > 40 % of image (background capture).
 - Bounding box spans > 80 % in both dimensions.
-- Large light-background canvas region with nearly zero interior content (edge density < 0.005, variance < 40).
+- Large light-background canvas region with nearly zero interior content (interior edge density < 0.08, interior variance < 300; only applied when norm_area > 0.12).
 - Normalised area outside per-type bounds.
 - Thin band touching any image border (aspect > 6 and border-touching).
 - Bottom toolbar zone (bottom 6 % of image, not touching top, small area).
 - Triangle shape → arrowhead.
-- Large blob with fill < 0.6 (merged multi-component over-segmentation).
+- Low fill ratio, evaluated against size-dependent thresholds: norm_area > 0.08 → fill < 0.60; norm_area > 0.02 → fill < 0.40; smaller → fill < 0.30.
 - Floating text region in background color without a border frame (`_looks_like_floating_text`).
-- Empty gap region (interior edge density < 0.8 %, interior variance < 50 for sequence; stricter for other types).
+- Empty gap region: for sequence diagrams, interior edge density < 8 and interior variance < 800; for other types, background-coloured interior with no detectable rectangular frame.
 
 **Scored factors:**
 - **Size score** — peak at 0.2–8 % of image for structured types, 0.5–5 % for generic.
@@ -174,8 +174,8 @@ The merge is greedy — the closest adjacent pair is merged first, then the proc
 
 | Type          | Hard Rejects                              | Score Adjustments                                    |
 |---------------|-------------------------------------------|------------------------------------------------------|
-| `uml`         | area < 0.3 %, aspect > 6, fill < 0.65   | +0.15 for compartmented boxes; rejects empty framed boxes |
-| `flowchart`   | area < 0.2 %, aspect > 7 or < 0.14      | +0.15 for diamonds, +0.10 for ovals/terminators      |
+| `uml`         | area < 1 %, aspect > 6 or < 0.20, fill < 0.60, empty interior without compartments | +0.08 for compartmented boxes; rejects empty framed boxes |
+| `flowchart`   | area < 0.3 %, aspect > 7 or < 0.14, non-diamond non-oval fill < 0.65 | +0.08 for diamonds, +0.05 for ovals/terminators      |
 | `architecture`| thin connectors, small regions (< 0.5 %), empty framed boxes | +0.05 if visible border frame, −0.15 if no frame |
 | `sequence`    | no hard rejects (handled separately)     | neutral (0.0, False)                                 |
 
@@ -247,6 +247,172 @@ The AR service receives the vision model's diagram type classification as the fi
 - **Spanning-artifact NMS**: Bbox-based suppression catches hollow outline masks that escape pixel-level IoU/containment rules.
 - **Adjacent component merging**: Corrects SAM's tendency to over-segment UML class boxes by sections.
 - **Semantic labeling**: OCR-first, vision-fallback labeling gives meaningful names rather than shape-derived placeholders.
+
+---
+
+## Time and Space Complexity Analysis
+
+The variables used throughout this section are:
+
+| Symbol | Meaning |
+|--------|---------|
+| P | Total pixel count: W × H |
+| N | Number of masks after SAM + contour merge (typically 20–300) |
+| S | Number of SAM masks |
+| C | Number of raw contour candidates (4 passes × contours per pass) |
+| L | Number of Hough line segments detected |
+| B | Number of sequence bounding boxes before dedup |
+
+---
+
+### Per-function breakdown
+
+#### `_calculate_adaptive_thresholds`
+
+| Phase | Time | Space |
+|-------|------|-------|
+| Canny edge detection | O(P) | O(P) |
+| HoughLinesP | O(P) | O(L) |
+| Line orientation + lifeline clustering (sort + scan) | O(L log L) | O(L) |
+| findContours on binary image | O(P) | O(C) |
+| Contour loop (rect / diamond / compartmented counts) | O(C) — each contour's ROI runs Canny + Hough in O(roi_P) | O(P) worst |
+| **Overall** | **O(P + L log L)** | **O(P)** |
+
+#### `_non_maximum_suppression`
+
+Greedy NMS processes masks in descending quality order. For each of N masks it checks all already-kept masks (up to N) with pixel-level operations.
+
+| Operation | Time | Space |
+|-----------|------|-------|
+| Pixel IoU / containment per pair (`_calculate_iou`, `_calculate_containment`) | O(P) | O(1) |
+| Spanning-artifact bbox check per pair | O(1) | O(1) |
+| **Overall** | **O(N² · P)** | **O(N · P)** — all N segmentation masks in memory |
+
+> **Identified issue (corrected):** The original code used `list.pop(0)` to advance through the mask queue. Python lists are backed by a contiguous array, so each `pop(0)` shifts every remaining element — O(N) per pop, adding an unnecessary O(N²) overhead on top of the algorithmic cost. **Fix applied:** replaced `list` with `collections.deque` so `popleft()` is O(1).
+
+#### `_filter_overlapping_outliers`
+
+Post-NMS pass with only bbox IoU (O(1) per pair).
+
+| Operation | Time | Space |
+|-----------|------|-------|
+| Double loop over N remaining masks | O(N²) | O(N) |
+
+#### `_calculate_mask_score`
+
+Called once per mask. Each call operates on a region of at most P pixels.
+
+| Phase | Time | Space |
+|-------|------|-------|
+| Hard-reject checks (area, bbox, fill) | O(1) | O(1) |
+| Interior Canny + variance check | O(roi_P) | O(roi_P) |
+| findContours on segmentation | O(P) | O(contour pts) |
+| Canny on bbox region (edge score) | O(roi_P) | O(roi_P) |
+| `_looks_like_floating_text` | O(roi_P) | O(roi_P) |
+| `_type_specific_filter` (may run Canny + HoughLinesP on ROI) | O(roi_P) | O(roi_P) |
+| **Per call** | **O(P)** | **O(P)** |
+| **For all N masks** | **O(N · P)** | **O(P)** (sequential) |
+
+> **Identified issue (corrected):** `cv2.findContours` was called **twice** on the same segmentation boolean array — once near the start (to check for a triangle arrowhead) and again later to compute the compactness factor. Each call traverses the full P-pixel mask. **Fix applied:** the result of the first call (`seg_contours_early`) is reused for the compactness step, eliminating the redundant O(P) traversal.
+
+#### `_detect_contour_components`
+
+Runs four independent detection passes, then deduplicates all candidates.
+
+| Phase | Time | Space |
+|-------|------|-------|
+| 4 × (Canny / threshold + morphClose + findContours) | O(P) per pass → O(P) total | O(P) |
+| Per-contour `_contour_to_candidate` across all passes | O(C) | O(C) |
+| Deduplication — nested loop with pixel IoU check | O(C² · P) worst case | O(C · P) |
+| **Overall** | **O(C² · P)** | **O(C · P)** |
+
+> **Identified issue (corrected):** The dedup nested loop called `_calculate_iou` (pixel-level, O(P)) for every candidate pair, even when their bounding boxes did not overlap at all — in that case the pixel IoU is provably 0. **Fix applied:** a fast O(1) bbox IoU gate (`_bbox_iou`) is checked first; only when the bounding boxes actually overlap is the expensive pixel-level check performed. This reduces dedup cost to O(C²) for non-overlapping layouts (the common case).
+
+#### `_merge_detection_results`
+
+| Operation | Time | Space |
+|-----------|------|-------|
+| For each of C contour masks, check against all S SAM masks | O(S · C · P) worst case | O(1) extra |
+
+> **Identified issue (corrected):** Same as the dedup case above — pixel IoU was computed for every (contour, SAM) pair regardless of bbox overlap. **Fix applied:** the same O(1) bbox gate is now checked first.
+
+#### `_merge_adjacent_components`
+
+Greedy "find the closest valid pair, merge it, repeat" strategy.
+
+| Phase | Time | Space |
+|-------|------|-------|
+| Each `while` iteration scans all N² pairs | O(N²) per iteration | O(1) |
+| Up to N iterations (one merge per iteration) | N iterations | — |
+| **Overall** | **O(N³)** | **O(N)** |
+
+For the typical component counts produced by this pipeline (N ≤ 50) this is acceptable. If N grows significantly (e.g. a very dense diagram), the while-loop could be replaced by a single O(N² log N) pass: compute all valid pairs once, sort by gap score, and process in order while marking invalidated pairs — reducing the worst case to O(N² log N).
+
+#### `_non_maximum_suppression` inner IoU per pair
+
+| Metric | Value |
+|--------|-------|
+| Pairs evaluated | O(N²) |
+| Cost per IoU | O(P) |
+| **Total** | **O(N² · P)** |
+
+#### Sequence structural pipeline
+
+| Function | Time | Space |
+|----------|------|-------|
+| `_find_lifeline_positions` | O(P + L log L) | O(P + L) |
+| `_find_seq_actor_boxes` | O(4 · P + B · L_ll) | O(P + B) |
+| `_find_seq_activation_bars` | O(4 · P + B · L_ll) | O(P + B) |
+| `_find_seq_fragment_boxes` | O(4 · P) | O(P + B) |
+| `_dedup_boxes_list` | O(B²) | O(B) |
+| **Overall** | **O(P + B²)** | **O(P + B)** |
+
+All four threshold variants (`_threshold_variants`) are O(P) each, so 4 variants = O(P).
+
+---
+
+### End-to-end summary
+
+| Path | Dominant cost | Note |
+|------|--------------|------|
+| Sequence diagram | O(P + B²) | B is small (< 100 boxes typically) |
+| Non-sequence (SAM + contour) | O(N² · P) | NMS is the bottleneck; SAM inference itself is GPU-bound and not counted here |
+
+**Memory**: the bottleneck is storing all N segmentation masks simultaneously. Each mask is a boolean array of size P = W × H. With N = 200 masks and a 2 MP image, peak memory for masks alone is ~400 MB. Masks are discarded after `_filter_masks_adaptive`, so peak is bounded to the pre-NMS set.
+
+---
+
+## Corrections Applied
+
+Three algorithmic corrections were made to [ar_service.py](../app/services/ar_service.py):
+
+### 1. Eliminated redundant `findContours` call in `_calculate_mask_score`
+
+**Location:** `_calculate_mask_score` (triangle hard-reject ~line 720 and compactness factor ~line 847)
+
+**Problem:** `cv2.findContours` was called twice on the same boolean segmentation array — once for the triangle arrowhead check (`seg_contours_early`) and once to obtain the contour perimeter for the compactness score (`contours_found`). Each call is O(P). With N masks this doubled the contour-finding cost to 2·N·O(P).
+
+**Fix:** The variable `contours_found` was replaced with a direct reference to `seg_contours_early`, so the segmentation is only traversed once per mask.
+
+---
+
+### 2. Replaced `list.pop(0)` with `deque.popleft()` in `_non_maximum_suppression`
+
+**Location:** `_non_maximum_suppression`
+
+**Problem:** `masks` was a plain Python list. `list.pop(0)` shifts all remaining elements one position — O(N) per call. With N masks this adds an O(N²) overhead on top of the actual NMS work, purely from list management.
+
+**Fix:** `masks` is now a `collections.deque`. `deque.popleft()` is O(1), eliminating the quadratic list-shift cost. The `remaining` list is also converted back to a `deque` at the end of each outer iteration.
+
+---
+
+### 3. Added bounding-box IoU gate before pixel-level IoU checks
+
+**Location:** `_detect_contour_components` (dedup loop) and `_merge_detection_results`
+
+**Problem:** Both functions called `_calculate_iou` (a pixel-level `np.logical_and / np.logical_or` operation, O(P)) for every pair of masks, including pairs whose bounding boxes do not overlap at all. When bounding boxes are disjoint the pixel IoU is provably 0, making the O(P) check wasteful.
+
+**Fix:** A call to `_bbox_iou` (O(1) arithmetic) is inserted as a gate before `_calculate_iou`. If the bounding boxes have zero overlap the pixel-level check is skipped entirely. On typical diagram images where most component pairs are spatially separated, this reduces the dedup and merge steps from O(C²·P) / O(S·C·P) to effectively O(C²) / O(S·C) for the majority of pairs.
 
 ---
 

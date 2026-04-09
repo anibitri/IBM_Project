@@ -12,6 +12,7 @@ Key improvements:
 
 import numpy as np
 import cv2
+from collections import deque
 from PIL import Image, ImageOps
 from typing import List, Dict, Tuple, Optional
 import logging
@@ -716,6 +717,8 @@ class ARService:
             return 0.0
 
         # Hard reject: triangular shapes — these are arrowheads, not components
+        # Note: seg_contours_early is reused later for the compactness factor to
+        # avoid calling findContours twice on the same segmentation mask.
         seg_contours_early, _ = cv2.findContours(
             segmentation.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
         )
@@ -843,12 +846,9 @@ class ARService:
                                     return 0.0
         
         # Factor 5: Shape compactness (prefer regular shapes)
-        contours_found = cv2.findContours(
-            segmentation.astype(np.uint8), 
-            cv2.RETR_EXTERNAL, 
-            cv2.CHAIN_APPROX_SIMPLE
-        )[0]
-        
+        # Reuse seg_contours_early found above — avoids a redundant findContours call.
+        contours_found = seg_contours_early
+
         if len(contours_found) > 0:
             perimeter = cv2.arcLength(contours_found[0], True)
         else:
@@ -1233,8 +1233,10 @@ class ARService:
             return []
 
         keep = []
+        # Use a deque so popleft() is O(1) instead of the O(N) cost of list.pop(0).
+        masks = deque(masks)
         while masks:
-            current = masks.pop(0)
+            current = masks.popleft()
 
             # ── Spanning-artifact check against already-kept set ──────────
             spanning = sum(
@@ -1266,7 +1268,7 @@ class ARService:
                     continue  # spanning artifact
 
                 remaining.append(m)
-            masks = remaining
+            masks = deque(remaining)
 
         return keep
 
@@ -1694,12 +1696,18 @@ class ARService:
             if cand is not None:
                 all_candidates.append(cand)
         
-        # Deduplicate by IoU (keep higher-quality ones)
+        # Deduplicate by IoU (keep higher-quality ones).
+        # Fast bbox gate: skip the expensive pixel-level IoU when bounding boxes
+        # do not overlap at all, reducing O(C²·P) to O(C²) for non-overlapping pairs.
         all_candidates.sort(key=lambda c: c['area'], reverse=True)
         deduped: List[Dict] = []
         for cand in all_candidates:
             duplicate = False
             for kept in deduped:
+                # Fast bbox gate: if the bounding boxes don't overlap at all,
+                # pixel-level IoU is guaranteed to be 0 — skip the O(P) check.
+                if self._bbox_iou(cand, kept) == 0.0:
+                    continue
                 iou = self._calculate_iou(cand, kept)
                 if iou > 0.3:
                     duplicate = True
@@ -1761,6 +1769,9 @@ class ARService:
         for c_mask in contour_masks:
             duplicate = False
             for s_mask in merged:
+                # Fast bbox gate: pixel IoU is 0 when bounding boxes don't overlap.
+                if self._bbox_iou(c_mask, s_mask) == 0.0:
+                    continue
                 iou = self._calculate_iou(c_mask, s_mask)
                 if iou > 0.25:
                     duplicate = True

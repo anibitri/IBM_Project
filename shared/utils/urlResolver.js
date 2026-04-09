@@ -19,7 +19,7 @@ const PHYSICAL_DEVICE = true;
 
 // Tunnel URL for remote access (ngrok, localtunnel, etc.).
 // Set to null or an empty string to disable tunnel routing.
-const TUNNEL_URL = 'https://tristen-unselfconscious-nonpermissibly.ngrok-free.dev';
+const TUNNEL_URL = null;
 
 // iOS physical device only: the Mac's iPhone USB interface IP address.
 // Find it via: System Preferences → Network → "iPhone USB"

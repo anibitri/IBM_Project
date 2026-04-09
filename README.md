@@ -148,6 +148,8 @@ Android  ───────────────────────�
 
 ### Physical iPhone / iPad
 
+**Option A — Same WiFi network (no extra tools)**
+
 The device must be on the **same WiFi network** as your Mac.
 
 1. Find your Mac's LAN IP:
@@ -155,16 +157,149 @@ The device must be on the **same WiFi network** as your Mac.
    ipconfig getifaddr en0    # e.g. 192.168.1.45
    ```
 
-2. Edit `shared/api/backend.js` — update the iOS fallback URL:
+2. In `shared/utils/urlResolver.js` set `PHYSICAL_DEVICE = true` and update `IOS_USB_HOST`:
    ```js
-   // line 20 — change localhost to your Mac's LAN IP
-   return 'http://192.168.1.45:4200/api';
+   const PHYSICAL_DEVICE = true;
+   const IOS_USB_HOST = '192.168.1.45';   // your Mac's LAN IP
+   const TUNNEL_URL = null;
    ```
 
 3. Start Metro with the LAN IP:
    ```bash
    npx react-native start --host 192.168.1.45
    ```
+
+**Option B — ngrok tunnel (device on any network)**
+
+See the [ngrok](#ngrok--remote-access) section below.
+
+---
+
+## ngrok — Remote Access
+
+ngrok creates a public HTTPS tunnel to your local backend. This is the easiest way to run the mobile app on a physical device when WiFi is not shared (e.g. the device is on cellular, or on a different network).
+
+### 1. Install ngrok
+
+```bash
+# macOS (Homebrew)
+brew install ngrok
+
+# Linux
+snap install ngrok
+# or download from https://ngrok.com/download
+
+# Windows
+# Download the installer from https://ngrok.com/download
+# or: winget install ngrok
+```
+
+Sign up at [ngrok.com](https://ngrok.com) and authenticate once:
+
+```bash
+ngrok config add-authtoken <YOUR_AUTHTOKEN>
+```
+
+### 2. Start the Backend and Open a Tunnel
+
+In two separate terminals:
+
+```bash
+# Terminal 1 — backend
+cd backend && python run.py
+
+# Terminal 2 — tunnel (keep this running)
+ngrok http 4200
+```
+
+ngrok will print a forwarding URL, for example:
+
+```
+Forwarding   https://abc123.ngrok-free.app -> http://localhost:4200
+```
+
+### 3. Configure the Frontend
+
+Open `shared/utils/urlResolver.js` and paste the ngrok URL into `TUNNEL_URL`:
+
+```js
+const TUNNEL_URL = 'https://abc123.ngrok-free.app';  // your current URL
+```
+
+Leave `TUNNEL_URL = null` to go back to local routing.
+
+> **Note:** Free ngrok URLs change every time you restart the tunnel. Update `TUNNEL_URL` each session. Paid ngrok plans offer static domains.
+
+### 4. Start the Mobile App
+
+```bash
+cd mobile
+npx react-native start
+npx react-native run-ios     # or run-android
+```
+
+The app will route all API requests through the ngrok tunnel automatically.
+
+---
+
+## Platform Notes
+
+### macOS
+
+Fully supported. iOS simulator and physical device both work out of the box.
+
+- Python environment: use `pyenv` or a virtualenv to isolate dependencies.
+- M1/M2/M3 Macs: models run on CPU via MPS fallback. Expect ~10 GB RAM usage. Set `PYTORCH_ENABLE_MPS_FALLBACK=1` if you see MPS errors:
+  ```bash
+  PYTORCH_ENABLE_MPS_FALLBACK=1 python run.py
+  ```
+
+### Linux
+
+iOS simulator is not available. Android emulator or a physical device via ngrok are the mobile options.
+
+```bash
+# Python deps — may also need:
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121  # CUDA 12.1
+# or
+pip install torch torchvision  # CPU only
+```
+
+If you have a CUDA GPU, the models will use it automatically. Check with:
+
+```bash
+python -c "import torch; print(torch.cuda.is_available())"
+```
+
+### Windows
+
+Run the backend inside **WSL 2** (Ubuntu recommended) for the best compatibility with PyTorch and the Python dependencies. The web frontend runs natively on Windows.
+
+```powershell
+# In WSL 2
+cd /mnt/c/Users/<you>/IBM_Project/backend
+pip install -r app/requirements.txt
+python run.py
+```
+
+The web frontend can be started from a normal PowerShell/Command Prompt terminal:
+
+```powershell
+cd web
+npm run dev
+```
+
+For mobile on Windows, use an Android emulator (AVD) — iOS simulation requires macOS.
+
+### No GPU / CI / Low-Memory Machines
+
+Skip model loading entirely with mock mode:
+
+```bash
+GRANITE_MOCK=1 python run.py
+```
+
+All endpoints return realistic canned responses. This is the recommended mode for running tests on CI or any machine without a dedicated GPU.
 
 ---
 
